@@ -1,0 +1,362 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model AdminUser {
+  id           String         @id @default(cuid())
+  username     String         @unique
+  passwordHash String
+  displayName  String?
+  role         String         @default("admin")
+  isActive     Boolean        @default(true)
+  refreshTokens RefreshToken[]
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+}
+
+model RefreshToken {
+  id          String    @id @default(cuid())
+  token       String    @unique
+  adminUserId String
+  expiresAt   DateTime
+  isRevoked   Boolean   @default(false)
+  adminUser   AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+
+  @@index([token])
+  @@index([adminUserId])
+}
+
+model SourceAccount {
+  id          String        @id @default(cuid())
+  platform    String
+  name        String
+  handle      String?
+  isActive    Boolean       @default(true)
+  health      String        @default("unknown")
+  credentials Json          @default("{}")
+  config      Json          @default("{}")
+  lastCrawledAt DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  routingRules RoutingRule[]
+  contents    Content[]
+
+  @@index([platform])
+  @@index([isActive, health])
+}
+
+model TargetAccount {
+  id          String          @id @default(cuid())
+  platform    String
+  name        String
+  handle      String?
+  isActive    Boolean         @default(true)
+  health      String          @default("unknown")
+  credentials Json            @default("{}")
+  config      Json            @default("{}")
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  routingRules RoutingRule[]
+  publishAttempts PublishAttempt[]
+  schedules   Schedule[]
+  fbPostTargets FbPostTarget[]
+
+  @@index([platform])
+  @@index([isActive, health])
+}
+
+model PlatformSession {
+  id          String   @id @default(cuid())
+  platform    String
+  accountKind String
+  accountId   String
+  status      String   @default("unknown")
+  cookiePath  String?
+  data        Json     @default("{}")
+  expiresAt   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([platform, accountKind, accountId])
+  @@index([accountId, accountKind])
+}
+
+model RoutingRule {
+  id            String        @id @default(cuid())
+  sourceId      String
+  targetId      String
+  autoPublish   Boolean       @default(false)
+  useAI         Boolean       @default(false)
+  requireReview Boolean       @default(true)
+  isActive      Boolean       @default(true)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  source        SourceAccount @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  target        TargetAccount @relation(fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceId, targetId])
+  @@index([sourceId])
+  @@index([targetId])
+}
+
+model Content {
+  id              String           @id @default(cuid())
+  code            String           @unique
+  platform        String
+  sourceId        String?
+  externalId      String?
+  sourceUrl       String?
+  author          String?
+  originalText    String
+  draftText       String?
+  finalText       String?
+  status          String           @default("discovered")
+  scheduledAt     DateTime?
+  scheduledTargets Json?
+  metadata        Json             @default("{}")
+  postedAt        DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  source          SourceAccount?   @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  media           MediaAsset[]
+  links           ContentLink[]
+  publishAttempts PublishAttempt[]
+  schedules       Schedule[]
+
+  @@unique([platform, sourceId, externalId])
+  @@index([status])
+  @@index([platform])
+  @@index([createdAt])
+}
+
+model MediaAsset {
+  id          String   @id @default(cuid())
+  contentId   String
+  type        String
+  mimeType    String?
+  sourceUrl   String?
+  localPath   String?
+  cdnUrl      String?
+  checksum    String?
+  metadata    Json     @default("{}")
+  createdAt   DateTime @default(now())
+  content     Content  @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@index([contentId])
+  @@index([checksum])
+}
+
+model ContentLink {
+  id           String   @id @default(cuid())
+  contentId    String
+  originalUrl  String
+  convertedUrl String?
+  network      String   @default("unknown")
+  status       String   @default("detected")
+  position     Json?
+  error        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  content      Content  @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@unique([contentId, originalUrl])
+  @@index([network])
+  @@index([status])
+}
+
+model PublishAttempt {
+  id          String        @id @default(cuid())
+  contentId   String
+  targetId    String
+  attemptNo   Int           @default(1)
+  status      String        @default("pending")
+  resultUrl   String?
+  error       String?
+  metadata    Json          @default("{}")
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime      @default(now())
+  content     Content       @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  target      TargetAccount @relation(fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([contentId, targetId, attemptNo])
+  @@index([contentId])
+  @@index([targetId])
+  @@index([status])
+}
+
+model Schedule {
+  id          String        @id @default(cuid())
+  contentId   String
+  targetId    String
+  scheduledAt DateTime
+  status      String        @default("scheduled")
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  content     Content       @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  target      TargetAccount @relation(fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([contentId, targetId, scheduledAt])
+  @@index([scheduledAt, status])
+}
+
+model WorkerJobLog {
+  id          String    @id @default(cuid())
+  queueName   String
+  jobName     String
+  jobId       String?
+  status      String
+  payload     Json?
+  error       String?
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([queueName, status])
+  @@index([jobId])
+}
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  type      String
+  message   String
+  platform  String?
+  contentId String?
+  sourceId  String?
+  targetId  String?
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([type])
+}
+
+model AiConfig {
+  id        String   @id @default(cuid())
+  provider  String
+  name      String
+  config    Json     @default("{}")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([provider, name])
+}
+
+model SystemSetting {
+  key       String   @id
+  value     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ── Facebook Manual-Scheduling ────────────────────────────────────────────────
+
+model FbCampaign {
+  id          String    @id @default(cuid())
+  name        String
+  description String?
+  // draft | active | paused | completed | cancelled
+  status      String    @default("draft")
+  postsPerDay Int       @default(5)
+  startDate   DateTime
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  posts       FbPost[]
+
+  @@index([status])
+}
+
+model FbPost {
+  id          String          @id @default(cuid())
+  campaignId  String?
+  // feed | story | reel
+  type        String
+  caption     String?
+  // pending | scheduled | publishing | published | failed | skipped
+  status      String          @default("pending")
+  scheduledAt DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  campaign    FbCampaign?     @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  media       FbPostMedia[]
+  targets     FbPostTarget[]
+  comments    FbPostComment[]
+  executions  FbExecution[]
+
+  @@index([campaignId])
+  @@index([status])
+  @@index([scheduledAt])
+}
+
+model FbPostMedia {
+  id        String   @id @default(cuid())
+  postId    String
+  localPath String
+  mimeType  String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  post      FbPost   @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([postId])
+}
+
+model FbPostTarget {
+  id              String        @id @default(cuid())
+  postId          String
+  targetAccountId String
+  // fixed | random
+  scheduleMode    String        @default("fixed")
+  fixedTime       DateTime?
+  windowStart     String?       // HH:MM
+  windowEnd       String?       // HH:MM
+  scheduledAt     DateTime?
+  // pending | scheduled | publishing | published | failed | skipped
+  status          String        @default("pending")
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  post            FbPost        @relation(fields: [postId], references: [id], onDelete: Cascade)
+  targetAccount   TargetAccount @relation(fields: [targetAccountId], references: [id])
+  executions      FbExecution[]
+
+  @@index([postId])
+  @@index([targetAccountId])
+  @@index([scheduledAt, status])
+}
+
+model FbPostComment {
+  id           String   @id @default(cuid())
+  postId       String
+  text         String
+  delayMinutes Int      @default(5)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  post         FbPost   @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([postId])
+}
+
+model FbExecution {
+  id             String        @id @default(cuid())
+  postId         String
+  targetId       String?
+  attemptNo      Int           @default(1)
+  // running | success | failed
+  status         String
+  errorMessage   String?
+  screenshotPath String?
+  postUrl        String?
+  executedAt     DateTime      @default(now())
+  completedAt    DateTime?
+  post           FbPost        @relation(fields: [postId], references: [id], onDelete: Cascade)
+  target         FbPostTarget? @relation(fields: [targetId], references: [id])
+
+  @@index([postId])
+  @@index([targetId])
+}
