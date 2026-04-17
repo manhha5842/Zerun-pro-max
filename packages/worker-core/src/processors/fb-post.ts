@@ -138,7 +138,15 @@ async function handlePostError(
   postId: string
 ) {
   const classified = classifyError(error);
-  logger.error("FB post failed", { targetId, error: classified.message, kind: (classified as any).kind });
+  logger.error("FB post failed", {
+    targetId,
+    targetAccountId,
+    postId,
+    executionId,
+    error: classified.message,
+    kind: (classified as any).kind,
+    details: (classified as any).details ?? null
+  });
 
   const screenshotPath = path.join(SCREENSHOT_DIR, `fb-exec-${executionId}-fail.png`);
 
@@ -146,17 +154,39 @@ async function handlePostError(
     await context.prisma.targetAccount.update({ where: { id: targetAccountId }, data: { health: "paused" } }).catch(() => undefined);
     await context.prisma.fbExecution.update({
       where: { id: executionId },
-      data: { status: "failed", errorMessage: classified.message, screenshotPath, completedAt: new Date() }
+      data: {
+        status: "failed",
+        errorMessage: `[ACCOUNT_PAUSED] ${classified.message}`,
+        screenshotPath,
+        completedAt: new Date()
+      }
     });
     await context.prisma.fbPostTarget.update({ where: { id: targetId }, data: { status: "failed" } });
+
+    logger.warn("FB account paused due to checkpoint/auth error", {
+      targetAccountId,
+      targetId,
+      postId,
+      executionId,
+      reason: classified.message,
+      screenshotPath
+    });
+
     await maybeMarkPostFailed(context, postId);
-    return; // No retry for auth errors
+    return; // No retry for auth errors; only this account is paused
   }
 
   await context.prisma.fbExecution.update({
     where: { id: executionId },
-    data: { status: "failed", errorMessage: classified.message, screenshotPath, completedAt: new Date() }
+    data: {
+      status: "failed",
+      errorMessage: classified.message,
+      screenshotPath,
+      completedAt: new Date()
+    }
   });
+
+  // Non-auth failures keep account active and continue other accounts.
   throw classified;
 }
 

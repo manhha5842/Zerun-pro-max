@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { apiDelete, apiPost, apiPut } from "../api/client";
+import { apiDelete, apiGet, apiPost, apiPut } from "../api/client";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 
@@ -29,18 +29,11 @@ export function FacebookCampaignsPage() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: "", description: "", postsPerDay: "5", startDate: "" });
 
-  const { data, isLoading } = useQuery({
-    queryKey: ["fb-campaigns"],
-    queryFn: () => apiPost<{ campaigns: Campaign[] }>("/facebook/campaigns" as any)
-  });
-
-  // Actually GET, let me fix using apiGet
   const { data: campaigns, isLoading: loading } = useQuery({
     queryKey: ["fb-campaigns-list"],
     queryFn: async () => {
-      const res = await fetch("/api/v1/facebook/campaigns", { credentials: "include" });
-      const json = await res.json();
-      return json.data?.campaigns as Campaign[];
+      const data = await apiGet<{ campaigns: Campaign[] }>("/facebook/campaigns");
+      return data.campaigns;
     }
   });
 
@@ -76,7 +69,7 @@ export function FacebookCampaignsPage() {
       <header className="page-head">
         <div>
           <h1 className="page-title">Facebook Campaigns</h1>
-          <p className="page-subtitle">Lên lịch đăng thủ công theo chiến dịch cho Facebook (feed / story / reel).</p>
+          <p className="page-subtitle">Lên lịch đăng thủ công theo chiến dịch cho Facebook (feed / story / reel). Timezone cố định: Asia/Saigon. Import Excel chỉ chứa content/media/comment; mọi cấu hình account/type/time đặt trên UI.</p>
         </div>
         <Button onClick={() => setShowForm((v) => !v)}>{showForm ? "Huỷ" : "+ Tạo chiến dịch"}</Button>
       </header>

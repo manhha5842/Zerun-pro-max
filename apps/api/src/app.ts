@@ -628,7 +628,7 @@ function registerFacebookRoutes(app: FastifyInstance) {
     return ok({ success: true });
   });
 
-  // Batch import: create multiple posts at once for a campaign
+  // Batch import: simplified Excel rows. UI must provide type/targets/schedule config.
   app.post("/facebook/campaigns/:id/import", async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = request.body as AnyBody;
@@ -636,38 +636,51 @@ function registerFacebookRoutes(app: FastifyInstance) {
     if (!campaign) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy chiến dịch."));
 
     const items: AnyBody[] = Array.isArray(body.posts) ? body.posts : [];
+    const type = String(body.type ?? "feed");
+    const targets: AnyBody[] = Array.isArray(body.targets) ? body.targets : [];
+
     if (items.length === 0) return reply.code(400).send(fail("EMPTY_IMPORT", "Không có bài nào để import."));
     if (items.length > 100) return reply.code(400).send(fail("LIMIT_EXCEEDED", "Tối đa 100 bài mỗi lần import."));
+    if (!['feed', 'story', 'reel'].includes(type)) return reply.code(400).send(fail("INVALID_TYPE", "type phải là feed, story hoặc reel."));
+    if (targets.length === 0) return reply.code(400).send(fail("TARGETS_REQUIRED", "Phải cấu hình ít nhất 1 tài khoản đích trên UI."));
 
-    const created = await Promise.all(
-      items.map((item: AnyBody, idx: number) => {
-        const type = String(item.type ?? "feed");
-        return prisma.fbPost.create({
-          data: {
-            campaignId: id,
-            type,
-            caption: item.caption ? String(item.caption) : undefined,
-            media: { create: (Array.isArray(item.media) ? item.media : []).map((m: AnyBody, i: number) => ({ localPath: String(m.localPath), mimeType: String(m.mimeType ?? "image/jpeg"), sortOrder: i })) },
-            targets: {
-              create: (Array.isArray(item.targets) ? item.targets : []).map((t: AnyBody) => ({
-                targetAccountId: String(t.targetAccountId),
-                scheduleMode: String(t.scheduleMode ?? "fixed"),
-                fixedTime: t.fixedTime ? new Date(String(t.fixedTime)) : undefined,
-                windowStart: t.windowStart ? String(t.windowStart) : undefined,
-                windowEnd: t.windowEnd ? String(t.windowEnd) : undefined
-              }))
-            },
-            comments: {
-              create: (Array.isArray(item.comments) ? item.comments : []).map((c: AnyBody, i: number) => ({
-                text: String(c.text),
-                delayMinutes: Number(c.delayMinutes ?? 5),
+    const created: Array<{ id: string }> = [];
+    for (let idx = 0; idx < items.length; idx++) {
+      const item = items[idx];
+      const post = await prisma.fbPost.create({
+        data: {
+          campaignId: id,
+          type,
+          caption: item.caption ? String(item.caption) : item.content ? String(item.content) : undefined,
+          media: {
+            create: (Array.isArray(item.media) ? item.media : [])
+              .map((m: AnyBody, i: number) => ({
+                localPath: String(m.localPath ?? m.path ?? m),
+                mimeType: String(m.mimeType ?? "image/jpeg"),
                 sortOrder: i
               }))
-            }
+          },
+          targets: {
+            create: targets.map((t: AnyBody) => ({
+              targetAccountId: String(t.targetAccountId),
+              scheduleMode: String(t.scheduleMode ?? "fixed"),
+              fixedTime: t.fixedTime ? new Date(String(t.fixedTime)) : undefined,
+              windowStart: t.windowStart ? String(t.windowStart) : undefined,
+              windowEnd: t.windowEnd ? String(t.windowEnd) : undefined
+            }))
+          },
+          comments: {
+            create: (Array.isArray(item.comments) ? item.comments : item.comment ? [item.comment] : []).map((c: AnyBody, i: number) => ({
+              text: String(typeof c === 'string' ? c : c.text),
+              delayMinutes: Number(typeof c === 'string' ? 5 : c.delayMinutes ?? 5),
+              sortOrder: i
+            }))
           }
-        });
-      })
-    );
+        }
+      });
+      created.push({ id: post.id });
+    }
+
     return ok({ imported: created.length, postIds: created.map((p) => p.id) });
   });
 }
@@ -675,7 +688,8 @@ function registerFacebookRoutes(app: FastifyInstance) {
 // ── Schedule helpers ───────────────────────────────────────────────────────────
 
 function resolveScheduledAt(date: Date, mode: string, fixedTime: Date | null, windowStart: string | null, windowEnd: string | null): Date {
-  const result = new Date(date);
+  // All scheduling uses Asia/Saigon timezone (GMT+7)
+  const saigonDate = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Saigon' }));
 
   if (mode === "random" && windowStart && windowEnd) {
     const [startH, startM] = windowStart.split(":").map(Number);
@@ -683,18 +697,19 @@ function resolveScheduledAt(date: Date, mode: string, fixedTime: Date | null, wi
     const startMinutes = startH * 60 + startM;
     const endMinutes = endH * 60 + endM;
     const randomMinutes = startMinutes + Math.floor(Math.random() * (endMinutes - startMinutes));
-    result.setHours(Math.floor(randomMinutes / 60), randomMinutes % 60, 0, 0);
-    return result;
+    saigonDate.setHours(Math.floor(randomMinutes / 60), randomMinutes % 60, 0, 0);
+    return saigonDate;
   }
 
   if (fixedTime) {
-    result.setHours(fixedTime.getHours(), fixedTime.getMinutes(), 0, 0);
-    return result;
+    const fixedSaigon = new Date(fixedTime.toLocaleString('en-US', { timeZone: 'Asia/Saigon' }));
+    saigonDate.setHours(fixedSaigon.getHours(), fixedSaigon.getMinutes(), 0, 0);
+    return saigonDate;
   }
 
-  // Default: 9:00 AM
-  result.setHours(9, 0, 0, 0);
-  return result;
+  // Default: 9:00 AM Saigon time
+  saigonDate.setHours(9, 0, 0, 0);
+  return saigonDate;
 }
 
 async function registerStaticWeb(app: FastifyInstance) {

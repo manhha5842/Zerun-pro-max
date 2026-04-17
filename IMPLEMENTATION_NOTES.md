@@ -67,25 +67,31 @@ Basic campaign management page:
 
 ## Assumptions Made
 
-1. **Media storage**: Media files are stored on the local filesystem (`storage/fb-media/`). The `localPath` field in `FbPostMedia` is an absolute or relative path Playwright can access. No cloud storage integration in this MVP.
+1. **Timezone**: All scheduling uses **Asia/Saigon (GMT+7)** timezone. Date calculations in campaign scheduling and random window resolution use this timezone.
 
-2. **Facebook UI automation**: Playwright selectors target both English and Vietnamese Facebook UI. Facebook's DOM changes frequently — selectors may need tuning per locale/version. Story and Reel flows assume the standard Facebook web UI.
+2. **Batch order**: Posts are scheduled in **strict sequential order by import/creation order**. Day 1 gets posts 0..postsPerDay-1, day 2 gets postsPerDay..2*postsPerDay-1, etc. Order is preserved from Excel import or API creation order.
 
-3. **Session persistence**: Each `TargetAccount` with `credentials.sessionDir` stores a persistent Playwright browser context. Sessions must be bootstrapped manually (login once headfully, then reuse).
+3. **Account checkpoint/error handling**: When a target account encounters auth/checkpoint errors, **only that specific account is paused** (health set to "paused"). Other accounts continue executing. Detailed error messages and screenshot paths are logged in `FbExecution` table.
 
-4. **Sequential execution**: The `fb-post` BullMQ worker runs with `concurrency: 1`. All post-target jobs queue behind each other globally (not per-account). If per-account isolation is needed in the future, a separate queue per account can be created.
+4. **Excel import simplified**: Excel columns contain **only post content, media paths, comment text, and comment media**. All account selection, post type (feed/story/reel), schedule mode (fixed/random), and time configuration are set via the web UI, not in the Excel file.
 
-5. **Comment scheduling**: Comments are re-enqueued as delayed BullMQ jobs on the same `fb-post` queue. Delay is cumulative (comment 1 at +5 min, comment 2 at +10 min, etc.). The post URL is passed through the job payload.
+5. **Media storage**: Media files are stored on the local filesystem (`storage/fb-media/`). The `localPath` field in `FbPostMedia` is an absolute or relative path Playwright can access. No cloud storage integration in this MVP.
 
-6. **Random schedule window**: `windowStart` / `windowEnd` are stored as `HH:MM` strings. The random time is resolved at campaign scheduling time (not at execution time), so the scheduled time is deterministic once set.
+6. **Facebook UI automation**: Playwright selectors target both English and Vietnamese Facebook UI. Facebook's DOM changes frequently — selectors may need tuning per locale/version. Story and Reel flows assume the standard Facebook web UI.
 
-7. **Post ordering in batch distribution**: Posts are distributed in creation order. Day 1 gets posts 0..postsPerDay-1, day 2 gets postsPerDay..2*postsPerDay-1, etc.
+7. **Session persistence**: Each `TargetAccount` with `credentials.sessionDir` stores a persistent Playwright browser context. Sessions must be bootstrapped manually (login once headfully, then reuse).
 
-8. **100-post import limit**: Enforced at the API layer. Larger batches require multiple API calls.
+8. **Sequential execution**: The `fb-post` BullMQ worker runs with `concurrency: 1`. All post-target jobs queue behind each other globally (not per-account). If per-account isolation is needed in the future, a separate queue per account can be created.
 
-9. **No media upload endpoint yet**: The import endpoint accepts `localPath` strings directly. A multipart upload endpoint for FB media would be a natural next step.
+9. **Comment scheduling**: Comments are re-enqueued as delayed BullMQ jobs on the same `fb-post` queue. Delay is cumulative (comment 1 at +5 min, comment 2 at +10 min, etc.). The post URL is passed through the job payload.
 
-10. **`Facebook` icon in Lucide**: Uses `Facebook` icon from lucide-react (available in v0.562+).
+10. **Random schedule window**: `windowStart` / `windowEnd` are stored as `HH:MM` strings. The random time is resolved at campaign scheduling time (not at execution time), so the scheduled time is deterministic once set.
+
+11. **100-post import limit**: Enforced at the API layer. Larger batches require multiple API calls.
+
+12. **No media upload endpoint yet**: The import endpoint accepts `localPath` strings directly. A multipart upload endpoint for FB media would be a natural next step.
+
+13. **`Facebook` icon in Lucide**: Uses `Facebook` icon from lucide-react (available in v0.562+).
 
 ---
 
