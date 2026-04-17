@@ -1,9 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link } from "react-router-dom";
-import { apiDelete, apiGet, apiPost, apiPut } from "../api/client";
-import { Badge } from "../components/ui/Badge";
+import { Link, useNavigate } from "react-router-dom";
+import { Plus, Calendar, Pause, Play, Trash2 } from "lucide-react";
+import { apiDelete, apiGet, apiPost } from "../api/client";
+import { StatusBadge } from "../components/common/StatusBadge";
 import { Button } from "../components/ui/Button";
+import { Dialog } from "../components/ui/Dialog";
+import { Input } from "../components/ui/Input";
+import { Label } from "../components/ui/Label";
+import { Textarea } from "../components/ui/Textarea";
 
 type Campaign = {
   id: string;
@@ -16,20 +21,13 @@ type Campaign = {
   _count?: { posts: number };
 };
 
-const STATUS_TONE: Record<string, "good" | "warn" | "bad" | "neutral"> = {
-  draft: "neutral",
-  active: "good",
-  paused: "warn",
-  completed: "good",
-  cancelled: "bad"
-};
-
 export function FacebookCampaignsPage() {
+  const navigate = useNavigate();
   const qc = useQueryClient();
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: "", description: "", postsPerDay: "5", startDate: "" });
+  const [showDialog, setShowDialog] = useState(false);
+  const [form, setForm] = useState({ name: "", description: "", postsPerDay: 5, startDate: "" });
 
-  const { data: campaigns, isLoading: loading } = useQuery({
+  const { data: campaigns, isLoading } = useQuery({
     queryKey: ["fb-campaigns-list"],
     queryFn: async () => {
       const data = await apiGet<{ campaigns: Campaign[] }>("/facebook/campaigns");
@@ -42,13 +40,14 @@ export function FacebookCampaignsPage() {
       apiPost<{ campaign: Campaign }>("/facebook/campaigns", {
         name: payload.name,
         description: payload.description || undefined,
-        postsPerDay: Number(payload.postsPerDay),
+        postsPerDay: payload.postsPerDay,
         startDate: payload.startDate
       }),
-    onSuccess: () => {
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["fb-campaigns-list"] });
-      setShowForm(false);
-      setForm({ name: "", description: "", postsPerDay: "5", startDate: "" });
+      setShowDialog(false);
+      setForm({ name: "", description: "", postsPerDay: 5, startDate: "" });
+      navigate(`/facebook/campaigns/${data.campaign.id}`);
     }
   });
 
@@ -69,76 +68,30 @@ export function FacebookCampaignsPage() {
       <header className="page-head">
         <div>
           <h1 className="page-title">Facebook Campaigns</h1>
-          <p className="page-subtitle">Lên lịch đăng thủ công theo chiến dịch cho Facebook (feed / story / reel). Timezone cố định: Asia/Saigon. Import Excel chỉ chứa content/media/comment; mọi cấu hình account/type/time đặt trên UI.</p>
+          <p className="page-subtitle">
+            Quản lý chiến dịch đăng bài Facebook (feed/story/reel). Lên lịch tự động phân bổ theo ngày, timezone Asia/Saigon.
+          </p>
         </div>
-        <Button onClick={() => setShowForm((v) => !v)}>{showForm ? "Huỷ" : "+ Tạo chiến dịch"}</Button>
+        <Button onClick={() => setShowDialog(true)} icon={<Plus size={18} />}>
+          Tạo chiến dịch
+        </Button>
       </header>
 
-      {showForm && (
-        <div className="panel" style={{ marginBottom: "1rem" }}>
-          <h2 style={{ marginBottom: "0.75rem", fontWeight: 600 }}>Tạo chiến dịch mới</h2>
-          <div style={{ display: "grid", gap: "0.75rem", maxWidth: 480 }}>
-            <label>
-              <span style={{ display: "block", marginBottom: 4, fontSize: "0.875rem" }}>Tên chiến dịch *</span>
-              <input
-                className="input"
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                placeholder="VD: Tháng 5 - Khuyến mãi"
-              />
-            </label>
-            <label>
-              <span style={{ display: "block", marginBottom: 4, fontSize: "0.875rem" }}>Mô tả</span>
-              <input
-                className="input"
-                value={form.description}
-                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-                placeholder="Tuỳ chọn"
-              />
-            </label>
-            <label>
-              <span style={{ display: "block", marginBottom: 4, fontSize: "0.875rem" }}>Số bài/ngày *</span>
-              <input
-                className="input"
-                type="number"
-                min={1}
-                max={20}
-                value={form.postsPerDay}
-                onChange={(e) => setForm((f) => ({ ...f, postsPerDay: e.target.value }))}
-              />
-            </label>
-            <label>
-              <span style={{ display: "block", marginBottom: 4, fontSize: "0.875rem" }}>Ngày bắt đầu *</span>
-              <input
-                className="input"
-                type="date"
-                value={form.startDate}
-                onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))}
-              />
-            </label>
-            <Button
-              disabled={!form.name || !form.startDate || createMutation.isPending}
-              onClick={() => createMutation.mutate(form)}
-            >
-              {createMutation.isPending ? "Đang tạo..." : "Tạo chiến dịch"}
-            </Button>
-            {createMutation.isError && (
-              <p style={{ color: "var(--color-bad)", fontSize: "0.875rem" }}>{String(createMutation.error)}</p>
-            )}
-          </div>
-        </div>
-      )}
-
       <div className="panel">
-        {loading ? (
-          <p style={{ color: "var(--color-muted)" }}>Đang tải...</p>
+        {isLoading ? (
+          <div className="p-8 text-center text-muted">Đang tải...</div>
         ) : rows.length === 0 ? (
-          <p style={{ color: "var(--color-muted)" }}>Chưa có chiến dịch nào. Tạo mới để bắt đầu.</p>
+          <div className="p-8 text-center text-muted">
+            <p>Chưa có chiến dịch nào.</p>
+            <Button onClick={() => setShowDialog(true)} variant="secondary" className="mt-4">
+              Tạo chiến dịch đầu tiên
+            </Button>
+          </div>
         ) : (
           <table className="table">
             <thead>
               <tr>
-                <th>Tên</th>
+                <th>Tên chiến dịch</th>
                 <th>Số bài</th>
                 <th>Bài/ngày</th>
                 <th>Ngày bắt đầu</th>
@@ -150,36 +103,42 @@ export function FacebookCampaignsPage() {
               {rows.map((c) => (
                 <tr key={c.id}>
                   <td>
-                    <Link to={`/facebook/campaigns/${c.id}`} style={{ fontWeight: 500 }}>
+                    <Link to={`/facebook/campaigns/${c.id}`} className="font-semibold text-primary hover:underline">
                       {c.name}
                     </Link>
-                    {c.description && <div style={{ fontSize: "0.8rem", color: "var(--color-muted)" }}>{c.description}</div>}
+                    {c.description && <div className="text-xs text-muted mt-1">{c.description}</div>}
                   </td>
-                  <td>{c._count?.posts ?? "—"}</td>
+                  <td>{c._count?.posts ?? 0}</td>
                   <td>{c.postsPerDay}</td>
                   <td>{new Date(c.startDate).toLocaleDateString("vi-VN")}</td>
                   <td>
-                    <Badge tone={STATUS_TONE[c.status] ?? "neutral"}>{c.status}</Badge>
+                    <StatusBadge status={c.status} />
                   </td>
-                  <td style={{ textAlign: "right", display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
-                    {c.status === "draft" && (
+                  <td>
+                    <div className="flex items-center justify-end gap-2">
+                      {c.status === "draft" && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          icon={<Calendar size={16} />}
+                          disabled={scheduleMutation.isPending}
+                          onClick={() => scheduleMutation.mutate(c.id)}
+                        >
+                          Lên lịch
+                        </Button>
+                      )}
                       <Button
-                        variant="secondary"
-                        disabled={scheduleMutation.isPending}
-                        onClick={() => scheduleMutation.mutate(c.id)}
+                        variant="ghost"
+                        size="sm"
+                        icon={<Trash2 size={16} />}
+                        disabled={deleteMutation.isPending}
+                        onClick={() => {
+                          if (confirm(`Xoá chiến dịch "${c.name}"?`)) deleteMutation.mutate(c.id);
+                        }}
                       >
-                        Lên lịch
+                        Xoá
                       </Button>
-                    )}
-                    <Button
-                      variant="ghost"
-                      disabled={deleteMutation.isPending}
-                      onClick={() => {
-                        if (confirm(`Xoá chiến dịch "${c.name}"?`)) deleteMutation.mutate(c.id);
-                      }}
-                    >
-                      Xoá
-                    </Button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -187,6 +146,75 @@ export function FacebookCampaignsPage() {
           </table>
         )}
       </div>
+
+      <Dialog open={showDialog} onClose={() => setShowDialog(false)} title="Tạo chiến dịch mới">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            createMutation.mutate(form);
+          }}
+          className="flex flex-col gap-4"
+        >
+          <div className="field">
+            <Label htmlFor="name">Tên chiến dịch *</Label>
+            <Input
+              id="name"
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              placeholder="VD: Tháng 5 - Khuyến mãi"
+              required
+            />
+          </div>
+
+          <div className="field">
+            <Label htmlFor="description">Mô tả</Label>
+            <Textarea
+              id="description"
+              value={form.description}
+              onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+              placeholder="Mô tả ngắn gọn về chiến dịch (tuỳ chọn)"
+              rows={3}
+            />
+          </div>
+
+          <div className="field">
+            <Label htmlFor="postsPerDay">Số bài/ngày *</Label>
+            <Input
+              id="postsPerDay"
+              type="number"
+              min={1}
+              max={20}
+              value={form.postsPerDay}
+              onChange={(e) => setForm((f) => ({ ...f, postsPerDay: Number(e.target.value) }))}
+              required
+            />
+          </div>
+
+          <div className="field">
+            <Label htmlFor="startDate">Ngày bắt đầu *</Label>
+            <Input
+              id="startDate"
+              type="date"
+              value={form.startDate}
+              onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))}
+              required
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 mt-2">
+            <Button type="button" variant="ghost" onClick={() => setShowDialog(false)}>
+              Huỷ
+            </Button>
+            <Button type="submit" disabled={!form.name || !form.startDate || createMutation.isPending}>
+              {createMutation.isPending ? "Đang tạo..." : "Tạo chiến dịch"}
+            </Button>
+          </div>
+
+          {createMutation.isError && (
+            <p className="text-sm text-danger">{String(createMutation.error)}</p>
+          )}
+        </form>
+      </Dialog>
     </>
   );
 }

@@ -5,6 +5,7 @@ import { Button } from "./ui/Button";
 
 const navItems = [
   { to: "/dashboard", label: "Dashboard", icon: Gauge },
+  { to: "/facebook/campaigns", label: "FB Campaigns", icon: Facebook },
   { to: "/contents", label: "Nội dung", icon: FileText },
   { to: "/sources", label: "Nguồn", icon: Wifi },
   { to: "/targets", label: "Đích đăng", icon: Target },
@@ -13,7 +14,6 @@ const navItems = [
   { to: "/tools/convert-link", label: "Chuyển link", icon: Link2 },
   { to: "/tools/import", label: "Import", icon: Upload },
   { to: "/accounts", label: "Tài khoản", icon: UserRoundCog },
-  { to: "/facebook/campaigns", label: "FB Campaigns", icon: Facebook },
   { to: "/settings", label: "Cài đặt", icon: Settings }
 ];
 
@@ -21,8 +21,11 @@ export function Layout() {
   const navigate = useNavigate();
 
   async function logout() {
-    await apiPost("/auth/logout", {});
-    navigate("/login");
+    try {
+      await apiPost("/auth/logout", {});
+    } finally {
+      navigate("/login");
+    }
   }
 
   return (
@@ -30,7 +33,10 @@ export function Layout() {
       <aside className="sidebar">
         <div className="brand">
           <Activity aria-hidden />
-          <span>Zerun</span>
+          <div>
+            <span>Zerun</span>
+            <p className="text-xs text-muted m-0">Admin Console</p>
+          </div>
         </div>
         <nav className="nav-list" aria-label="Điều hướng chính">
           {navItems.map((item) => (

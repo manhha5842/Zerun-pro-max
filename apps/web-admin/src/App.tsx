@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { AccountsPage } from "./pages/AccountsPage";
 import { FacebookCampaignsPage } from "./pages/FacebookCampaignsPage";
+import { FacebookCampaignDetailPage } from "./pages/FacebookCampaignDetailPage";
 import { ContentsPage } from "./pages/ContentsPage";
 import { ContentDetailPage } from "./pages/ContentDetailPage";
 import { ConvertLinkPage } from "./pages/ConvertLinkPage";
@@ -31,6 +32,7 @@ export function App() {
         <Route path="/tools/import" element={<ImportPage />} />
         <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/facebook/campaigns" element={<FacebookCampaignsPage />} />
+        <Route path="/facebook/campaigns/:id" element={<FacebookCampaignDetailPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Route>
