@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Play, RefreshCw } from "lucide-react";
 import { apiGet, apiPost } from "../api/client";
@@ -17,14 +18,24 @@ type Source = {
 
 export function SourcesPage() {
   const queryClient = useQueryClient();
+  const [formFeedback, setFormFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const query = useQuery({ queryKey: ["sources"], queryFn: () => apiGet<{ sources: Source[] }>("/sources") });
   const create = useMutation({
     mutationFn: (values: AccountFormValues) => apiPost("/sources", values),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["sources"] })
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sources"] });
+      void queryClient.invalidateQueries({ queryKey: ["accounts"] });
+      setFormFeedback({ type: "success", message: "Đã thêm nguồn mới." });
+    },
+    onError: (error: Error) => setFormFeedback({ type: "error", message: error.message })
   });
   const crawl = useMutation({
     mutationFn: (id: string) => apiPost(`/sources/${id}/crawl`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["sources"] })
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sources"] });
+      setFormFeedback({ type: "success", message: "Đã đưa nguồn vào hàng đợi crawl." });
+    },
+    onError: (error: Error) => setFormFeedback({ type: "error", message: error.message })
   });
 
   return (
@@ -32,12 +43,13 @@ export function SourcesPage() {
       <header className="page-head">
         <div>
           <h1 className="page-title">Nguồn crawl</h1>
-          <p className="page-subtitle">Khai báo tài khoản và session thật cho Telegram, X, Threads, Instagram hoặc Facebook.</p>
+          <p className="page-subtitle">Giữ form nhanh tại chỗ để thêm account crawl, nhưng nếu cần hướng dẫn nhiều bước hơn hãy dùng trang Tài khoản.</p>
         </div>
-        <Button variant="secondary" icon={<RefreshCw aria-hidden />} onClick={() => query.refetch()}>
-          Làm mới
+        <Button variant="secondary" icon={<RefreshCw aria-hidden />} onClick={() => query.refetch()} disabled={query.isFetching}>
+          {query.isFetching ? "Đang tải..." : "Làm mới"}
         </Button>
       </header>
+      {formFeedback ? <div className={`banner ${formFeedback.type}`}>{formFeedback.message}</div> : null}
       <section className="split">
         <div className="panel">
           <table className="table">
@@ -45,6 +57,7 @@ export function SourcesPage() {
               <tr>
                 <th>Tên</th>
                 <th>Nền tảng</th>
+                <th>Handle</th>
                 <th>Sức khỏe</th>
                 <th>Thao tác</th>
               </tr>
@@ -52,14 +65,18 @@ export function SourcesPage() {
             <tbody>
               {(query.data?.sources ?? []).map((source) => (
                 <tr key={source.id}>
-                  <td>{source.name}</td>
+                  <td>
+                    <strong>{source.name}</strong>
+                    <div className="table-subtle">{source.isActive ? "Đang bật" : "Đang tắt"}</div>
+                  </td>
                   <td>{source.platform}</td>
+                  <td>{source.handle || <span className="table-subtle">Chưa có</span>}</td>
                   <td>
                     <StatusBadge status={source.health} />
                   </td>
                   <td>
-                    <Button variant="secondary" icon={<Play aria-hidden />} onClick={() => crawl.mutate(source.id)}>
-                      Crawl
+                    <Button variant="secondary" icon={<Play aria-hidden />} onClick={() => crawl.mutate(source.id)} disabled={crawl.isPending}>
+                      {crawl.isPending ? "Đang queue..." : "Crawl"}
                     </Button>
                   </td>
                 </tr>
@@ -67,7 +84,19 @@ export function SourcesPage() {
             </tbody>
           </table>
         </div>
-        <AccountForm label="Thêm nguồn thật" onSubmit={(values) => create.mutate(values)} />
+        <AccountForm
+          label="Thêm nguồn thật"
+          description="Phiên bản rút gọn của wizard tạo account tập trung. Dùng tốt cho Telegram, X, Threads, Instagram và Facebook source."
+          submitLabel="Thêm nguồn"
+          fixedKind="source"
+          isSubmitting={create.isPending}
+          submitError={create.error instanceof Error ? create.error.message : undefined}
+          submitSuccess={formFeedback?.type === "success" ? formFeedback.message : undefined}
+          onSubmit={async (values) => {
+            setFormFeedback(null);
+            await create.mutateAsync(values);
+          }}
+        />
       </section>
     </>
   );

@@ -1,111 +1,180 @@
 # Zerun Web Admin UI Implementation Notes
 
 ## Overview
-Implemented and upgraded the React/Vite admin UI in `apps/web-admin` for Zerun-pro-max with a cleaner management console structure, improved Facebook campaign management, and shared status/dashboard components.
+Implemented comprehensive account management UI upgrades in `apps/web-admin` for Zerun-pro-max, centered around a new unified account-creation flow on `/accounts` while preserving existing Sources and Targets entry points.
 
 ## What Was Implemented
 
-### 1. Facebook Campaigns
-- Upgraded campaign list page with:
-  - empty state
-  - create campaign dialog
-  - schedule campaign action
-  - delete campaign action
-  - status badges
-- Added campaign detail page:
-  - route: `/facebook/campaigns/:id`
-  - displays campaign metadata
-  - lists imported/manual posts
-  - shows post status, media count, target count, and scheduled time
-  - supports per-post delete action
-  - includes placeholder dialogs for manual add/import flows
+### 1. Centralized Account Management (`/accounts`)
+- Added **"Thêm tài khoản mới"** CTA on the Accounts page.
+- Added a new **3-step wizard dialog**:
+  1. choose kind: `source` or `target`
+  2. choose platform: `facebook`, `telegram`, `x`, `threads`, `instagram`
+  3. fill platform-specific fields + JSON overrides
+- Added quick metrics for total accounts, source accounts, target accounts, and Facebook target accounts.
+- Added inline Facebook session guidance specifically for posting targets.
+- Added actions for:
+  - account health test
+  - delete with confirmation dialog (`window.confirm`)
+- Added loading and inline success/error feedback states.
 
-### 2. Dashboard Improvements
-- Added reusable stats card component
-- Added platform-aware health section
-- Replaced raw badge usage with reusable status badge component
-- Added platform icon support through `PlatformLogo`
+### 2. Platform-Specific Account Forms
+Created dedicated components under `apps/web-admin/src/components/accounts/`:
+- `AddAccountDialog.tsx`
+- `FacebookAccountForm.tsx`
+- `TelegramAccountForm.tsx`
+- `XAccountForm.tsx`
+- `ThreadsAccountForm.tsx`
+- `InstagramAccountForm.tsx`
 
-### 3. Shared Components Added
-Created these reusable components:
-- `components/common/PlatformLogo.tsx`
-- `components/common/StatusBadge.tsx`
-- `components/common/StatsCard.tsx`
-- `components/ui/Dialog.tsx`
-- `components/ui/Input.tsx`
-- `components/ui/Label.tsx`
-- `components/ui/Select.tsx`
-- `components/ui/Textarea.tsx`
+These support the requested fields:
+- **Facebook**
+  - `name`
+  - `handle`
+  - `authPath`
+  - `sessionDir`
+  - `config`
+  - `credentials`
+- **Telegram**
+  - `apiId`
+  - `apiHash`
+  - `session`
+  - optional `phone`
+- **X / Twitter**
+  - `username`
+  - `password`
+  - `email`
+  - optional `twoFactorSecret`
+- **Threads**
+  - `sessionDir`
+  - or Instagram `username/password`
+- **Instagram**
+  - `username`
+  - `password`
 
-### 4. Routing
-Updated `src/App.tsx` to include:
-- `/facebook/campaigns/:id`
+### 3. Shared Form Engine Upgrade
+Rebuilt `apps/web-admin/src/pages/accountForms.tsx` into a reusable form engine with:
+- strongly typed account draft state
+- platform-aware validation
+- JSON object validation for `credentials` and `config`
+- path validation for `authPath` / `sessionDir`
+- reusable `AccountForm` for Sources/Targets pages
+- reusable helpers for centralized wizard flow
 
-### 5. Layout Refresh
-Updated navigation ordering and improved the shell layout branding for the admin console.
+### 4. Sources / Targets Pages Improved (Option A retained)
+Per requested direction, existing inline add forms were **kept** and improved rather than removed.
 
-### 6. Existing Pages Normalized
-Updated pages to use the new `StatusBadge` where applicable:
-- Dashboard
-- Contents
-- Sources
-- Targets
-- Routing
-- Schedules
-- Accounts
+#### `SourcesPage.tsx`
+- improved messaging and UX
+- added validation-backed inline form
+- added success/error banner feedback
+- kept crawl action
+- added handle display in the table
 
-## API Endpoints Used
-Frontend pages are integrated against existing API endpoints in `apps/api/src/app.ts`.
+#### `TargetsPage.tsx`
+- improved messaging for Facebook posting accounts
+- added validation-backed inline form
+- added success/error banner feedback
+- added handle display in the table
 
-### Dashboard
-- `GET /api/v1/dashboard/stats`
-- `GET /api/v1/dashboard/activity`
+### 5. UX / Styling Improvements
+Added styling in `styles.css` for:
+- wizard stepper
+- choice cards
+- inline notes
+- success/error banners
+- helper text and muted metadata
+- improved account-form layouts
 
-### Facebook Campaigns
-- `GET /api/v1/facebook/campaigns`
-- `POST /api/v1/facebook/campaigns`
-- `GET /api/v1/facebook/campaigns/:id`
-- `DELETE /api/v1/facebook/campaigns/:id`
-- `POST /api/v1/facebook/campaigns/:id/schedule`
-- `DELETE /api/v1/facebook/posts/:id`
+## Backend API Validation
+Checked backend implementation in `apps/api/src/app.ts`.
 
-### Other Existing Pages
-- contents, sources, targets, routing rules, schedules, accounts, AI configs
+### Confirmed existing endpoints
+- `POST /api/v1/sources`
+- `POST /api/v1/targets`
+- `POST /api/v1/accounts/:id/test`
+- `DELETE /api/v1/sources/:id`
+- `DELETE /api/v1/targets/:id`
+- `GET /api/v1/accounts`
 
-## Dependencies Added
-Installed in `apps/web-admin`:
-- `react-hook-form`
-- `zod`
-- `@hookform/resolvers`
-- `date-fns`
+### Backend behavior found
+Current backend handlers are permissive and pass `request.body as any` directly into Prisma create/update calls:
+- `sourceAccount.create({ data: request.body as any })`
+- `targetAccount.create({ data: request.body as any })`
 
-## shadcn/ui Calendar
-Executed:
-- `npx shadcn@latest add calendar`
+This means the current frontend payload shape is accepted as long as it matches existing Prisma fields:
+- `name`
+- `platform`
+- `handle`
+- `credentials`
+- `config`
+- `isActive`
 
-Note: in this environment, shadcn generated files into an unexpected alias-based folder outside `apps/web-admin/src`. The app build still succeeds, but the generated calendar component was not wired into active pages in this pass.
+### Important backend assumptions / gaps
+1. **`authPath` and `sessionDir` are not first-class columns** in Prisma models.
+   - They are stored inside `credentials` JSON from the frontend.
+   - This is compatible with the current API behavior.
+2. **No server-side validation currently exists** for platform-specific credentials.
+   - Validation is frontend-only in this implementation.
+3. **No dedicated POST `/accounts` endpoint exists.**
+   - The unified Accounts page wizard dispatches to `/sources` or `/targets` based on chosen kind.
+4. **Delete confirmation is client-side only.**
+5. **Toast system not present in app infrastructure.**
+   - Implemented inline success/error banners instead.
+6. **No dedicated backend help endpoint for session setup.**
+   - Guidance is provided entirely in the UI.
 
-## Assumptions / Limitations
-1. The backend Facebook campaign API is more limited than the requested final UX.
-   - Supported directly today: campaign create/list/detail/delete/schedule
-   - Not exposed today as dedicated endpoints: pause/resume campaign, full wizard persistence, rich Excel parsing workflow in UI, target multi-select persistence at campaign level
-2. Because of those backend limits, some requested UI flows are implemented as placeholders or partial flows on the detail page.
-3. Platform logos were requested as downloaded image assets, but external image downloads were rate-limited during execution. The implementation falls back to Lucide-based platform icons via `PlatformLogo`.
-4. Several non-Facebook pages were improved and normalized, but not fully rebuilt into a complete shadcn-heavy design system.
+## Prisma Model Check
+Validated `packages/db/prisma/schema.prisma`:
+- `SourceAccount` fields include:
+  - `platform`, `name`, `handle`, `isActive`, `health`, `credentials`, `config`
+- `TargetAccount` fields include:
+  - `platform`, `name`, `handle`, `isActive`, `health`, `credentials`, `config`
+
+So the upgraded UI maps cleanly onto the current schema by storing platform-specific session/login details under `credentials` JSON.
+
+## Validation Added in UI
+- required display name
+- handle sanity check
+- valid JSON object requirement for `credentials` and `config`
+- path validation for `authPath`, `sessionDir`, `threadsSessionDir`
+- Facebook requires at least one of:
+  - `authPath`
+  - `sessionDir`
+- Telegram requires:
+  - `apiId`
+  - `apiHash`
+  - `session`
+- X requires:
+  - `username`
+  - `password`
+  - `email`
+- Threads requires either:
+  - `sessionDir`
+  - or Instagram `username/password`
+- Instagram requires:
+  - `username`
+  - `password`
+
+## Assumptions
+1. Facebook posting accounts are represented as **target accounts**.
+2. `authPath` and `sessionDir` should be persisted in `credentials` JSON because schema columns do not yet exist.
+3. The worker/runtime already knows how to interpret those credential keys, or backend worker support will be added separately if needed.
+4. Preserving Sources/Targets inline forms is less disruptive than redirecting users immediately to Accounts.
+
+## Suggested Backend Next Steps
+1. Add server-side schema validation for source/target create/update endpoints.
+2. Consider a dedicated `POST /api/v1/accounts` endpoint that accepts `kind` to simplify the unified Accounts page.
+3. Consider explicit schema fields or normalized session models for:
+   - `authPath`
+   - `sessionDir`
+   - storage-state metadata
+4. Add encrypted secret storage if raw credentials are considered too sensitive for plain JSON persistence.
+5. Add a real toast/notification system for better feedback consistency.
 
 ## Validation
-Build completed successfully:
-- `npm run build` in `apps/web-admin`
-
-## Suggested Next Steps
-1. Add backend endpoints for:
-   - pause/resume Facebook campaigns
-   - campaign-level schedule window/time mode persistence
-   - richer import validation and preview
-2. Add real toast system and mutation success/error notifications
-3. Replace placeholder import/manual post dialogs with functional forms
-4. Add logo image assets once stable download sources are available
-5. Add calendar-based schedule visualization using a normalized in-app calendar component
+Recommended verification command:
+- `npm run build -w @zerun/web-admin`
 
 ## Date
 2026-04-18
