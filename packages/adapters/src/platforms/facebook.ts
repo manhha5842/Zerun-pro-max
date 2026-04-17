@@ -1,6 +1,6 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
-import { AdapterAuthError, RetryableNetworkError, type Platform } from "@zerun/shared";
+import { AdapterAuthError, AdapterCheckpointError, RetryableNetworkError, type Platform } from "@zerun/shared";
 import type { AdapterAccount, AdapterHealth, CrawlInput, CrawlResult, PublishAdapter, PublishInput, PublishResult, SourceAdapter } from "../contracts.js";
 import { readString } from "../utils/credentials.js";
 
@@ -12,6 +12,7 @@ export type FbPublishInput = {
   caption?: string;
   mediaPaths: string[];
   screenshotDir?: string;
+  screenshotName?: string;
 };
 
 export type FbPublishResult = {
@@ -24,33 +25,49 @@ export type FbCommentInput = {
   postUrl: string;
   text: string;
   screenshotDir?: string;
+  screenshotName?: string;
 };
+
+const AUTH_COOKIE_NAMES = ["c_user", "xs"] as const;
+const FACEBOOK_HOME_URL = "https://www.facebook.com/";
 
 export class FacebookAdapter implements SourceAdapter, PublishAdapter {
   readonly platform: Platform = "facebook";
 
   async testConnection(account: AdapterAccount): Promise<AdapterHealth> {
-    const context = await this.openContext(account);
+    const { browser, context } = await this.openContext(account);
     try {
       const page = await context.newPage();
-      await page.goto("https://www.facebook.com/", { waitUntil: "domcontentloaded" });
-      const loginVisible = await page.locator("input[name='email']").first().isVisible().catch(() => false);
-      return loginVisible
-        ? { status: "checkpoint", message: "Facebook cần đăng nhập hoặc checkpoint trong browser session" }
-        : { status: "healthy", message: "Facebook session có vẻ hợp lệ" };
+      await page.goto(FACEBOOK_HOME_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      await dismissCookieDialog(page);
+
+      const authState = await this.inspectAuth(page, context);
+      if (authState.kind === "ok") {
+        return { status: "healthy", message: "Facebook session is valid", metadata: authState.metadata };
+      }
+
+      return {
+        status: "checkpoint",
+        message: authState.message,
+        metadata: authState.metadata
+      };
+    } catch (error) {
+      const classified = normalizeFacebookError(error);
+      return { status: "degraded", message: classified.message };
     } finally {
       await context.close();
+      await browser.close();
     }
   }
 
   async crawl(input: CrawlInput): Promise<CrawlResult> {
     const url = readString(input.account.credentials, "url", input.account.handle ?? undefined);
-    const context = await this.openContext(input.account);
+    const { browser, context } = await this.openContext(input.account);
 
     try {
       const page = await context.newPage();
-      await page.goto(url, { waitUntil: "networkidle" });
-      const body = (await page.locator("body").innerText()) as string;
+      await page.goto(url, { waitUntil: "networkidle", timeout: 40_000 });
+      const body = await page.locator("body").innerText();
       const lines = body
         .split("\n")
         .map((line: string) => line.trim())
@@ -73,10 +90,10 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
       throw normalizeFacebookError(error);
     } finally {
       await context.close();
+      await browser.close();
     }
   }
 
-  // Generic publish (used by existing routing/publish pipeline)
   async publish(input: PublishInput): Promise<PublishResult> {
     const result = await this.publishFb({
       account: input.account,
@@ -87,169 +104,233 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
     return { url: result.postUrl, metadata: result.metadata };
   }
 
-  // ── Facebook-specific publish ────────────────────────────────────────────────
-
   async publishFb(input: FbPublishInput): Promise<FbPublishResult> {
-    const context = await this.openContext(input.account);
+    const { browser, context } = await this.openContext(input.account);
     const screenshotDir = input.screenshotDir ?? "storage/screenshots";
+    const screenshotName = input.screenshotName ?? `fb-error-${Date.now()}`;
 
     try {
       const page = await context.newPage();
+      await page.goto(FACEBOOK_HOME_URL, { waitUntil: "domcontentloaded", timeout: 40_000 });
+      await dismissCookieDialog(page);
+      await this.ensureAuthenticated(page, context);
 
       switch (input.type) {
         case "feed":
-          return await this._publishFeed(page, input.caption ?? "", input.mediaPaths);
+          return await this.publishFeed(page, input.caption ?? "", input.mediaPaths);
         case "story":
-          return await this._publishStory(page, input.mediaPaths[0] ?? "");
+          return await this.publishStory(page, input.mediaPaths[0] ?? "");
         case "reel":
-          return await this._publishReel(page, input.caption ?? "", input.mediaPaths[0] ?? "");
-        default:
-          throw new Error(`Unknown post type: ${input.type}`);
+          return await this.publishReel(page, input.caption ?? "", input.mediaPaths[0] ?? "");
       }
     } catch (error) {
-      await this._screenshot(context, screenshotDir, `fb-error-${Date.now()}`).catch(() => undefined);
+      await this.captureScreenshot(context, screenshotDir, screenshotName).catch(() => undefined);
       throw normalizeFacebookError(error);
     } finally {
       await context.close();
+      await browser.close();
     }
   }
 
   async addComment(input: FbCommentInput): Promise<void> {
-    const context = await this.openContext(input.account);
+    const { browser, context } = await this.openContext(input.account);
     const screenshotDir = input.screenshotDir ?? "storage/screenshots";
+    const screenshotName = input.screenshotName ?? `fb-comment-error-${Date.now()}`;
 
     try {
       const page = await context.newPage();
-      await page.goto(input.postUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      await page.goto(input.postUrl, { waitUntil: "domcontentloaded", timeout: 40_000 });
+      await dismissCookieDialog(page);
+      await this.ensureAuthenticated(page, context);
       await page.waitForTimeout(2_000);
 
-      // Open comment box
-      const commentBox = page.locator('[aria-label*="comment" i], [aria-label*="bình luận" i], [data-lexical-editor]').first();
+      const commentBox = firstLocator(page, [
+        '[aria-label*="comment" i]',
+        '[aria-label*="bình luận" i]',
+        '[data-lexical-editor="true"]',
+        '[contenteditable="true"][role="textbox"]'
+      ]);
+
       await commentBox.click({ timeout: 15_000 });
-      await page.waitForTimeout(500);
-
+      await page.waitForTimeout(300);
       await commentBox.fill(input.text);
-      await page.waitForTimeout(500);
-
-      // Submit (Enter key or button)
+      await page.waitForTimeout(300);
       await commentBox.press("Enter");
       await page.waitForTimeout(2_000);
     } catch (error) {
-      await this._screenshot(context, screenshotDir, `fb-comment-error-${Date.now()}`).catch(() => undefined);
+      await this.captureScreenshot(context, screenshotDir, screenshotName).catch(() => undefined);
       throw normalizeFacebookError(error);
     } finally {
       await context.close();
+      await browser.close();
     }
   }
 
-  // ── Private helpers ──────────────────────────────────────────────────────────
+  private async publishFeed(page: any, caption: string, mediaPaths: string[]): Promise<FbPublishResult> {
+    const composerTrigger = firstLocator(page, [
+      'div[role="button"][aria-label*="mind" i]',
+      'div[role="button"][aria-label*="nghĩ gì" i]',
+      "text=/What's on your mind|Bạn đang nghĩ gì|What are you thinking/i"
+    ]);
+    await composerTrigger.click({ timeout: 20_000 });
+    await page.waitForTimeout(1_500);
 
-  private async _publishFeed(page: any, caption: string, mediaPaths: string[]): Promise<FbPublishResult> {
-    const targetUrl = readString(page._target?.url?.() ?? {}, "targetUrl", "https://www.facebook.com/");
-    await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 40_000 });
-    await page.waitForTimeout(2_000);
-
-    // Open post composer
-    await page.getByText(/What's on your mind|Bạn đang nghĩ gì/i).first().click({ timeout: 20_000 });
-    await page.waitForTimeout(1_000);
-
-    // Upload media if any
     if (mediaPaths.length > 0) {
       const [fileChooser] = await Promise.all([
         page.waitForEvent("filechooser", { timeout: 15_000 }),
-        page.locator('[aria-label*="Photo" i], [aria-label*="Ảnh" i], [aria-label*="video" i]').first().click()
+        firstLocator(page, [
+          '[aria-label*="Photo/video" i]',
+          '[aria-label*="Ảnh/video" i]',
+          '[aria-label*="Photo" i]',
+          '[aria-label*="video" i]'
+        ]).click({ timeout: 15_000 })
       ]);
       await fileChooser.setFiles(mediaPaths);
       await page.waitForTimeout(3_000);
     }
 
-    // Fill caption
     if (caption) {
-      const textbox = page.getByRole("textbox").first();
-      await textbox.click();
+      const textbox = firstLocator(page, [
+        '[role="dialog"] [role="textbox"]',
+        '[contenteditable="true"][role="textbox"]',
+        '[data-lexical-editor="true"]'
+      ]);
+      await textbox.click({ timeout: 10_000 });
       await textbox.fill(caption);
       await page.waitForTimeout(500);
     }
 
-    // Submit
-    await page.getByText(/^Post$|^Đăng$/i).last().click({ timeout: 20_000 });
+    await firstLocator(page, ['text=/^Post$|^Đăng$|^Publish$|^Xuất bản$/i', '[aria-label="Post"]']).last().click({ timeout: 20_000 });
     await page.waitForLoadState("networkidle", { timeout: 30_000 });
 
     return { postUrl: page.url(), metadata: { platform: "facebook", type: "feed" } };
   }
 
-  private async _publishStory(page: any, mediaPath: string): Promise<FbPublishResult> {
-    await page.goto("https://www.facebook.com/", { waitUntil: "domcontentloaded", timeout: 40_000 });
-    await page.waitForTimeout(2_000);
+  private async publishStory(page: any, mediaPath: string): Promise<FbPublishResult> {
+    if (!mediaPath) throw new Error("Story requires exactly one image");
 
-    // Click "Create Story" / "Tạo tin"
-    await page
-      .locator('[aria-label*="Create story" i], [aria-label*="Tạo tin" i], [aria-label*="Add to story" i], [aria-label*="Thêm vào tin" i]')
-      .first()
-      .click({ timeout: 20_000 });
+    await firstLocator(page, [
+      '[aria-label*="Create story" i]',
+      '[aria-label*="Tạo tin" i]',
+      '[aria-label*="Add to story" i]',
+      '[aria-label*="Thêm vào tin" i]'
+    ]).click({ timeout: 20_000 });
     await page.waitForTimeout(1_500);
 
-    // Upload image
     const [fileChooser] = await Promise.all([
       page.waitForEvent("filechooser", { timeout: 15_000 }),
-      page.locator('[aria-label*="Photo" i], [aria-label*="Ảnh" i], input[type="file"]').first().click()
+      firstLocator(page, ['[aria-label*="Photo" i]', '[aria-label*="Ảnh" i]', 'input[type="file"]']).click({ timeout: 15_000 })
     ]);
     await fileChooser.setFiles([mediaPath]);
     await page.waitForTimeout(3_000);
 
-    // Publish story
-    await page
-      .locator('[aria-label*="Share to story" i], [aria-label*="Chia sẻ lên tin" i]')
+    await firstLocator(page, ['[aria-label*="Share to story" i]', '[aria-label*="Chia sẻ lên tin" i]', 'text=/Share to story|Chia sẻ lên tin/i'])
       .first()
-      .click({ timeout: 20_000 })
-      .catch(async () => {
-        await page.getByText(/Share to story|Chia sẻ lên tin/i).first().click({ timeout: 15_000 });
-      });
+      .click({ timeout: 20_000 });
     await page.waitForLoadState("networkidle", { timeout: 30_000 });
 
     return { postUrl: page.url(), metadata: { platform: "facebook", type: "story" } };
   }
 
-  private async _publishReel(page: any, caption: string, videoPath: string): Promise<FbPublishResult> {
-    await page.goto("https://www.facebook.com/", { waitUntil: "domcontentloaded", timeout: 40_000 });
-    await page.waitForTimeout(2_000);
+  private async publishReel(page: any, caption: string, videoPath: string): Promise<FbPublishResult> {
+    if (!videoPath) throw new Error("Reel requires exactly one video");
 
-    // Open post composer and select Reel type
-    await page.getByText(/What's on your mind|Bạn đang nghĩ gì/i).first().click({ timeout: 20_000 });
+    const composerTrigger = firstLocator(page, [
+      'div[role="button"][aria-label*="mind" i]',
+      'div[role="button"][aria-label*="nghĩ gì" i]',
+      "text=/What's on your mind|Bạn đang nghĩ gì/i"
+    ]);
+    await composerTrigger.click({ timeout: 20_000 });
     await page.waitForTimeout(1_000);
 
-    // Try to switch to Reel tab in composer
-    const reelTab = page.locator('[role="tab"][aria-label*="Reel" i], [data-testid*="reel" i]').first();
-    const reelTabVisible = await reelTab.isVisible({ timeout: 5_000 }).catch(() => false);
-    if (reelTabVisible) {
-      await reelTab.click();
+    const reelTab = firstLocator(page, ['[role="tab"][aria-label*="Reel" i]', '[data-testid*="reel" i]']).first();
+    if (await reelTab.isVisible({ timeout: 5_000 }).catch(() => false)) {
+      await reelTab.click({ timeout: 10_000 });
       await page.waitForTimeout(1_000);
     }
 
-    // Upload video
     const [fileChooser] = await Promise.all([
       page.waitForEvent("filechooser", { timeout: 15_000 }),
-      page.locator('[aria-label*="Reel" i], [aria-label*="video" i], input[type="file"]').first().click()
+      firstLocator(page, ['[aria-label*="Reel" i]', '[aria-label*="video" i]', 'input[type="file"]']).click({ timeout: 15_000 })
     ]);
     await fileChooser.setFiles([videoPath]);
-    await page.waitForTimeout(5_000); // video upload takes longer
+    await page.waitForTimeout(5_000);
 
-    // Fill caption
     if (caption) {
-      const textbox = page.getByRole("textbox").first();
-      await textbox.click();
+      const textbox = firstLocator(page, [
+        '[role="dialog"] [role="textbox"]',
+        '[contenteditable="true"][role="textbox"]',
+        '[data-lexical-editor="true"]'
+      ]);
+      await textbox.click({ timeout: 10_000 });
       await textbox.fill(caption);
       await page.waitForTimeout(500);
     }
 
-    // Submit
-    await page.getByText(/^Post$|^Đăng$|^Publish$|^Xuất bản$/i).last().click({ timeout: 20_000 });
-    await page.waitForLoadState("networkidle", { timeout: 60_000 }); // video processing
+    await firstLocator(page, ['text=/^Post$|^Đăng$|^Publish$|^Xuất bản$/i', '[aria-label*="Publish" i]']).last().click({ timeout: 20_000 });
+    await page.waitForLoadState("networkidle", { timeout: 60_000 });
 
     return { postUrl: page.url(), metadata: { platform: "facebook", type: "reel" } };
   }
 
-  private async _screenshot(context: any, dir: string, name: string): Promise<string> {
+  private async ensureAuthenticated(page: any, context: any): Promise<void> {
+    const authState = await this.inspectAuth(page, context);
+    if (authState.kind === "checkpoint") {
+      throw new AdapterCheckpointError(authState.message, authState.metadata);
+    }
+    if (authState.kind !== "ok") {
+      throw new AdapterAuthError(authState.message, authState.metadata);
+    }
+  }
+
+  private async inspectAuth(page: any, context: any): Promise<{ kind: "ok" | "auth" | "checkpoint"; message: string; metadata: Record<string, unknown> }> {
+    const cookies = await context.cookies();
+    const cookieNames = new Set<string>(cookies.map((cookie: { name: string }) => cookie.name));
+    const hasAuthCookies = AUTH_COOKIE_NAMES.every((name) => cookieNames.has(name));
+
+    const state = await page.evaluate(() => {
+      const bodyText = document.body?.innerText?.toLowerCase() || "";
+      const hasCredentialInputs = !!document.querySelector('input[name="email"], input[name="pass"]');
+      const authPhrases = [
+        "see more on facebook",
+        "log in to facebook",
+        "email address or phone number",
+        "email address or mobile number",
+        "create new account"
+      ];
+      const checkpointPhrases = [
+        "checkpoint",
+        "review recent login",
+        "secure your account",
+        "suspended",
+        "confirm your identity",
+        "two-factor",
+        "two factor"
+      ];
+      return {
+        hasCredentialInputs,
+        hasAuthWall: hasCredentialInputs || authPhrases.some((phrase) => bodyText.includes(phrase)),
+        hasCheckpoint: checkpointPhrases.some((phrase) => bodyText.includes(phrase)),
+        url: window.location.href
+      };
+    });
+
+    const metadata = {
+      url: state.url,
+      cookieNames: Array.from(cookieNames).sort(),
+      hasCredentialInputs: state.hasCredentialInputs
+    };
+
+    if (state.hasCheckpoint) {
+      return { kind: "checkpoint", message: "Facebook checkpoint or account review detected", metadata };
+    }
+    if (!hasAuthCookies || state.hasAuthWall) {
+      return { kind: "auth", message: "Facebook session expired or not authenticated", metadata };
+    }
+    return { kind: "ok", message: "ok", metadata };
+  }
+
+  private async captureScreenshot(context: any, dir: string, name: string): Promise<string> {
     mkdirSync(dir, { recursive: true });
     const filePath = path.join(dir, `${name}.png`);
     const pages = context.pages();
@@ -259,19 +340,49 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
     return filePath;
   }
 
-  private async openContext(account: AdapterAccount): Promise<any> {
-    const sessionDir = readString(account.credentials, "sessionDir", `storage/sessions/facebook/${account.id}`);
+  private async openContext(account: AdapterAccount): Promise<{ browser: any; context: any }> {
+    const authPath = readString(account.credentials, "authPath", `storage/sessions/facebook/${account.id}/auth.json`);
     const { chromium } = await import("playwright");
-    return chromium.launchPersistentContext(sessionDir, {
+
+    const browser = await chromium.launch({
       headless: account.config.headless !== false,
-      viewport: { width: 1366, height: 900 }
+      args: ["--no-sandbox"]
     });
+
+    const contextOptions: Record<string, unknown> = {
+      viewport: { width: 1366, height: 900 }
+    };
+
+    if (existsSync(authPath)) {
+      contextOptions.storageState = authPath;
+    }
+
+    const context = await browser.newContext(contextOptions);
+    return { browser, context };
   }
+}
+
+function firstLocator(page: any, selectors: string[]) {
+  return page.locator(selectors.join(", "));
+}
+
+async function dismissCookieDialog(page: any): Promise<void> {
+  await page
+    .getByRole("button", { name: /allow all cookies|accept all|accept cookies/i })
+    .click({ timeout: 3_000 })
+    .catch(() => undefined);
 }
 
 function normalizeFacebookError(error: unknown): Error {
   const message = error instanceof Error ? error.message : String(error);
-  if (/login|checkpoint|challenge|password/i.test(message)) return new AdapterAuthError(message);
-  if (/timeout|net::|ECONN|Target closed/i.test(message)) return new RetryableNetworkError(message);
+  if (/checkpoint|challenge|review recent login|secure your account|confirm your identity|suspended|two-factor|two factor/i.test(message)) {
+    return new AdapterCheckpointError(message);
+  }
+  if (/login|password|session expired|not authenticated/i.test(message)) {
+    return new AdapterAuthError(message);
+  }
+  if (/timeout|net::|ECONN|Target closed/i.test(message)) {
+    return new RetryableNetworkError(message);
+  }
   return error instanceof Error ? error : new Error(message);
 }

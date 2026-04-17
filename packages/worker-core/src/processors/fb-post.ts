@@ -58,12 +58,14 @@ async function processPost(job: FbPostJob, context: ProcessorContext) {
   mkdirSync(SCREENSHOT_DIR, { recursive: true });
 
   try {
+    const screenshotName = `fb-exec-${execution.id}-fail`;
     const result = await adapter.publishFb({
       account,
       type: post.type as "feed" | "story" | "reel",
       caption: post.caption ?? undefined,
       mediaPaths: post.media.map((m) => m.localPath),
-      screenshotDir: SCREENSHOT_DIR
+      screenshotDir: SCREENSHOT_DIR,
+      screenshotName
     });
 
     await context.prisma.fbExecution.update({
@@ -112,7 +114,8 @@ async function processComment(job: FbPostJob, context: ProcessorContext) {
       account,
       postUrl: job.postUrl,
       text: job.commentText,
-      screenshotDir: SCREENSHOT_DIR
+      screenshotDir: SCREENSHOT_DIR,
+      screenshotName: `fb-comment-${fbTarget.id}-${Date.now()}`
     });
     logger.info("FB comment posted", { targetId: fbTarget.id, postUrl: job.postUrl });
   } catch (error) {

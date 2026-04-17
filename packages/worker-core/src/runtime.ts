@@ -122,7 +122,7 @@ export async function createWorkerCore(options: WorkerCoreOptions = {}) {
     scheduleFbPost: (fbPostTargetId: string, scheduledAt: Date) =>
       queues[QueueName.FbPost].add(
         JobName.FbPostExecute,
-        { version: 1, fbPostTargetId } satisfies FbPostJob,
+        { version: 1, kind: "post", fbPostTargetId } satisfies FbPostJob,
         { ...defaultJobOptions, jobId: `fb-post:${fbPostTargetId}`, delay: Math.max(0, scheduledAt.getTime() - Date.now()) }
       )
   };
