@@ -1,6 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { Activity, AlertTriangle, CheckCircle2, Clock, FileText } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, FileText } from "lucide-react";
 import { apiGet } from "../api/client";
+import { PageHeader } from "../components/common/PageHeader";
+import { SectionCard } from "../components/common/SectionCard";
 import { StatusBadge } from "../components/common/StatusBadge";
 import { StatsCard } from "../components/common/StatsCard";
 import { PlatformLogo } from "../components/common/PlatformLogo";
@@ -23,12 +25,7 @@ export function DashboardPage() {
 
   return (
     <>
-      <header className="page-head">
-        <div>
-          <h1 className="page-title">Bảng điều khiển</h1>
-          <p className="page-subtitle">Theo dõi nội dung, hàng đợi và sức khỏe các tài khoản thật.</p>
-        </div>
-      </header>
+      <PageHeader title="Bảng điều khiển" subtitle="Theo dõi nội dung, hàng đợi và sức khỏe các tài khoản thật." />
 
       <section className="grid-metrics">
         <StatsCard label="Tổng nội dung" value={stats.data?.totalContents ?? 0} icon={<FileText aria-hidden />} />
@@ -38,8 +35,7 @@ export function DashboardPage() {
       </section>
 
       <section className="split" style={{ marginTop: 18 }}>
-        <div className="panel panel-pad">
-          <h2>Hoạt động gần đây</h2>
+        <SectionCard title="Hoạt động gần đây">
           <table className="table">
             <tbody>
               {(activity.data?.activities ?? []).map((item) => (
@@ -51,9 +47,8 @@ export function DashboardPage() {
               ))}
             </tbody>
           </table>
-        </div>
-        <div className="panel panel-pad">
-          <h2>Sức khỏe nền tảng</h2>
+        </SectionCard>
+        <SectionCard title="Sức khỏe nền tảng">
           <div className="flex flex-col gap-3">
             {(stats.data?.platformHealth ?? []).map((account) => (
               <div key={account.id} className="flex items-center justify-between gap-3">
@@ -65,7 +60,7 @@ export function DashboardPage() {
               </div>
             ))}
           </div>
-        </div>
+        </SectionCard>
       </section>
     </>
   );

@@ -1,8 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Plus, Calendar, Pause, Play, Trash2 } from "lucide-react";
+import { Plus, Calendar, Trash2 } from "lucide-react";
 import { apiDelete, apiGet, apiPost } from "../api/client";
+import { DataTable } from "../components/common/DataTable";
+import { EmptyState } from "../components/common/EmptyState";
+import { PageHeader } from "../components/common/PageHeader";
+import { SectionCard } from "../components/common/SectionCard";
 import { StatusBadge } from "../components/common/StatusBadge";
 import { Button } from "../components/ui/Button";
 import { Dialog } from "../components/ui/Dialog";
@@ -65,87 +69,87 @@ export function FacebookCampaignsPage() {
 
   return (
     <>
-      <header className="page-head">
-        <div>
-          <h1 className="page-title">Facebook Campaigns</h1>
-          <p className="page-subtitle">
-            Quản lý chiến dịch đăng bài Facebook (feed/story/reel). Lên lịch tự động phân bổ theo ngày, timezone Asia/Saigon.
-          </p>
-        </div>
-        <Button onClick={() => setShowDialog(true)} icon={<Plus size={18} />}>
-          Tạo chiến dịch
-        </Button>
-      </header>
+      <PageHeader
+        title="Facebook Campaigns"
+        subtitle="Quản lý chiến dịch đăng bài Facebook (feed/story/reel). Lên lịch tự động phân bổ theo ngày, timezone Asia/Saigon."
+        actions={
+          <Button onClick={() => setShowDialog(true)} icon={<Plus size={18} />}>
+            Tạo chiến dịch
+          </Button>
+        }
+      />
 
-      <div className="panel">
+      <SectionCard padded={false}>
         {isLoading ? (
           <div className="p-8 text-center text-muted">Đang tải...</div>
         ) : rows.length === 0 ? (
-          <div className="p-8 text-center text-muted">
-            <p>Chưa có chiến dịch nào.</p>
-            <Button onClick={() => setShowDialog(true)} variant="secondary" className="mt-4">
-              Tạo chiến dịch đầu tiên
-            </Button>
-          </div>
+          <EmptyState
+            title="Chưa có chiến dịch nào"
+            description="Tạo campaign đầu tiên để bắt đầu phân phối bài đăng Facebook."
+            action={
+              <Button onClick={() => setShowDialog(true)} variant="secondary">
+                Tạo chiến dịch đầu tiên
+              </Button>
+            }
+          />
         ) : (
-          <table className="table">
-            <thead>
-              <tr>
+          <DataTable
+            columns={
+              <>
                 <th>Tên chiến dịch</th>
                 <th>Số bài</th>
                 <th>Bài/ngày</th>
                 <th>Ngày bắt đầu</th>
                 <th>Trạng thái</th>
                 <th style={{ textAlign: "right" }}>Hành động</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((c) => (
-                <tr key={c.id}>
-                  <td>
-                    <Link to={`/facebook/campaigns/${c.id}`} className="font-semibold text-primary hover:underline">
-                      {c.name}
-                    </Link>
-                    {c.description && <div className="text-xs text-muted mt-1">{c.description}</div>}
-                  </td>
-                  <td>{c._count?.posts ?? 0}</td>
-                  <td>{c.postsPerDay}</td>
-                  <td>{new Date(c.startDate).toLocaleDateString("vi-VN")}</td>
-                  <td>
-                    <StatusBadge status={c.status} />
-                  </td>
-                  <td>
-                    <div className="flex items-center justify-end gap-2">
-                      {c.status === "draft" && (
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          icon={<Calendar size={16} />}
-                          disabled={scheduleMutation.isPending}
-                          onClick={() => scheduleMutation.mutate(c.id)}
-                        >
-                          Lên lịch
-                        </Button>
-                      )}
+              </>
+            }
+          >
+            {rows.map((c) => (
+              <tr key={c.id}>
+                <td>
+                  <Link to={`/facebook/campaigns/${c.id}`} className="font-semibold text-primary hover:underline">
+                    {c.name}
+                  </Link>
+                  {c.description && <div className="text-xs text-muted mt-1">{c.description}</div>}
+                </td>
+                <td>{c._count?.posts ?? 0}</td>
+                <td>{c.postsPerDay}</td>
+                <td>{new Date(c.startDate).toLocaleDateString("vi-VN")}</td>
+                <td>
+                  <StatusBadge status={c.status} />
+                </td>
+                <td>
+                  <div className="flex items-center justify-end gap-2">
+                    {c.status === "draft" && (
                       <Button
-                        variant="ghost"
+                        variant="secondary"
                         size="sm"
-                        icon={<Trash2 size={16} />}
-                        disabled={deleteMutation.isPending}
-                        onClick={() => {
-                          if (confirm(`Xoá chiến dịch "${c.name}"?`)) deleteMutation.mutate(c.id);
-                        }}
+                        icon={<Calendar size={16} />}
+                        disabled={scheduleMutation.isPending}
+                        onClick={() => scheduleMutation.mutate(c.id)}
                       >
-                        Xoá
+                        Lên lịch
                       </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={<Trash2 size={16} />}
+                      disabled={deleteMutation.isPending}
+                      onClick={() => {
+                        if (confirm(`Xoá chiến dịch "${c.name}"?`)) deleteMutation.mutate(c.id);
+                      }}
+                    >
+                      Xoá
+                    </Button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </DataTable>
         )}
-      </div>
+      </SectionCard>
 
       <Dialog open={showDialog} onClose={() => setShowDialog(false)} title="Tạo chiến dịch mới">
         <form

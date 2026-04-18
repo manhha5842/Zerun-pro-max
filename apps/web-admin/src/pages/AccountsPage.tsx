@@ -3,8 +3,21 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderLock, Plus, RefreshCw, ShieldCheck, Trash2, ExternalLink } from "lucide-react";
 import { apiDelete, apiGet, apiPost } from "../api/client";
 import { AddAccountDialog } from "../components/accounts/AddAccountDialog";
+import { EmptyState } from "../components/common/EmptyState";
+import { PageHeader } from "../components/common/PageHeader";
+import { SectionCard } from "../components/common/SectionCard";
 import { StatusBadge } from "../components/common/StatusBadge";
 import { Button } from "../components/ui/Button";
+
+type BrowserLoginSession = {
+  sessionId: string;
+  accountId: string;
+  status: "pending" | "completed" | "cancelled" | "failed";
+  sessionDir: string;
+  authPath: string;
+  browserPid?: number;
+  message?: string;
+};
 
 type Account = {
   id: string;
@@ -22,6 +35,7 @@ export function AccountsPage() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [browserLogin, setBrowserLogin] = useState<BrowserLoginSession | null>(null);
 
   const query = useQuery({ queryKey: ["accounts"], queryFn: () => apiGet<{ accounts: Account[] }>("/accounts") });
 
@@ -54,33 +68,64 @@ export function AccountsPage() {
     onError: (error: Error) => setFeedback({ type: "error", message: error.message })
   });
 
+  const startBrowserLogin = useMutation({
+    mutationFn: (account: Account) => apiPost<BrowserLoginSession>(`/facebook/accounts/${account.id}/browser-login/start`),
+    onSuccess: (data) => {
+      setBrowserLogin(data);
+      setFeedback({ type: "success", message: data.message ?? "Đã mở browser đăng nhập Facebook." });
+      void queryClient.invalidateQueries({ queryKey: ["accounts"] });
+    },
+    onError: (error: Error) => setFeedback({ type: "error", message: error.message })
+  });
+
+  const completeBrowserLogin = useMutation({
+    mutationFn: (sessionId: string) => apiPost<BrowserLoginSession>(`/facebook/browser-login/${sessionId}/complete`),
+    onSuccess: (data) => {
+      setBrowserLogin(data);
+      setFeedback({ type: "success", message: data.message ?? "Đã lưu session Facebook." });
+      void queryClient.invalidateQueries({ queryKey: ["accounts"] });
+      void queryClient.invalidateQueries({ queryKey: ["targets"] });
+    },
+    onError: (error: Error) => setFeedback({ type: "error", message: error.message })
+  });
+
+  const cancelBrowserLogin = useMutation({
+    mutationFn: (sessionId: string) => apiPost<BrowserLoginSession>(`/facebook/browser-login/${sessionId}/cancel`),
+    onSuccess: () => {
+      setFeedback({ type: "success", message: "Đã huỷ phiên đăng nhập Facebook." });
+      setBrowserLogin(null);
+    },
+    onError: (error: Error) => setFeedback({ type: "error", message: error.message })
+  });
+
   const targetAccounts = (query.data?.accounts ?? []).filter((account) => account.kind === "target");
+  const facebookAccounts = targetAccounts.filter((account) => account.platform === "facebook");
 
   const stats = useMemo(() => {
     return {
       total: targetAccounts.length,
-      facebookTargets: targetAccounts.filter((account) => account.platform === "facebook").length,
+      facebookTargets: facebookAccounts.length,
       healthy: targetAccounts.filter((account) => account.health === "healthy").length,
       active: targetAccounts.filter((account) => account.isActive).length
     };
-  }, [targetAccounts]);
+  }, [facebookAccounts.length, targetAccounts]);
 
   return (
     <>
-      <header className="page-head">
-        <div>
-          <h1 className="page-title">Tài khoản đăng bài</h1>
-          <p className="page-subtitle">Trang này chỉ quản lý tài khoản dùng để publish. Tài khoản nguồn crawl đã được tách sang mục Crawl data.</p>
-        </div>
-        <div className="actions">
-          <Button variant="secondary" icon={<RefreshCw aria-hidden />} onClick={() => query.refetch()} disabled={query.isFetching}>
-            {query.isFetching ? "Đang tải..." : "Làm mới"}
-          </Button>
-          <Button icon={<Plus aria-hidden />} onClick={() => setDialogOpen(true)}>
-            Thêm tài khoản
-          </Button>
-        </div>
-      </header>
+      <PageHeader
+        title="Tài khoản đăng bài"
+        subtitle="Trang này chỉ quản lý tài khoản dùng để publish. Tài khoản nguồn crawl đã được tách sang mục Crawl data."
+        actions={
+          <>
+            <Button variant="secondary" icon={<RefreshCw aria-hidden />} onClick={() => query.refetch()} disabled={query.isFetching}>
+              {query.isFetching ? "Đang tải..." : "Làm mới"}
+            </Button>
+            <Button icon={<Plus aria-hidden />} onClick={() => setDialogOpen(true)}>
+              Thêm tài khoản
+            </Button>
+          </>
+        }
+      />
 
       <section className="grid-metrics" style={{ marginBottom: 18 }}>
         <div className="panel metric">
@@ -101,26 +146,49 @@ export function AccountsPage() {
         </div>
       </section>
 
-      <div className="panel panel-pad" style={{ marginBottom: 18 }}>
+      <SectionCard
+        title="Facebook login/session"
+        description="Mở Chromium thật để đăng nhập thủ công rồi lưu session trực tiếp vào account."
+        className="mb-4"
+      >
         <div className="account-form-header">
           <div>
-            <h2 style={{ marginTop: 0 }}>Facebook login/session</h2>
-            <p className="muted-copy">Hiện tại backend mới hỗ trợ nhập session có sẵn qua <strong>authPath</strong> hoặc <strong>sessionDir</strong>. Chưa có flow mở browser để login trực tiếp từ UI.</p>
+            <p className="muted-copy">
+              Chọn một tài khoản Facebook bên dưới rồi bấm “Mở trình duyệt đăng nhập”. Sau khi login xong, quay lại đây bấm “Hoàn tất lưu session”.
+            </p>
+            {browserLogin ? (
+              <div className="feature-inline-actions" style={{ marginTop: 12 }}>
+                <code className="code-inline">{browserLogin.sessionDir}</code>
+                <Button
+                  variant="secondary"
+                  icon={<ShieldCheck aria-hidden />}
+                  onClick={() => completeBrowserLogin.mutate(browserLogin.sessionId)}
+                  disabled={completeBrowserLogin.isPending || cancelBrowserLogin.isPending}
+                >
+                  {completeBrowserLogin.isPending ? "Đang lưu..." : "Hoàn tất lưu session"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => cancelBrowserLogin.mutate(browserLogin.sessionId)}
+                  disabled={completeBrowserLogin.isPending || cancelBrowserLogin.isPending}
+                >
+                  Huỷ phiên login
+                </Button>
+              </div>
+            ) : (
+              <div className="feature-inline-actions" style={{ marginTop: 12 }}>
+                <span className="table-subtle">Chưa có phiên login nào đang mở.</span>
+              </div>
+            )}
           </div>
           <FolderLock aria-hidden size={18} />
         </div>
-        <div className="feature-inline-actions" style={{ marginTop: 12 }}>
-          <Button variant="secondary" disabled icon={<ExternalLink aria-hidden />}>
-            Mở trình duyệt đăng nhập
-          </Button>
-          <span className="table-subtle">Planned. Khi backend có route tạo Playwright session, nút này sẽ mở flow login thật.</span>
-        </div>
-      </div>
+      </SectionCard>
 
       {feedback ? <div className={`banner ${feedback.type}`}>{feedback.message}</div> : null}
       {query.error instanceof Error ? <div className="banner error">{query.error.message}</div> : null}
 
-      <div className="panel">
+      <SectionCard padded={false}>
         <table className="table">
           <thead>
             <tr>
@@ -151,6 +219,16 @@ export function AccountsPage() {
                   </td>
                   <td>
                     <div className="actions">
+                      {account.platform === "facebook" ? (
+                        <Button
+                          variant="secondary"
+                          icon={<ExternalLink aria-hidden />}
+                          onClick={() => startBrowserLogin.mutate(account)}
+                          disabled={startBrowserLogin.isPending || completeBrowserLogin.isPending || cancelBrowserLogin.isPending}
+                        >
+                          {startBrowserLogin.isPending ? "Đang mở..." : "Mở trình duyệt đăng nhập"}
+                        </Button>
+                      ) : null}
                       <Button variant="secondary" icon={<ShieldCheck aria-hidden />} onClick={() => test.mutate(account)} disabled={test.isPending || remove.isPending}>
                         {test.isPending ? "Đang test..." : "Test"}
                       </Button>
@@ -174,15 +252,13 @@ export function AccountsPage() {
             {query.data && targetAccounts.length === 0 ? (
               <tr>
                 <td colSpan={6}>
-                  <div className="empty-state">
-                    <p>Chưa có tài khoản đăng nào. Hãy dùng nút “Thêm tài khoản”.</p>
-                  </div>
+                  <EmptyState title="Chưa có tài khoản đăng nào" description="Hãy dùng nút “Thêm tài khoản” để tạo tài khoản publish đầu tiên." />
                 </td>
               </tr>
             ) : null}
           </tbody>
         </table>
-      </div>
+      </SectionCard>
 
       <AddAccountDialog
         open={dialogOpen}

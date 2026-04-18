@@ -1,5 +1,5 @@
 import path from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import fastifyStatic from "@fastify/static";
@@ -11,12 +11,26 @@ import fastifyWebsocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { compare, hash } from "bcryptjs";
 import { detectLinks } from "@zerun/core";
+import type { BrowserContext } from "playwright";
 import { prisma } from "@zerun/db";
 import { buildPagination, fail, ok, realtimeBus, type Platform } from "@zerun/shared";
 import { createWorkerCore, type WorkerCore } from "@zerun/worker-core";
 import { config } from "./config.js";
 
 type AnyBody = Record<string, any>;
+
+type FacebookLoginSession = {
+  id: string;
+  accountId: string;
+  sessionDir: string;
+  authPath: string;
+  status: "pending" | "completed" | "cancelled" | "failed";
+  createdAt: number;
+  browserContext?: BrowserContext;
+  browserPid?: number;
+};
+
+const facebookLoginSessions = new Map<string, FacebookLoginSession>();
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -184,6 +198,7 @@ async function registerProtectedRoutes(app: FastifyInstance) {
   registerAccountRoutes(app);
   registerAiRoutes(app);
   registerImportRoutes(app);
+  registerFacebookBrowserLoginRoutes(app);
   registerFacebookRoutes(app);
 }
 
@@ -462,6 +477,158 @@ function registerImportRoutes(app: FastifyInstance) {
 }
 
 // ── Facebook Campaign Routes ───────────────────────────────────────────────────
+
+function registerFacebookBrowserLoginRoutes(app: FastifyInstance) {
+  app.post("/facebook/accounts/:id/browser-login/start", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const account = await prisma.targetAccount.findUnique({ where: { id } });
+    if (!account || account.platform !== "facebook") {
+      return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy tài khoản Facebook."));
+    }
+
+    const existing = Array.from(facebookLoginSessions.values()).find((session) => session.accountId === id && session.status === "pending");
+    if (existing) {
+      return ok({
+        sessionId: existing.id,
+        status: existing.status,
+        sessionDir: existing.sessionDir,
+        authPath: existing.authPath,
+        message: "Đã có phiên đăng nhập Facebook đang mở cho tài khoản này."
+      });
+    }
+
+    const sessionId = randomUUID();
+    const safeSlug = account.name
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || account.id;
+    const sessionDir = path.resolve(config.FACEBOOK_SESSION_ROOT, `${safeSlug}-${account.id}`);
+    const authPath = path.join(sessionDir, "auth.json");
+    mkdirSync(sessionDir, { recursive: true });
+
+    try {
+      const { chromium } = await import("playwright");
+      const context = await chromium.launchPersistentContext(sessionDir, {
+        headless: false,
+        args: ["--no-sandbox"],
+        viewport: { width: 1366, height: 900 }
+      });
+      const page = context.pages()[0] ?? (await context.newPage());
+      await page.goto("https://www.facebook.com/", { waitUntil: "domcontentloaded", timeout: 60_000 });
+
+      const session: FacebookLoginSession = {
+        id: sessionId,
+        accountId: id,
+        sessionDir,
+        authPath,
+        status: "pending",
+        createdAt: Date.now(),
+        browserContext: context,
+        browserPid: undefined
+      };
+      facebookLoginSessions.set(sessionId, session);
+
+      context.on("close", () => {
+        const current = facebookLoginSessions.get(sessionId);
+        if (current && current.status === "pending") {
+          current.status = "cancelled";
+          current.browserContext = undefined;
+          facebookLoginSessions.set(sessionId, current);
+        }
+      });
+
+      return ok({
+        sessionId,
+        status: session.status,
+        sessionDir,
+        authPath,
+        browserPid: session.browserPid,
+        message: "Đã mở trình duyệt. Hãy đăng nhập Facebook thủ công rồi bấm Hoàn tất trong UI."
+      });
+    } catch (error) {
+      rmSync(sessionDir, { recursive: true, force: true });
+      const message = error instanceof Error ? error.message : String(error);
+      return reply.code(500).send(fail("FACEBOOK_BROWSER_LOGIN_START_FAILED", message));
+    }
+  });
+
+  app.get("/facebook/browser-login/:sessionId", async (request, reply) => {
+    const { sessionId } = request.params as { sessionId: string };
+    const session = facebookLoginSessions.get(sessionId);
+    if (!session) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy phiên đăng nhập Facebook."));
+    return ok({
+      sessionId: session.id,
+      accountId: session.accountId,
+      status: session.status,
+      sessionDir: session.sessionDir,
+      authPath: session.authPath,
+      browserPid: session.browserPid,
+      createdAt: new Date(session.createdAt).toISOString()
+    });
+  });
+
+  app.post("/facebook/browser-login/:sessionId/complete", async (request, reply) => {
+    const { sessionId } = request.params as { sessionId: string };
+    const session = facebookLoginSessions.get(sessionId);
+    if (!session) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy phiên đăng nhập Facebook."));
+    if (!session.browserContext) return reply.code(400).send(fail("SESSION_CLOSED", "Trình duyệt đăng nhập đã đóng trước khi hoàn tất."));
+
+    try {
+      const cookies = await session.browserContext.cookies();
+      const cookieNames = new Set(cookies.map((cookie) => cookie.name));
+      const hasAuth = cookieNames.has("c_user") && cookieNames.has("xs");
+      if (!hasAuth) {
+        return reply.code(400).send(fail("FACEBOOK_NOT_AUTHENTICATED", "Chưa phát hiện session đăng nhập Facebook hợp lệ (thiếu c_user/xs)."));
+      }
+
+      await session.browserContext.storageState({ path: session.authPath });
+      await prisma.targetAccount.update({
+        where: { id: session.accountId },
+        data: {
+          credentials: {
+            ...((await prisma.targetAccount.findUnique({ where: { id: session.accountId } }))?.credentials as Record<string, unknown> ?? {}),
+            authPath: session.authPath,
+            sessionDir: session.sessionDir
+          }
+        }
+      });
+      await session.browserContext.close();
+      session.status = "completed";
+      session.browserContext = undefined;
+      facebookLoginSessions.set(sessionId, session);
+
+      return ok({
+        sessionId: session.id,
+        status: session.status,
+        accountId: session.accountId,
+        authPath: session.authPath,
+        sessionDir: session.sessionDir,
+        message: "Đã lưu session Facebook vào tài khoản."
+      });
+    } catch (error) {
+      session.status = "failed";
+      facebookLoginSessions.set(sessionId, session);
+      const message = error instanceof Error ? error.message : String(error);
+      return reply.code(500).send(fail("FACEBOOK_BROWSER_LOGIN_COMPLETE_FAILED", message));
+    }
+  });
+
+  app.post("/facebook/browser-login/:sessionId/cancel", async (request, reply) => {
+    const { sessionId } = request.params as { sessionId: string };
+    const session = facebookLoginSessions.get(sessionId);
+    if (!session) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy phiên đăng nhập Facebook."));
+
+    if (session.browserContext) {
+      await session.browserContext.close().catch(() => undefined);
+    }
+    session.status = "cancelled";
+    session.browserContext = undefined;
+    facebookLoginSessions.set(sessionId, session);
+    return ok({ sessionId: session.id, status: session.status });
+  });
+}
 
 function registerFacebookRoutes(app: FastifyInstance) {
   // ── Campaigns ────────────────────────────────────────────────────────────────
