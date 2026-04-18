@@ -28,6 +28,12 @@ type FacebookLoginSession = {
   createdAt: number;
   browserContext?: BrowserContext;
   browserPid?: number;
+  authDetected?: boolean;
+  authState?: "unknown" | "authenticated" | "login_required" | "checkpoint";
+  currentUrl?: string;
+  cookieNames?: string[];
+  lastCheckedAt?: number;
+  lastError?: string;
 };
 
 const facebookLoginSessions = new Map<string, FacebookLoginSession>();
@@ -478,6 +484,113 @@ function registerImportRoutes(app: FastifyInstance) {
 
 // ── Facebook Campaign Routes ───────────────────────────────────────────────────
 
+async function inspectFacebookBrowserLoginSession(session: FacebookLoginSession) {
+  const context = session.browserContext;
+  if (!context) {
+    return {
+      authDetected: false,
+      authState: session.status === "completed" ? "authenticated" : "unknown",
+      currentUrl: session.currentUrl,
+      cookieNames: session.cookieNames ?? [],
+      lastCheckedAt: Date.now(),
+      browserOpen: false,
+      lastError: session.lastError
+    } as const;
+  }
+
+  try {
+    const page = context.pages()[0] ?? null;
+    const cookies = await context.cookies();
+    const cookieNames = cookies.map((cookie) => cookie.name).sort();
+    const cookieSet = new Set(cookieNames);
+    const hasAuthCookies = cookieSet.has("c_user") && cookieSet.has("xs");
+
+    let currentUrl = page?.url() ?? session.currentUrl;
+    let authState: FacebookLoginSession["authState"] = hasAuthCookies ? "authenticated" : "unknown";
+
+    if (page) {
+      currentUrl = page.url();
+      const pageState = await page.evaluate(() => {
+        const bodyText = document.body?.innerText?.toLowerCase() || "";
+        const hasCredentialInputs = !!document.querySelector('input[name="email"], input[name="pass"]');
+        const authPhrases = [
+          "see more on facebook",
+          "log in to facebook",
+          "email address or phone number",
+          "email address or mobile number",
+          "create new account"
+        ];
+        const checkpointPhrases = [
+          "checkpoint",
+          "review recent login",
+          "secure your account",
+          "suspended",
+          "confirm your identity",
+          "two-factor",
+          "two factor"
+        ];
+        return {
+          hasCredentialInputs,
+          hasAuthWall: hasCredentialInputs || authPhrases.some((phrase) => bodyText.includes(phrase)),
+          hasCheckpoint: checkpointPhrases.some((phrase) => bodyText.includes(phrase))
+        };
+      });
+
+      if (pageState.hasCheckpoint) authState = "checkpoint";
+      else if (!hasAuthCookies || pageState.hasAuthWall) authState = "login_required";
+      else authState = "authenticated";
+    }
+
+    return {
+      authDetected: authState === "authenticated",
+      authState,
+      currentUrl,
+      cookieNames,
+      lastCheckedAt: Date.now(),
+      browserOpen: true,
+      lastError: undefined
+    } as const;
+  } catch (error) {
+    return {
+      authDetected: false,
+      authState: "unknown",
+      currentUrl: session.currentUrl,
+      cookieNames: session.cookieNames ?? [],
+      lastCheckedAt: Date.now(),
+      browserOpen: true,
+      lastError: error instanceof Error ? error.message : String(error)
+    } as const;
+  }
+}
+
+async function buildFacebookBrowserLoginPayload(session: FacebookLoginSession) {
+  const runtime = await inspectFacebookBrowserLoginSession(session);
+  session.authDetected = runtime.authDetected;
+  session.authState = runtime.authState;
+  session.currentUrl = runtime.currentUrl;
+  session.cookieNames = runtime.cookieNames;
+  session.lastCheckedAt = runtime.lastCheckedAt;
+  session.lastError = runtime.lastError;
+  facebookLoginSessions.set(session.id, session);
+
+  return {
+    sessionId: session.id,
+    accountId: session.accountId,
+    status: session.status,
+    sessionDir: session.sessionDir,
+    authPath: session.authPath,
+    browserPid: session.browserPid,
+    authDetected: session.authDetected ?? false,
+    authState: session.authState ?? "unknown",
+    currentUrl: session.currentUrl,
+    cookieNames: session.cookieNames ?? [],
+    browserOpen: runtime.browserOpen,
+    lastCheckedAt: session.lastCheckedAt ? new Date(session.lastCheckedAt).toISOString() : undefined,
+    createdAt: new Date(session.createdAt).toISOString(),
+    lastError: session.lastError
+  };
+}
+
 function registerFacebookBrowserLoginRoutes(app: FastifyInstance) {
   app.post("/facebook/accounts/:id/browser-login/start", async (request, reply) => {
     const { id } = request.params as { id: string };
@@ -540,11 +653,7 @@ function registerFacebookBrowserLoginRoutes(app: FastifyInstance) {
       });
 
       return ok({
-        sessionId,
-        status: session.status,
-        sessionDir,
-        authPath,
-        browserPid: session.browserPid,
+        ...(await buildFacebookBrowserLoginPayload(session)),
         message: "Đã mở trình duyệt. Hãy đăng nhập Facebook thủ công rồi bấm Hoàn tất trong UI."
       });
     } catch (error) {
@@ -558,15 +667,7 @@ function registerFacebookBrowserLoginRoutes(app: FastifyInstance) {
     const { sessionId } = request.params as { sessionId: string };
     const session = facebookLoginSessions.get(sessionId);
     if (!session) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy phiên đăng nhập Facebook."));
-    return ok({
-      sessionId: session.id,
-      accountId: session.accountId,
-      status: session.status,
-      sessionDir: session.sessionDir,
-      authPath: session.authPath,
-      browserPid: session.browserPid,
-      createdAt: new Date(session.createdAt).toISOString()
-    });
+    return ok(await buildFacebookBrowserLoginPayload(session));
   });
 
   app.post("/facebook/browser-login/:sessionId/complete", async (request, reply) => {
@@ -576,11 +677,19 @@ function registerFacebookBrowserLoginRoutes(app: FastifyInstance) {
     if (!session.browserContext) return reply.code(400).send(fail("SESSION_CLOSED", "Trình duyệt đăng nhập đã đóng trước khi hoàn tất."));
 
     try {
-      const cookies = await session.browserContext.cookies();
-      const cookieNames = new Set(cookies.map((cookie) => cookie.name));
-      const hasAuth = cookieNames.has("c_user") && cookieNames.has("xs");
-      if (!hasAuth) {
-        return reply.code(400).send(fail("FACEBOOK_NOT_AUTHENTICATED", "Chưa phát hiện session đăng nhập Facebook hợp lệ (thiếu c_user/xs)."));
+      const runtime = await inspectFacebookBrowserLoginSession(session);
+      session.authDetected = runtime.authDetected;
+      session.authState = runtime.authState;
+      session.currentUrl = runtime.currentUrl;
+      session.cookieNames = runtime.cookieNames;
+      session.lastCheckedAt = runtime.lastCheckedAt;
+      session.lastError = runtime.lastError;
+      facebookLoginSessions.set(sessionId, session);
+
+      if (!runtime.authDetected) {
+        return reply.code(400).send(fail("FACEBOOK_NOT_AUTHENTICATED", runtime.authState === "checkpoint"
+          ? "Facebook đang ở trạng thái checkpoint/xác minh. Hãy xử lý trong browser trước."
+          : "Chưa phát hiện session đăng nhập Facebook hợp lệ."));
       }
 
       await session.browserContext.storageState({ path: session.authPath });
@@ -600,11 +709,7 @@ function registerFacebookBrowserLoginRoutes(app: FastifyInstance) {
       facebookLoginSessions.set(sessionId, session);
 
       return ok({
-        sessionId: session.id,
-        status: session.status,
-        accountId: session.accountId,
-        authPath: session.authPath,
-        sessionDir: session.sessionDir,
+        ...(await buildFacebookBrowserLoginPayload(session)),
         message: "Đã lưu session Facebook vào tài khoản."
       });
     } catch (error) {
@@ -626,7 +731,7 @@ function registerFacebookBrowserLoginRoutes(app: FastifyInstance) {
     session.status = "cancelled";
     session.browserContext = undefined;
     facebookLoginSessions.set(sessionId, session);
-    return ok({ sessionId: session.id, status: session.status });
+    return ok(await buildFacebookBrowserLoginPayload(session));
   });
 }
 
