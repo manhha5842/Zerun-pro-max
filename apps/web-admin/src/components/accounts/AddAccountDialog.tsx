@@ -30,25 +30,27 @@ type Props = {
   onClose: () => void;
   sourceMutation: UseMutationResult<any, Error, any, unknown>;
   targetMutation: UseMutationResult<any, Error, any, unknown>;
+  targetOnly?: boolean;
 };
 
-export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation }: Props) {
-  const [step, setStep] = useState(1);
+export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation, targetOnly = false }: Props) {
+  const [step, setStep] = useState(targetOnly ? 2 : 1);
   const [draft, setDraft] = useState<AccountDraft>(() => createEmptyDraft("target", "facebook"));
   const [errors, setErrors] = useState<FormErrors>({});
   const [successMessage, setSuccessMessage] = useState("");
 
   const activeMutation = draft.kind === "source" ? sourceMutation : targetMutation;
-  const isSubmitting = sourceMutation.isPending || targetMutation.isPending;
+  const isSubmitting = sourceMutation?.isPending || targetMutation?.isPending;
+  const kindChoices = targetOnly ? ACCOUNT_KIND_OPTIONS.filter((option) => option.value === "target") : ACCOUNT_KIND_OPTIONS;
 
   const stepTitle = useMemo(() => {
-    if (step === 1) return "Bước 1 • Chọn loại tài khoản";
-    if (step === 2) return "Bước 2 • Chọn nền tảng";
+    if (!targetOnly && step === 1) return "Bước 1 • Chọn loại tài khoản";
+    if ((targetOnly && step === 2) || (!targetOnly && step === 2)) return "Bước 2 • Chọn nền tảng";
     return "Bước 3 • Nhập thông tin chi tiết";
-  }, [step]);
+  }, [step, targetOnly]);
 
   function resetWizard(kind: AccountKind = "target", platform: AccountPlatform = "facebook") {
-    setStep(1);
+    setStep(targetOnly ? 2 : 1);
     setDraft(createEmptyDraft(kind, platform));
     setErrors({});
     setSuccessMessage("");
@@ -74,7 +76,7 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
       setSuccessMessage(`Đã tạo tài khoản ${draft.kind === "source" ? "nguồn" : "đích"} cho ${draft.platform}.`);
       setErrors({});
       setDraft(createEmptyDraft(draft.kind, draft.platform));
-      setStep(1);
+      setStep(targetOnly ? 2 : 1);
     } catch {
       // handled by mutation.error
     }
@@ -89,22 +91,30 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
   }
 
   return (
-    <Dialog open={open} onClose={closeDialog} title="Thêm tài khoản mới">
+    <Dialog open={open} onClose={closeDialog} title={targetOnly ? "Thêm tài khoản đăng" : "Thêm tài khoản mới"}>
       <div className="wizard-shell">
         <div className="wizard-steps">
-          {[1, 2, 3].map((stepIndex) => (
-            <div key={stepIndex} className={`wizard-step ${stepIndex <= step ? "active" : ""}`}>
-              <span>{stepIndex}</span>
-              <strong>{stepIndex === 1 ? "Loại" : stepIndex === 2 ? "Nền tảng" : "Chi tiết"}</strong>
+          {!targetOnly ? (
+            <div className={`wizard-step ${1 <= step ? "active" : ""}`}>
+              <span>1</span>
+              <strong>Loại</strong>
             </div>
-          ))}
+          ) : null}
+          <div className={`wizard-step ${(targetOnly ? 2 : 2) <= step ? "active" : ""}`}>
+            <span>{targetOnly ? 1 : 2}</span>
+            <strong>Nền tảng</strong>
+          </div>
+          <div className={`wizard-step ${3 <= step ? "active" : ""}`}>
+            <span>{targetOnly ? 2 : 3}</span>
+            <strong>Chi tiết</strong>
+          </div>
         </div>
 
         <div className="panel panel-pad wizard-body">
           <div className="wizard-headline">
             <div>
               <h3>{stepTitle}</h3>
-              <p className="muted-copy">Flow tập trung để thêm account nguồn/đích mà không cần đi qua nhiều trang riêng lẻ.</p>
+              <p className="muted-copy">Flow tập trung để thêm account nhanh theo style nhiều bước.</p>
             </div>
             <Layers3 aria-hidden size={18} />
           </div>
@@ -116,11 +126,11 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
             </div>
           ) : null}
 
-          {activeMutation.error?.message ? <FormError message={activeMutation.error.message} /> : null}
+          {activeMutation?.error?.message ? <FormError message={activeMutation.error.message} /> : null}
 
-          {step === 1 ? (
+          {!targetOnly && step === 1 ? (
             <div className="choice-grid">
-              {ACCOUNT_KIND_OPTIONS.map((option) => (
+              {kindChoices.map((option) => (
                 <button
                   key={option.value}
                   type="button"
@@ -148,7 +158,7 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
                   type="button"
                   className={`choice-card ${draft.platform === option.value ? "active" : ""}`}
                   onClick={() => {
-                    setDraft((current) => ({ ...current, platform: option.value }));
+                    setDraft((current) => ({ ...current, kind: "target", platform: option.value }));
                     setStep(3);
                   }}
                 >
@@ -167,7 +177,7 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
               <InlineNote>
                 <Plus aria-hidden size={14} />
                 <span>
-                  Đang tạo <strong>{draft.kind === "source" ? "tài khoản nguồn" : "tài khoản đích"}</strong> cho nền tảng <strong>{draft.platform}</strong>.
+                  Đang tạo <strong>{draft.kind === "source" ? "tài khoản nguồn" : "tài khoản đăng"}</strong> cho nền tảng <strong>{draft.platform}</strong>.
                 </span>
               </InlineNote>
 
@@ -203,15 +213,11 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
         </div>
 
         <div className="actions wizard-actions">
-          <Button type="button" variant="ghost" onClick={() => (step === 1 ? closeDialog() : setStep((current) => Math.max(1, current - 1)))} disabled={isSubmitting}>
-            {step === 1 ? "Đóng" : "Quay lại"}
+          <Button type="button" variant="ghost" onClick={() => (step <= (targetOnly ? 2 : 1) ? closeDialog() : setStep((current) => Math.max(targetOnly ? 2 : 1, current - 1)))} disabled={isSubmitting}>
+            {step <= (targetOnly ? 2 : 1) ? "Đóng" : "Quay lại"}
           </Button>
           {step < 3 ? (
-            <Button
-              type="button"
-              onClick={() => setStep((current) => Math.min(3, current + 1))}
-              disabled={(step === 1 && !draft.kind) || (step === 2 && !draft.platform)}
-            >
+            <Button type="button" onClick={() => setStep((current) => Math.min(3, current + 1))}>
               Tiếp tục
             </Button>
           ) : (
