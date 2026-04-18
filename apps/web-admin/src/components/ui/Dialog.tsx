@@ -19,11 +19,11 @@ export function Dialog({ open, onClose, title, children }: { open: boolean; onCl
   return (
     <dialog
       ref={dialogRef}
-      className="rounded-lg border border-line bg-panel p-0 shadow-soft backdrop:bg-black/50"
+      className="rounded-lg border border-line bg-panel p-0 text-foreground shadow-soft backdrop:bg-black/50"
       onClose={onClose}
       style={{ maxWidth: "90vw", width: "600px" }}
     >
-      <div className="flex items-center justify-between border-b border-line p-4">
+      <div className="flex items-center justify-between border-b border-line px-4 py-4">
         <h2 className="text-xl font-bold">{title}</h2>
         <Button variant="ghost" onClick={onClose} className="h-8 w-8 p-0">
           <X size={18} />
