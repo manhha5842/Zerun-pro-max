@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderLock, Plus, RefreshCw, ShieldCheck, Trash2, ExternalLink, CheckCircle2, AlertTriangle, Clock3 } from "lucide-react";
 import { apiDelete, apiGet, apiPost } from "../api/client";
@@ -68,6 +68,7 @@ function getAuthLabel(state: BrowserLoginSession["authState"]) {
 
 export function AccountsPage() {
   const queryClient = useQueryClient();
+  const autoSavedSessionRef = useRef<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [browserLogin, setBrowserLogin] = useState<BrowserLoginSession | null>(null);
@@ -149,6 +150,17 @@ export function AccountsPage() {
     onError: (error: Error) => setFeedback({ type: "error", message: error.message })
   });
 
+  useEffect(() => {
+    if (!activeBrowserLogin) return;
+    if (activeBrowserLogin.status !== "pending") return;
+    if (!activeBrowserLogin.authDetected) return;
+    if (completeBrowserLogin.isPending) return;
+    if (autoSavedSessionRef.current === activeBrowserLogin.sessionId) return;
+
+    autoSavedSessionRef.current = activeBrowserLogin.sessionId;
+    completeBrowserLogin.mutate(activeBrowserLogin.sessionId);
+  }, [activeBrowserLogin, completeBrowserLogin]);
+
   const targetAccounts = (query.data?.accounts ?? []).filter((account) => account.kind === "target");
   const facebookAccounts = targetAccounts.filter((account) => account.platform === "facebook");
 
@@ -214,6 +226,7 @@ export function AccountsPage() {
                     {activeBrowserLogin.status}
                   </Badge>
                   <Badge tone={getAuthTone(activeBrowserLogin.authState)}>{getAuthLabel(activeBrowserLogin.authState)}</Badge>
+                  {activeBrowserLogin.status === "pending" && activeBrowserLogin.authDetected ? <Badge tone="good">Tự động lưu khi sẵn sàng</Badge> : null}
                   {activeBrowserLogin.browserOpen ? (
                     <span className="table-subtle" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                       <Clock3 size={14} aria-hidden /> Browser đang mở
@@ -287,11 +300,20 @@ export function AccountsPage() {
           <tbody>
             {targetAccounts.map((account) => {
               const sessionHint = (account.credentials?.sessionDir as string) || (account.credentials?.authPath as string) || "Chưa cấu hình";
+              const isCurrentBrowserLogin = activeBrowserLogin?.accountId === account.id;
               return (
                 <tr key={`${account.kind}-${account.id}`}>
                   <td>
                     <strong>{account.name}</strong>
                     <div className="table-subtle">{account.isActive ? "Đang bật" : "Đang tắt"}</div>
+                    {isCurrentBrowserLogin ? (
+                      <div className="feature-inline-actions" style={{ marginTop: 8 }}>
+                        <Badge tone={activeBrowserLogin.status === "completed" ? "good" : activeBrowserLogin.status === "failed" ? "danger" : activeBrowserLogin.status === "cancelled" ? "warn" : "neutral"}>
+                          Session: {activeBrowserLogin.status}
+                        </Badge>
+                        <Badge tone={getAuthTone(activeBrowserLogin.authState)}>{getAuthLabel(activeBrowserLogin.authState)}</Badge>
+                      </div>
+                    ) : null}
                   </td>
                   <td>{account.platform}</td>
                   <td>{account.handle || <span className="table-subtle">Chưa có</span>}</td>
