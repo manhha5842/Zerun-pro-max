@@ -9,6 +9,7 @@ import fastifyJwt from "@fastify/jwt";
 import fastifyMultipart from "@fastify/multipart";
 import fastifyWebsocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import { Prisma } from "@prisma/client";
 import { compare, hash } from "bcryptjs";
 import { detectLinks } from "@zerun/core";
 import type { BrowserContext } from "playwright";
@@ -37,6 +38,43 @@ type FacebookLoginSession = {
 };
 
 const facebookLoginSessions = new Map<string, FacebookLoginSession>();
+
+async function persistFacebookAccountSessionState(accountId: string, payload: Record<string, unknown>) {
+  return prisma.platformSession.upsert({
+    where: {
+      platform_accountKind_accountId: {
+        platform: "facebook",
+        accountKind: "target",
+        accountId
+      }
+    },
+    create: {
+      platform: "facebook",
+      accountKind: "target",
+      accountId,
+      status: String(payload.status ?? "unknown"),
+      cookiePath: typeof payload.authPath === "string" ? payload.authPath : undefined,
+      data: payload as Prisma.InputJsonValue
+    },
+    update: {
+      status: String(payload.status ?? "unknown"),
+      cookiePath: typeof payload.authPath === "string" ? payload.authPath : undefined,
+      data: payload as Prisma.InputJsonValue
+    }
+  });
+}
+
+async function getPersistedFacebookAccountSessionState(accountId: string) {
+  return prisma.platformSession.findUnique({
+    where: {
+      platform_accountKind_accountId: {
+        platform: "facebook",
+        accountKind: "target",
+        accountId
+      }
+    }
+  });
+}
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -411,10 +449,76 @@ async function createSchedule(request: FastifyRequest, app: FastifyInstance) {
   return ok({ schedules });
 }
 
+async function inspectPersistedFacebookAccountHealth(app: FastifyInstance, account: AnyBody) {
+  const credentials = (account.credentials ?? {}) as Record<string, unknown>;
+  const authPath = typeof credentials.authPath === "string" ? credentials.authPath : path.resolve(config.FACEBOOK_SESSION_ROOT, `${account.id}`, "auth.json");
+  const sessionDir = typeof credentials.sessionDir === "string" ? credentials.sessionDir : undefined;
+  const hasSessionFile = existsSync(authPath);
+
+  if (!hasSessionFile) {
+    return {
+      status: "missing",
+      authState: "login_required",
+      authPath,
+      sessionDir,
+      hasSessionFile: false,
+      checkedAt: new Date().toISOString(),
+      message: "Chưa có file session Facebook."
+    };
+  }
+
+  const adapterAccount = {
+    id: String(account.id),
+    platform: "facebook" as const,
+    name: String(account.name),
+    handle: account.handle ? String(account.handle) : null,
+    credentials,
+    config: (account.config ?? {}) as Record<string, unknown>
+  };
+
+  try {
+    const health = await app.workerCore.registry.getPublish("facebook").testConnection(adapterAccount);
+    return {
+      status: health.status,
+      authState: health.status === "healthy" ? "authenticated" : health.status === "checkpoint" ? "checkpoint" : "login_required",
+      authPath,
+      sessionDir,
+      hasSessionFile: true,
+      checkedAt: new Date().toISOString(),
+      message: health.message,
+      metadata: health.metadata ?? null
+    };
+  } catch (error) {
+    return {
+      status: "failed",
+      authState: "unknown",
+      authPath,
+      sessionDir,
+      hasSessionFile: true,
+      checkedAt: new Date().toISOString(),
+      message: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
 function registerAccountRoutes(app: FastifyInstance) {
   app.get("/accounts", async () => {
-    const [sources, targets] = await Promise.all([prisma.sourceAccount.findMany(), prisma.targetAccount.findMany()]);
-    return ok({ accounts: [...sources.map((account) => ({ ...account, kind: "source" })), ...targets.map((account) => ({ ...account, kind: "target" }))] });
+    const [sources, targets, persistedSessions] = await Promise.all([
+      prisma.sourceAccount.findMany(),
+      prisma.targetAccount.findMany(),
+      prisma.platformSession.findMany({ where: { platform: "facebook", accountKind: "target" } })
+    ]);
+    const persistedByAccountId = new Map(persistedSessions.map((session) => [session.accountId, session]));
+    return ok({
+      accounts: [
+        ...sources.map((account) => ({ ...account, kind: "source" })),
+        ...targets.map((account) => ({
+          ...account,
+          kind: "target",
+          sessionState: account.platform === "facebook" ? persistedByAccountId.get(account.id)?.data ?? null : null
+        }))
+      ]
+    });
   });
   app.put("/accounts/:id", async (request) => {
     const { id } = request.params as { id: string };
@@ -430,6 +534,48 @@ function registerAccountRoutes(app: FastifyInstance) {
     const body = request.body as AnyBody;
     await app.workerCore.testAccount(id, body.kind === "source" ? "source" : "target");
     return ok({ queued: true });
+  });
+  app.get("/accounts/:id/facebook-session", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const account = await prisma.targetAccount.findUnique({ where: { id } });
+    if (!account || account.platform !== "facebook") {
+      return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy tài khoản Facebook."));
+    }
+
+    const activeSession = Array.from(facebookLoginSessions.values()).find((session) => session.accountId === id);
+    if (activeSession) {
+      return ok({ session: await buildFacebookBrowserLoginPayload(activeSession) });
+    }
+
+    const persisted = await getPersistedFacebookAccountSessionState(id);
+    const health = await inspectPersistedFacebookAccountHealth(app, account);
+    return ok({
+      session: persisted?.data ?? null,
+      health
+    });
+  });
+  app.post("/accounts/:id/facebook-session/check", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const account = await prisma.targetAccount.findUnique({ where: { id } });
+    if (!account || account.platform !== "facebook") {
+      return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy tài khoản Facebook."));
+    }
+
+    const health = await inspectPersistedFacebookAccountHealth(app, account);
+    await persistFacebookAccountSessionState(id, {
+      ...(((await getPersistedFacebookAccountSessionState(id))?.data as Record<string, unknown> | null) ?? {}),
+      accountId: id,
+      status: health.status,
+      authState: health.authState,
+      authDetected: health.authState === "authenticated",
+      browserOpen: false,
+      authPath: health.authPath,
+      sessionDir: health.sessionDir,
+      lastCheckedAt: health.checkedAt,
+      lastError: health.status === "failed" ? health.message : undefined,
+      health
+    });
+    return ok({ health });
   });
   app.get("/health/platforms", async () => {
     const [sources, targets] = await Promise.all([prisma.sourceAccount.findMany(), prisma.targetAccount.findMany()]);
@@ -573,7 +719,7 @@ async function buildFacebookBrowserLoginPayload(session: FacebookLoginSession) {
   session.lastError = runtime.lastError;
   facebookLoginSessions.set(session.id, session);
 
-  return {
+  const payload = {
     sessionId: session.id,
     accountId: session.accountId,
     status: session.status,
@@ -589,6 +735,9 @@ async function buildFacebookBrowserLoginPayload(session: FacebookLoginSession) {
     createdAt: new Date(session.createdAt).toISOString(),
     lastError: session.lastError
   };
+
+  await persistFacebookAccountSessionState(session.accountId, payload);
+  return payload;
 }
 
 function registerFacebookBrowserLoginRoutes(app: FastifyInstance) {
