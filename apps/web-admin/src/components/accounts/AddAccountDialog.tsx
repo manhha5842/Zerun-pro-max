@@ -1,4 +1,4 @@
-import { CheckCircle2, Layers3, Plus, ShieldAlert } from "lucide-react";
+import { CheckCircle2, ChevronDown, Layers3, Plus, ShieldAlert } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { UseMutationResult } from "@tanstack/react-query";
 import { Dialog } from "../ui/Dialog";
@@ -38,6 +38,7 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
   const [draft, setDraft] = useState<AccountDraft>(() => createEmptyDraft("target", "facebook"));
   const [errors, setErrors] = useState<FormErrors>({});
   const [successMessage, setSuccessMessage] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const activeMutation = draft.kind === "source" ? sourceMutation : targetMutation;
   const isSubmitting = sourceMutation?.isPending || targetMutation?.isPending;
@@ -54,6 +55,7 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
     setDraft(createEmptyDraft(kind, platform));
     setErrors({});
     setSuccessMessage("");
+    setShowAdvanced(false);
   }
 
   function closeDialog() {
@@ -77,10 +79,13 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
       setErrors({});
       setDraft(createEmptyDraft(draft.kind, draft.platform));
       setStep(targetOnly ? 2 : 1);
+      setShowAdvanced(false);
     } catch {
       // handled by mutation.error
     }
   }
+
+  const isSimpleFacebookTarget = draft.kind === "target" && draft.platform === "facebook";
 
   function renderPlatformForm() {
     if (draft.platform === "facebook") return <FacebookAccountForm draft={draft} errors={errors} setDraft={setDraft} />;
@@ -181,33 +186,82 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
                 </span>
               </InlineNote>
 
+              {isSimpleFacebookTarget ? (
+                <InlineNote tone="success">
+                  <span>Flow nhanh: chỉ cần nhập <strong>Tên hiển thị</strong>. Session Facebook sẽ mở và lưu sau ở bảng account.</span>
+                </InlineNote>
+              ) : null}
+
               <div className="form-grid">
-                <div className="field">
+                <div className={isSimpleFacebookTarget ? "field full" : "field"}>
                   <Label htmlFor="dialog-name">Tên hiển thị</Label>
                   <Input id="dialog-name" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Facebook Page bán hàng" />
                   <FormError message={errors.name} />
                 </div>
-                <div className="field">
-                  <Label htmlFor="dialog-handle">Handle / URL</Label>
-                  <Input id="dialog-handle" value={draft.handle} onChange={(event) => setDraft((current) => ({ ...current, handle: event.target.value }))} placeholder="https://facebook.com/... hoặc @username" />
-                  <FormError message={errors.handle} />
-                </div>
+                {!isSimpleFacebookTarget ? (
+                  <div className="field">
+                    <Label htmlFor="dialog-handle">Handle / URL</Label>
+                    <Input id="dialog-handle" value={draft.handle} onChange={(event) => setDraft((current) => ({ ...current, handle: event.target.value }))} placeholder="https://facebook.com/... hoặc @username" />
+                    <FormError message={errors.handle} />
+                  </div>
+                ) : null}
               </div>
 
-              {renderPlatformForm()}
+              {isSimpleFacebookTarget ? (
+                <div className="panel" style={{ padding: 12 }}>
+                  <button
+                    type="button"
+                    className="nav-item auto-style-nav"
+                    style={{ width: "100%", justifyContent: "space-between" }}
+                    onClick={() => setShowAdvanced((current) => !current)}
+                  >
+                    <span>Cấu hình nâng cao</span>
+                    <ChevronDown aria-hidden size={16} style={{ transform: showAdvanced ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s ease" }} />
+                  </button>
 
-              <div className="form-grid">
-                <div className="field full">
-                  <Label htmlFor="dialog-credentials">Credentials JSON bổ sung</Label>
-                  <Textarea id="dialog-credentials" value={draft.credentialsText} onChange={(event) => setDraft((current) => ({ ...current, credentialsText: event.target.value }))} />
-                  <FormError message={errors.credentialsText} />
+                  {showAdvanced ? (
+                    <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+                      <div className="field full">
+                        <Label htmlFor="dialog-handle-advanced">Handle / URL</Label>
+                        <Input id="dialog-handle-advanced" value={draft.handle} onChange={(event) => setDraft((current) => ({ ...current, handle: event.target.value }))} placeholder="https://facebook.com/... hoặc @username" />
+                        <FormError message={errors.handle} />
+                      </div>
+
+                      {renderPlatformForm()}
+
+                      <div className="form-grid">
+                        <div className="field full">
+                          <Label htmlFor="dialog-credentials">Credentials JSON bổ sung</Label>
+                          <Textarea id="dialog-credentials" value={draft.credentialsText} onChange={(event) => setDraft((current) => ({ ...current, credentialsText: event.target.value }))} />
+                          <FormError message={errors.credentialsText} />
+                        </div>
+                        <div className="field full">
+                          <Label htmlFor="dialog-config">Config JSON</Label>
+                          <Textarea id="dialog-config" value={draft.configText} onChange={(event) => setDraft((current) => ({ ...current, configText: event.target.value }))} />
+                          <FormError message={errors.configText} />
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
-                <div className="field full">
-                  <Label htmlFor="dialog-config">Config JSON</Label>
-                  <Textarea id="dialog-config" value={draft.configText} onChange={(event) => setDraft((current) => ({ ...current, configText: event.target.value }))} />
-                  <FormError message={errors.configText} />
-                </div>
-              </div>
+              ) : (
+                <>
+                  {renderPlatformForm()}
+
+                  <div className="form-grid">
+                    <div className="field full">
+                      <Label htmlFor="dialog-credentials">Credentials JSON bổ sung</Label>
+                      <Textarea id="dialog-credentials" value={draft.credentialsText} onChange={(event) => setDraft((current) => ({ ...current, credentialsText: event.target.value }))} />
+                      <FormError message={errors.credentialsText} />
+                    </div>
+                    <div className="field full">
+                      <Label htmlFor="dialog-config">Config JSON</Label>
+                      <Textarea id="dialog-config" value={draft.configText} onChange={(event) => setDraft((current) => ({ ...current, configText: event.target.value }))} />
+                      <FormError message={errors.configText} />
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           ) : null}
         </div>
