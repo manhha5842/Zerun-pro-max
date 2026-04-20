@@ -195,7 +195,7 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
       await page.waitForTimeout(500);
     }
 
-    await clickFirst(page, ['text=/^Post$|^Đăng$|^Publish$|^Xuất bản$/i', '[aria-label="Post"]', '[aria-label*="Đăng" i]', '[aria-label*="Publish" i]'], { timeout: 20_000 });
+    await this.submitPost(page);
     await page.waitForLoadState("networkidle", { timeout: 30_000 });
 
     return { postUrl: page.url(), metadata: { platform: "facebook", type: "feed" } };
@@ -257,10 +257,35 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
       await page.waitForTimeout(500);
     }
 
-    await clickFirst(page, ['text=/^Post$|^Đăng$|^Publish$|^Xuất bản$/i', '[aria-label*="Publish" i]', '[aria-label*="Đăng" i]'], { timeout: 20_000 });
+    await this.submitPost(page);
     await page.waitForLoadState("networkidle", { timeout: 60_000 });
 
     return { postUrl: page.url(), metadata: { platform: "facebook", type: "reel" } };
+  }
+
+  private async submitPost(page: any): Promise<void> {
+    const nextSelectors = [
+      'text=/^Tiếp$|^Next$/i',
+      '[aria-label="Tiếp"]',
+      '[aria-label="Next"]'
+    ];
+    const publishSelectors = [
+      'text=/^Post$|^Đăng$|^Publish$|^Xuất bản$/i',
+      '[aria-label="Post"]',
+      '[aria-label*="Đăng" i]',
+      '[aria-label*="Publish" i]'
+    ];
+
+    for (let step = 0; step < 3; step += 1) {
+      const published = await clickFirstVisible(page, publishSelectors, { timeout: 3_000 });
+      if (published) return;
+
+      const advanced = await clickFirstVisible(page, nextSelectors, { timeout: 3_000 });
+      if (!advanced) break;
+      await page.waitForTimeout(1_500);
+    }
+
+    await clickFirst(page, publishSelectors, { timeout: 20_000 });
   }
 
   private async openComposer(page: any): Promise<void> {
@@ -389,6 +414,22 @@ async function clickFirst(page: any, selectors: string[], options: { timeout?: n
     }
   }
   throw lastError instanceof Error ? lastError : new Error(`Không click được selector nào: ${selectors.join(" | ")}`);
+}
+
+async function clickFirstVisible(page: any, selectors: string[], options: { timeout?: number } = {}): Promise<boolean> {
+  for (const selector of selectors) {
+    try {
+      const loc = page.locator(selector).first();
+      const visible = await loc.isVisible({ timeout: options.timeout ?? 3_000 }).catch(() => false);
+      if (visible) {
+        await loc.click({ timeout: options.timeout ?? 3_000 });
+        return true;
+      }
+    } catch {
+      // not found, try next
+    }
+  }
+  return false;
 }
 
 async function dismissCookieDialog(page: any): Promise<void> {
