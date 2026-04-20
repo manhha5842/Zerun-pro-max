@@ -803,6 +803,45 @@ button svg {
   gap: 6px;
 }
 
+.publish-attempts {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.publish-attempt-row {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid #dfe4dd;
+  border-radius: 10px;
+  background: #fafcfa;
+}
+
+.publish-attempt-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.publish-attempt-link {
+  color: var(--color-primary);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.publish-attempt-link:hover {
+  text-decoration: underline;
+}
+
+.publish-attempt-error,
+.publish-attempt-time {
+  color: #68746d;
+  font-size: 12px;
+}
+
 .empty-state {
   padding: 22px 8px;
   text-align: center;
