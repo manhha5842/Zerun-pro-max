@@ -245,6 +245,33 @@ async function registerProtectedRoutes(app: FastifyInstance) {
 }
 
 function registerContentRoutes(app: FastifyInstance) {
+  app.post("/contents/manual", async (request) => {
+    const body = request.body as AnyBody;
+    const originalText = String(body.originalText ?? body.text ?? "").trim();
+    if (!originalText) {
+      return { statusCode: 400, ...fail("CONTENT_REQUIRED", "Cần nhập nội dung bài viết.") };
+    }
+
+    const content = await prisma.content.create({
+      data: {
+        code: `MAN-${Date.now()}`,
+        platform: String(body.platform ?? "manual"),
+        originalText,
+        draftText: body.draftText ? String(body.draftText) : undefined,
+        finalText: body.finalText ? String(body.finalText) : undefined,
+        status: "ready_to_publish",
+        metadata: {
+          type: body.type ? String(body.type) : "feed",
+          comment: body.comment ? String(body.comment) : undefined,
+          commentMedia: Array.isArray(body.commentMedia) ? body.commentMedia : [],
+          mediaPaths: Array.isArray(body.mediaPaths) ? body.mediaPaths : []
+        }
+      }
+    });
+
+    return ok({ content });
+  });
+
   app.get("/contents", async (request) => {
     const query = request.query as AnyBody;
     const page = Math.max(Number(query.page ?? 1), 1);
@@ -1039,6 +1066,36 @@ function registerFacebookRoutes(app: FastifyInstance) {
     const post = await prisma.fbPost.update({ where: { id }, data }).catch(() => null);
     if (!post) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy bài đăng."));
     return ok({ post });
+  });
+
+  app.post("/facebook/posts/:id/queue", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as AnyBody;
+    const mode = String(body.mode ?? "now");
+    const post = await prisma.fbPost.findUnique({ where: { id }, include: { targets: true } });
+    if (!post) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy bài đăng."));
+    if (!post.targets.length) return reply.code(400).send(fail("TARGET_REQUIRED", "Cần chọn ít nhất một tài khoản đăng."));
+
+    const scheduledAt = mode === "schedule" ? new Date(String(body.scheduledAt)) : new Date();
+    if (Number.isNaN(scheduledAt.getTime())) {
+      return reply.code(400).send(fail("INVALID_SCHEDULE", "Thời gian hẹn đăng không hợp lệ."));
+    }
+
+    for (const target of post.targets) {
+      await prisma.fbPostTarget.update({
+        where: { id: target.id },
+        data: {
+          status: "scheduled",
+          scheduledAt,
+          scheduleMode: "fixed",
+          fixedTime: scheduledAt
+        }
+      });
+      await app.workerCore.scheduleFbPost(target.id, scheduledAt);
+    }
+
+    await prisma.fbPost.update({ where: { id }, data: { status: "scheduled", scheduledAt } });
+    return ok({ queued: post.targets.length, scheduledAt: scheduledAt.toISOString(), mode });
   });
 
   app.delete("/facebook/posts/:id", async (request) => {

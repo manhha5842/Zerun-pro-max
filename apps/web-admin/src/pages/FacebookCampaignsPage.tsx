@@ -70,8 +70,8 @@ export function FacebookCampaignsPage() {
   return (
     <>
       <PageHeader
-        title="Đăng bài"
-        subtitle="Trang này hiện đang quản lý batch/lô đăng Facebook theo số bài/ngày và ngày bắt đầu. Form nhập bài viết tay trong UI vẫn chưa hoàn thiện."
+        title="Lô đăng"
+        subtitle="Quản lý batch/lô đăng Facebook theo số bài/ngày và ngày bắt đầu. Trang nhập bài viết tay nằm ở mục Nhập bài đăng."
         actions={
           <Button onClick={() => setShowDialog(true)} icon={<Plus size={18} />}>
             Tạo lô đăng

@@ -8,6 +8,7 @@ import { ContentsPage } from "./pages/ContentsPage";
 import { ContentDetailPage } from "./pages/ContentDetailPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { ImportPage } from "./pages/ImportPage";
+import { PostComposerPage } from "./pages/PostComposerPage";
 import { SchedulesPage } from "./pages/SchedulesPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
@@ -17,6 +18,7 @@ export function App() {
       <Route element={<Layout />}>
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/contents" element={<ContentsPage />} />
+        <Route path="/contents/new" element={<PostComposerPage />} />
         <Route path="/contents/:code" element={<ContentDetailPage />} />
         <Route path="/contents/:code/edit" element={<ContentDetailPage editMode />} />
         <Route path="/accounts" element={<AccountsPage />} />
