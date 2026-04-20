@@ -167,12 +167,11 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
   }
 
   private async publishFeed(page: any, caption: string, mediaPaths: string[]): Promise<FbPublishResult> {
-    const composerTrigger = firstLocator(page, [
+    await clickFirst(page, [
       'div[role="button"][aria-label*="mind" i]',
       'div[role="button"][aria-label*="nghĩ gì" i]',
       "text=/What's on your mind|Bạn đang nghĩ gì|What are you thinking/i"
-    ]);
-    await composerTrigger.click({ timeout: 20_000 });
+    ], { timeout: 20_000 });
     await page.waitForTimeout(1_500);
 
     if (mediaPaths.length > 0) {
@@ -200,7 +199,7 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
       await page.waitForTimeout(500);
     }
 
-    await firstLocator(page, ['text=/^Post$|^Đăng$|^Publish$|^Xuất bản$/i', '[aria-label="Post"]']).last().click({ timeout: 20_000 });
+    await clickFirst(page, ['text=/^Post$|^Đăng$|^Publish$|^Xuất bản$/i', '[aria-label="Post"]', '[aria-label*="Đăng" i]', '[aria-label*="Publish" i]'], { timeout: 20_000 });
     await page.waitForLoadState("networkidle", { timeout: 30_000 });
 
     return { postUrl: page.url(), metadata: { platform: "facebook", type: "feed" } };
@@ -235,12 +234,11 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
   private async publishReel(page: any, caption: string, videoPath: string): Promise<FbPublishResult> {
     if (!videoPath) throw new Error("Reel requires exactly one video");
 
-    const composerTrigger = firstLocator(page, [
+    await clickFirst(page, [
       'div[role="button"][aria-label*="mind" i]',
       'div[role="button"][aria-label*="nghĩ gì" i]',
       "text=/What's on your mind|Bạn đang nghĩ gì/i"
-    ]);
-    await composerTrigger.click({ timeout: 20_000 });
+    ], { timeout: 20_000 });
     await page.waitForTimeout(1_000);
 
     const reelTab = firstLocator(page, ['[role="tab"][aria-label*="Reel" i]', '[data-testid*="reel" i]']).first();
@@ -267,7 +265,7 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
       await page.waitForTimeout(500);
     }
 
-    await firstLocator(page, ['text=/^Post$|^Đăng$|^Publish$|^Xuất bản$/i', '[aria-label*="Publish" i]']).last().click({ timeout: 20_000 });
+    await clickFirst(page, ['text=/^Post$|^Đăng$|^Publish$|^Xuất bản$/i', '[aria-label*="Publish" i]', '[aria-label*="Đăng" i]'], { timeout: 20_000 });
     await page.waitForLoadState("networkidle", { timeout: 60_000 });
 
     return { postUrl: page.url(), metadata: { platform: "facebook", type: "reel" } };
@@ -365,11 +363,20 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
 }
 
 function firstLocator(page: any, selectors: string[]) {
-  for (const selector of selectors) {
-    const locator = page.locator(selector);
-    if (locator) return locator;
-  }
   return page.locator(selectors[0]);
+}
+
+async function clickFirst(page: any, selectors: string[], options: { timeout?: number } = {}) {
+  let lastError: unknown;
+  for (const selector of selectors) {
+    try {
+      await page.locator(selector).first().click({ timeout: options.timeout ?? 8_000 });
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(`Không click được selector nào: ${selectors.join(" | ")}`);
 }
 
 async function dismissCookieDialog(page: any): Promise<void> {
