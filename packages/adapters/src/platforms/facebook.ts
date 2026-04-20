@@ -167,11 +167,7 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
   }
 
   private async publishFeed(page: any, caption: string, mediaPaths: string[]): Promise<FbPublishResult> {
-    await clickFirst(page, [
-      'div[role="button"][aria-label*="mind" i]',
-      'div[role="button"][aria-label*="nghĩ gì" i]',
-      "text=/What's on your mind|Bạn đang nghĩ gì|What are you thinking/i"
-    ], { timeout: 20_000 });
+    await this.openComposer(page);
     await page.waitForTimeout(1_500);
 
     if (mediaPaths.length > 0) {
@@ -234,11 +230,7 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
   private async publishReel(page: any, caption: string, videoPath: string): Promise<FbPublishResult> {
     if (!videoPath) throw new Error("Reel requires exactly one video");
 
-    await clickFirst(page, [
-      'div[role="button"][aria-label*="mind" i]',
-      'div[role="button"][aria-label*="nghĩ gì" i]',
-      "text=/What's on your mind|Bạn đang nghĩ gì/i"
-    ], { timeout: 20_000 });
+    await this.openComposer(page);
     await page.waitForTimeout(1_000);
 
     const reelTab = firstLocator(page, ['[role="tab"][aria-label*="Reel" i]', '[data-testid*="reel" i]']).first();
@@ -269,6 +261,26 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
     await page.waitForLoadState("networkidle", { timeout: 60_000 });
 
     return { postUrl: page.url(), metadata: { platform: "facebook", type: "reel" } };
+  }
+
+  private async openComposer(page: any): Promise<void> {
+    const selectors = [
+      'div[role="button"][aria-label*="mind" i]',
+      'div[role="button"][aria-label*="nghĩ gì" i]',
+      '[aria-label*="Create a post" i]',
+      '[aria-label*="Tạo bài viết" i]',
+      'div[role="button"]:has-text("What\'s on your mind")',
+      'div[role="button"]:has-text("Bạn đang nghĩ gì")',
+      "text=/What's on your mind|Bạn đang nghĩ gì|What are you thinking|Tạo bài viết/i"
+    ];
+
+    try {
+      await clickFirst(page, selectors, { timeout: 8_000 });
+    } catch {
+      await page.goto("https://www.facebook.com/", { waitUntil: "domcontentloaded", timeout: 40_000 });
+      await dismissCookieDialog(page);
+      await clickFirst(page, selectors, { timeout: 15_000 });
+    }
   }
 
   private async ensureAuthenticated(page: any, context: any): Promise<void> {
