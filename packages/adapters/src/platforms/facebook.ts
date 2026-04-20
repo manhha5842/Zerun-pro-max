@@ -363,7 +363,11 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
 }
 
 function firstLocator(page: any, selectors: string[]) {
-  return page.locator(selectors.join(", "));
+  for (const selector of selectors) {
+    const locator = page.locator(selector);
+    if (locator) return locator;
+  }
+  return page.locator(selectors[0]);
 }
 
 async function dismissCookieDialog(page: any): Promise<void> {
