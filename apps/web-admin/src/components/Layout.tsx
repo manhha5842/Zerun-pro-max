@@ -82,7 +82,7 @@ export function Layout() {
             <div className="footer-avatar">Z</div>
             <div>
               <div className="footer-title">Zerun</div>
-              <div className="footer-subtitle">Flow tách kiểu auto_post_agent</div>
+              <div className="footer-subtitle">Hệ thống quản lý đăng bài</div>
             </div>
           </div>
           <Button variant="ghost" icon={<LogOut aria-hidden />} onClick={logout}>
