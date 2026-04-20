@@ -146,15 +146,6 @@ export function PostComposerPage() {
         throw new Error("Có tài khoản đang chọn hẹn lịch nhưng chưa nhập thời gian.");
       }
 
-      const contentCreated = await apiPost<ContentResponse>("/contents/manual", {
-        originalText: form.content.trim(),
-        platform: "facebook",
-        type: form.type,
-        comment: form.comment.trim() || undefined,
-        mediaPaths: mediaFiles.map((file) => file.localPath),
-        commentMedia: commentMediaFiles.map((file) => file.localPath)
-      });
-
       const postPayload = {
         type: form.type,
         caption: form.content.trim(),
@@ -171,13 +162,27 @@ export function PostComposerPage() {
       };
 
       const created = await apiPost<CreatePostResponse>("/facebook/posts", postPayload);
-      await apiPost(`/facebook/posts/${created.post.id}/queue`, {
+      const queued = await apiPost<{ scheduledAt: string }>(`/facebook/posts/${created.post.id}/queue`, {
         mode: hasScheduledTarget ? "schedule" : "now",
         targets: selectedTargets.map(([targetId, config]) => ({
           targetId,
           mode: config.mode,
           scheduledAt: config.mode === "schedule" ? config.scheduledAt : undefined
         }))
+      });
+
+      const contentCreated = await apiPost<ContentResponse>("/contents/manual", {
+        originalText: form.content.trim(),
+        platform: "facebook",
+        type: form.type,
+        comment: form.comment.trim() || undefined,
+        mediaPaths: mediaFiles.map((file) => file.localPath),
+        commentMedia: commentMediaFiles.map((file) => file.localPath),
+        fbPostId: created.post.id,
+        targetIds: selectedTargets.map(([targetId]) => targetId),
+        scheduledAt: queued.scheduledAt,
+        status: hasScheduledTarget ? "scheduled" : "publishing",
+        mode: hasScheduledTarget ? "schedule" : "now"
       });
 
       return {

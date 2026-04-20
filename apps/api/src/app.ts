@@ -253,6 +253,10 @@ function registerContentRoutes(app: FastifyInstance) {
       return { statusCode: 400, ...fail("CONTENT_REQUIRED", "Cần nhập nội dung bài viết.") };
     }
 
+    const targetIds = Array.isArray(body.targetIds) ? body.targetIds.map(String) : [];
+    const manualStatus = body.status ? String(body.status) : (targetIds.length > 0 ? "scheduled" : "ready_to_publish");
+    const scheduledAt = body.scheduledAt ? new Date(String(body.scheduledAt)) : undefined;
+
     const content = await prisma.content.create({
       data: {
         code: `MAN-${Date.now()}`,
@@ -260,12 +264,16 @@ function registerContentRoutes(app: FastifyInstance) {
         originalText,
         draftText: body.draftText ? String(body.draftText) : undefined,
         finalText: body.finalText ? String(body.finalText) : undefined,
-        status: "ready_to_publish",
+        status: manualStatus,
+        scheduledAt,
+        scheduledTargets: targetIds,
         metadata: {
           type: body.type ? String(body.type) : "feed",
           comment: body.comment ? String(body.comment) : undefined,
           commentMedia: Array.isArray(body.commentMedia) ? body.commentMedia : [],
-          mediaPaths: Array.isArray(body.mediaPaths) ? body.mediaPaths : []
+          mediaPaths: Array.isArray(body.mediaPaths) ? body.mediaPaths : [],
+          fbPostId: body.fbPostId ? String(body.fbPostId) : undefined,
+          manualMode: body.mode ? String(body.mode) : undefined
         }
       }
     });
@@ -333,6 +341,35 @@ function registerContentRoutes(app: FastifyInstance) {
     );
     await app.workerCore.processContent(content.id);
     return ok({ success: true });
+  });
+
+  app.post("/contents/:code/manual-link", async (request, reply) => {
+    const { code } = request.params as { code: string };
+    const body = request.body as AnyBody;
+    const current = await prisma.content.findUnique({ where: { code } });
+    if (!current) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy nội dung."));
+
+    const baseMetadata = current.metadata && typeof current.metadata === "object" && !Array.isArray(current.metadata)
+      ? (current.metadata as Record<string, unknown>)
+      : {};
+    const nextMetadata = {
+      ...baseMetadata,
+      ...(body.fbPostId ? { fbPostId: String(body.fbPostId) } : {}),
+      ...(body.manualMode ? { manualMode: String(body.manualMode) } : {})
+    };
+    const nextTargetIds = Array.isArray(body.targetIds) ? body.targetIds.map(String) : current.scheduledTargets;
+    const nextScheduledAt = body.scheduledAt ? new Date(String(body.scheduledAt)) : current.scheduledAt;
+
+    const content = await prisma.content.update({
+      where: { code },
+      data: {
+        status: body.status ? String(body.status) : current.status,
+        scheduledTargets: (nextTargetIds ?? undefined) as Prisma.InputJsonValue | undefined,
+        scheduledAt: nextScheduledAt,
+        metadata: nextMetadata as Prisma.InputJsonValue
+      }
+    });
+    return ok({ content });
   });
 
   app.post("/contents/:code/skip", (request) => updateContentStatus(request, "skipped"));

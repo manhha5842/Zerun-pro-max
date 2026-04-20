@@ -2,8 +2,6 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { AccountsPage } from "./pages/AccountsPage";
 import { CrawlDataPage } from "./pages/CrawlDataPage";
-import { FacebookCampaignsPage } from "./pages/FacebookCampaignsPage";
-import { FacebookCampaignDetailPage } from "./pages/FacebookCampaignDetailPage";
 import { ContentsPage } from "./pages/ContentsPage";
 import { ContentDetailPage } from "./pages/ContentDetailPage";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -23,8 +21,6 @@ export function App() {
         <Route path="/contents/:code/edit" element={<ContentDetailPage editMode />} />
         <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/crawl" element={<CrawlDataPage />} />
-        <Route path="/facebook/campaigns" element={<FacebookCampaignsPage />} />
-        <Route path="/facebook/campaigns/:id" element={<FacebookCampaignDetailPage />} />
         <Route path="/import" element={<ImportPage />} />
         <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/settings" element={<SettingsPage />} />
