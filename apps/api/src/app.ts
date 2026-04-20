@@ -386,10 +386,28 @@ function registerContentRoutes(app: FastifyInstance) {
     const body = request.body as AnyBody;
     const content = await prisma.content.findUnique({ where: { code } });
     if (!content) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy nội dung."));
-    const targetIds = Array.isArray(body.targetIds) ? body.targetIds : content.scheduledTargets;
-    if (!Array.isArray(targetIds) || targetIds.length === 0) return reply.code(400).send(fail("TARGET_REQUIRED", "Cần chọn ít nhất một target."));
-    await Promise.all(targetIds.map((targetId) => app.workerCore.publishNow(content.id, String(targetId), "admin")));
-    return ok({ queued: true });
+
+    // Priority: body.targetIds > content.scheduledTargets > active Facebook targets
+    let targetIds: string[] = [];
+    if (Array.isArray(body.targetIds) && body.targetIds.length > 0) {
+      targetIds = body.targetIds.map(String);
+    } else if (Array.isArray(content.scheduledTargets) && (content.scheduledTargets as unknown[]).length > 0) {
+      targetIds = (content.scheduledTargets as unknown[]).map(String);
+    } else {
+      // Fallback: lấy tất cả Facebook target accounts đang active
+      const fbTargets = await prisma.targetAccount.findMany({
+        where: { platform: "facebook", isActive: true, health: { not: "paused" } },
+        select: { id: true }
+      });
+      targetIds = fbTargets.map((target) => target.id);
+    }
+
+    if (targetIds.length === 0) {
+      return reply.code(400).send(fail("TARGET_REQUIRED", "Không tìm được tài khoản đich để đăng. Hãy chọn target hoặc tạo tài khoản Facebook."));
+    }
+
+    await Promise.all(targetIds.map((targetId) => app.workerCore.publishNow(content.id, targetId, "admin")));
+    return ok({ queued: true, targetCount: targetIds.length });
   });
   app.post("/contents/:code/schedule", async (request, reply) => {
     const { code } = request.params as { code: string };
