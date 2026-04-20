@@ -4,14 +4,11 @@ import {
   Download,
   FileText,
   Gauge,
-  LogOut,
   Send,
   Settings,
   Users
 } from "lucide-react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { apiPost } from "../api/client";
-import { Button } from "./ui/Button";
+import { NavLink, Outlet } from "react-router-dom";
 
 const navSections = [
   {
@@ -38,16 +35,6 @@ const navSections = [
 ];
 
 export function Layout() {
-  const navigate = useNavigate();
-
-  async function logout() {
-    try {
-      await apiPost("/auth/logout", {});
-    } finally {
-      navigate("/login");
-    }
-  }
-
   return (
     <div className="app-shell auto-style-shell">
       <aside className="sidebar auto-style-sidebar">
@@ -85,9 +72,6 @@ export function Layout() {
               <div className="footer-subtitle">Hệ thống quản lý đăng bài</div>
             </div>
           </div>
-          <Button variant="ghost" icon={<LogOut aria-hidden />} onClick={logout}>
-            Đăng xuất
-          </Button>
         </div>
       </aside>
       <main className="workspace auto-style-workspace">

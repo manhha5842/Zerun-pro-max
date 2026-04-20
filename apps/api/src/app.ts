@@ -204,8 +204,6 @@ async function registerWsRoute(app: FastifyInstance) {
 }
 
 async function registerProtectedRoutes(app: FastifyInstance) {
-  app.addHook("preHandler", app.authenticate);
-
   app.get("/dashboard/stats", async () => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);

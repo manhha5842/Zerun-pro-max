@@ -8,14 +8,12 @@ import { ContentsPage } from "./pages/ContentsPage";
 import { ContentDetailPage } from "./pages/ContentDetailPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { ImportPage } from "./pages/ImportPage";
-import { LoginPage } from "./pages/LoginPage";
 import { SchedulesPage } from "./pages/SchedulesPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
 export function App() {
   return (
     <Routes>
-      <Route path="/login" element={<LoginPage />} />
       <Route element={<Layout />}>
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/contents" element={<ContentsPage />} />
@@ -28,6 +26,7 @@ export function App() {
         <Route path="/import" element={<ImportPage />} />
         <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/login" element={<Navigate to="/dashboard" replace />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Route>
     </Routes>
