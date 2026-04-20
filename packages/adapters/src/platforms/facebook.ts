@@ -345,7 +345,9 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
     const { chromium } = await import("playwright");
 
     const browser = await chromium.launch({
-      headless: account.config.headless !== false,
+      // Local/internal default: mở browser thật để dễ quan sát.
+      // Có thể ép headless bằng config: { "headless": true }
+      headless: (account.config as Record<string, unknown>)?.headless === true,
       args: ["--no-sandbox"]
     });
 
