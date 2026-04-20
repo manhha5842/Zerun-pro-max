@@ -70,7 +70,7 @@ export function FacebookCampaignDetailPage() {
   }
 
   if (!campaign) {
-    return <div className="p-8 text-center text-muted">Không tìm thấy chiến dịch.</div>;
+    return <div className="p-8 text-center text-muted">Không tìm thấy luồng đăng bài.</div>;
   }
 
   return (
@@ -79,7 +79,7 @@ export function FacebookCampaignDetailPage() {
         <div>
           <Link to="/facebook/campaigns" className="text-sm text-primary hover:underline flex items-center gap-2 mb-2">
             <ArrowLeft size={16} />
-            Quay lại danh sách
+            Quay lại luồng đăng bài
           </Link>
           <h1 className="page-title">{campaign.name}</h1>
           {campaign.description && <p className="page-subtitle">{campaign.description}</p>}

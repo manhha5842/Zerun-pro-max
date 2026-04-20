@@ -1,19 +1,13 @@
 import {
   Activity,
-  Archive,
   CalendarClock,
   Download,
   FileText,
   Gauge,
-  History,
   LogOut,
-  MessageSquare,
   Send,
   Settings,
-  Users,
-  Facebook,
-  ListOrdered,
-  Sparkles
+  Users
 } from "lucide-react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { apiPost } from "../api/client";
@@ -25,26 +19,17 @@ const navSections = [
     items: [{ to: "/dashboard", label: "Tổng quan", icon: Gauge }]
   },
   {
-    label: "CHỨC NĂNG",
+    label: "ĐĂNG BÀI",
     items: [
-      { to: "/facebook/campaigns", label: "Đăng bài", icon: Send },
-      { to: "/schedules", label: "Lên lịch", icon: CalendarClock },
-      { to: "/crawl", label: "Crawl data", icon: Download }
+      { to: "/contents", label: "Quản lý bài viết", icon: FileText },
+      { to: "/facebook/campaigns", label: "Luồng đăng bài", icon: Send },
+      { to: "/schedules", label: "Lịch đăng", icon: CalendarClock },
+      { to: "/accounts", label: "Tài khoản đăng bài", icon: Users }
     ]
   },
   {
-    label: "QUẢN LÝ",
-    items: [
-      { to: "/contents", label: "Bài viết", icon: FileText },
-      { to: "/accounts", label: "Tài khoản", icon: Users }
-    ]
-  },
-  {
-    label: "FACEBOOK",
-    items: [
-      { to: "/facebook/campaigns", label: "Campaigns", icon: Facebook },
-      { to: "/schedules", label: "Bài đăng theo lịch", icon: ListOrdered }
-    ]
+    label: "CRAWL",
+    items: [{ to: "/crawl", label: "Crawl data", icon: Download }]
   },
   {
     label: "HỆ THỐNG",
