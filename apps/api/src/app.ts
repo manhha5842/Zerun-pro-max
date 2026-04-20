@@ -1,5 +1,6 @@
 import path from "node:path";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, rmSync } from "node:fs";
+import { pipeline } from "node:stream/promises";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import fastifyStatic from "@fastify/static";
@@ -386,6 +387,23 @@ async function updateContentStatus(request: FastifyRequest, status: string) {
     data: { status, metadata: body.reason ? { reason: body.reason } : undefined }
   });
   return ok({ content });
+}
+
+async function saveUploadedFile(part: Awaited<ReturnType<FastifyRequest["file"]>>) {
+  if (!part) return null;
+  const now = new Date();
+  const dir = path.resolve(config.MEDIA_UPLOAD_ROOT, `${now.getFullYear()}`, `${String(now.getMonth() + 1).padStart(2, "0")}`, `${String(now.getDate()).padStart(2, "0")}`);
+  mkdirSync(dir, { recursive: true });
+  const sanitized = part.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const filename = `${Date.now()}-${randomUUID()}-${sanitized}`;
+  const fullPath = path.join(dir, filename);
+  await pipeline(part.file, createWriteStream(fullPath));
+  return {
+    filename: part.filename,
+    localPath: fullPath,
+    mimeType: part.mimetype,
+    fileSize: part.file.bytesRead
+  };
 }
 
 function registerSourceRoutes(app: FastifyInstance) {
@@ -910,6 +928,14 @@ function registerFacebookBrowserLoginRoutes(app: FastifyInstance) {
 }
 
 function registerFacebookRoutes(app: FastifyInstance) {
+  app.post("/uploads/manual", async (request, reply) => {
+    const part = await request.file();
+    if (!part) return reply.code(400).send(fail("FILE_REQUIRED", "Cần chọn file để upload."));
+    const saved = await saveUploadedFile(part);
+    if (!saved) return reply.code(500).send(fail("UPLOAD_FAILED", "Không thể lưu file upload."));
+    return ok({ file: saved });
+  });
+
   // ── Campaigns ────────────────────────────────────────────────────────────────
 
   app.get("/facebook/campaigns", async () => {
@@ -1076,12 +1102,18 @@ function registerFacebookRoutes(app: FastifyInstance) {
     if (!post) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy bài đăng."));
     if (!post.targets.length) return reply.code(400).send(fail("TARGET_REQUIRED", "Cần chọn ít nhất một tài khoản đăng."));
 
-    const scheduledAt = mode === "schedule" ? new Date(String(body.scheduledAt)) : new Date();
-    if (Number.isNaN(scheduledAt.getTime())) {
-      return reply.code(400).send(fail("INVALID_SCHEDULE", "Thời gian hẹn đăng không hợp lệ."));
-    }
+    const scheduleByTarget = Array.isArray(body.targets) ? body.targets : [];
+    let queued = 0;
+    let lastScheduledAt: Date | null = null;
 
     for (const target of post.targets) {
+      const targetInput = scheduleByTarget.find((item: AnyBody) => String(item.targetId) === target.targetAccountId);
+      const targetMode = String(targetInput?.mode ?? mode ?? "now");
+      const scheduledAt = targetMode === "schedule" ? new Date(String(targetInput?.scheduledAt ?? body.scheduledAt)) : new Date();
+      if (Number.isNaN(scheduledAt.getTime())) {
+        return reply.code(400).send(fail("INVALID_SCHEDULE", `Thời gian hẹn đăng không hợp lệ cho tài khoản ${target.targetAccountId}.`));
+      }
+
       await prisma.fbPostTarget.update({
         where: { id: target.id },
         data: {
@@ -1092,10 +1124,12 @@ function registerFacebookRoutes(app: FastifyInstance) {
         }
       });
       await app.workerCore.scheduleFbPost(target.id, scheduledAt);
+      queued += 1;
+      lastScheduledAt = scheduledAt;
     }
 
-    await prisma.fbPost.update({ where: { id }, data: { status: "scheduled", scheduledAt } });
-    return ok({ queued: post.targets.length, scheduledAt: scheduledAt.toISOString(), mode });
+    await prisma.fbPost.update({ where: { id }, data: { status: "scheduled", scheduledAt: lastScheduledAt ?? new Date() } });
+    return ok({ queued, scheduledAt: lastScheduledAt?.toISOString() ?? new Date().toISOString(), mode });
   });
 
   app.delete("/facebook/posts/:id", async (request) => {

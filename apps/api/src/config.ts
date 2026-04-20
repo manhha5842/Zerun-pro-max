@@ -9,7 +9,8 @@ const envSchema = z.object({
   JWT_ACCESS_TTL: z.string().default("15m"),
   REFRESH_TOKEN_DAYS: z.coerce.number().default(30),
   REDIS_URL: z.string().default("redis://localhost:6379"),
-  FACEBOOK_SESSION_ROOT: z.string().default("storage/sessions/facebook")
+  FACEBOOK_SESSION_ROOT: z.string().default("storage/sessions/facebook"),
+  MEDIA_UPLOAD_ROOT: z.string().default("storage/uploads/manual")
 });
 
 export const config = envSchema.parse(process.env);

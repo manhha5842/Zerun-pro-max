@@ -69,11 +69,141 @@ body {
   line-height: 1.5;
 }
 
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field.full {
+  grid-column: 1 / -1;
+}
+
+.field-help {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.inline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.upload-list,
+.target-schedule-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.upload-list.compact {
+  gap: 8px;
+}
+
+.upload-empty {
+  padding: 12px 14px;
+  border: 1px dashed var(--color-border);
+  border-radius: 10px;
+  color: var(--color-text-muted);
+  background: #fbfcfc;
+}
+
+.upload-item,
+.target-schedule-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.upload-item small,
+.target-schedule-card small,
+.actions-note {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.target-schedule-card {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.target-schedule-card.active {
+  border-color: #b9dccc;
+  background: #fbfefd;
+}
+
+.target-schedule-head,
+.target-schedule-controls,
+.target-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.target-toggle {
+  justify-content: flex-start;
+  font-weight: 600;
+}
+
+.target-schedule-controls {
+  width: 100%;
+}
+
+@media (max-width: 960px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .target-schedule-controls,
+  .inline-head,
+  .upload-item,
+  .target-schedule-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
 button,
 input,
 textarea,
 select {
   font: inherit;
+}
+
+.field-error,
+.field-success {
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.field-error {
+  border: 1px solid var(--color-danger-border);
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+
+.field-success {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--color-success-border);
+  background: var(--color-success-bg);
+  color: #1d6b45;
 }
 
 .app-shell {
