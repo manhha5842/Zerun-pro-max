@@ -106,7 +106,7 @@ export async function createWorkerCore(options: WorkerCoreOptions = {}) {
     triggerCrawl: (sourceId: string, requestedBy: SourceCrawlJob["requestedBy"] = "admin") =>
       queues[QueueName.SourceCrawl].add(JobName.SourceCrawl, { version: 1, sourceId, requestedBy } satisfies SourceCrawlJob, {
         ...defaultJobOptions,
-        jobId: `crawl:${sourceId}:${Date.now()}`
+        jobId: `crawl_${sanitizeJobIdToken(sourceId)}_${Date.now()}`
       }),
     processContent: (contentId: string) =>
       queues[QueueName.ContentProcess].add(JobName.ContentProcess, { version: 1, contentId } satisfies ContentProcessJob, stableJob({ version: 1, contentId })),
@@ -123,7 +123,7 @@ export async function createWorkerCore(options: WorkerCoreOptions = {}) {
       queues[QueueName.FbPost].add(
         JobName.FbPostExecute,
         { version: 1, kind: "post", fbPostTargetId } satisfies FbPostJob,
-        { ...defaultJobOptions, jobId: `fb-post:${fbPostTargetId}`, delay: Math.max(0, scheduledAt.getTime() - Date.now()) }
+        { ...defaultJobOptions, jobId: `fb_post_${sanitizeJobIdToken(fbPostTargetId)}`, delay: Math.max(0, scheduledAt.getTime() - Date.now()) }
       )
   };
 }
@@ -145,7 +145,11 @@ function stableJob(job: Record<string, unknown>): JobsOptions {
   return {
     ...defaultJobOptions,
     jobId: Object.entries(job)
-      .map(([key, value]) => `${key}:${String(value)}`)
-      .join("|")
+      .map(([key, value]) => `${sanitizeJobIdToken(key)}_${sanitizeJobIdToken(String(value))}`)
+      .join("__")
   };
+}
+
+function sanitizeJobIdToken(input: string) {
+  return input.replace(/[^a-zA-Z0-9_-]/g, "_");
 }
