@@ -23,6 +23,7 @@ export type AccountDraft = {
   sessionDir: string;
   configText: string;
   credentialsText: string;
+  facebookAccountType: "profile" | "page";
   telegramApiId: string;
   telegramApiHash: string;
   telegramSession: string;
@@ -72,6 +73,7 @@ export function createEmptyDraft(kind: AccountKind = "target", platform: Account
     sessionDir: "",
     configText: "{}",
     credentialsText: "{}",
+    facebookAccountType: "profile",
     telegramApiId: "",
     telegramApiHash: "",
     telegramSession: "",
@@ -168,6 +170,7 @@ export function buildAccountPayload(draft: AccountDraft): AccountFormValues {
 
   if (draft.platform === "facebook") {
     platformCredentials = {
+      accountType: draft.facebookAccountType,
       ...(draft.authPath.trim() ? { authPath: draft.authPath.trim() } : {}),
       ...(draft.sessionDir.trim() ? { sessionDir: draft.sessionDir.trim() } : {})
     };

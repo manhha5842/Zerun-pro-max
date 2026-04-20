@@ -3,6 +3,7 @@ import type { PlatformFieldsProps } from "../../pages/accountForms";
 import { FormError, InlineNote } from "../../pages/accountForms";
 import { Input } from "../ui/Input";
 import { Label } from "../ui/Label";
+import { Select } from "../ui/Select";
 
 export function FacebookAccountForm({ draft, errors, setDraft }: PlatformFieldsProps) {
   return (
@@ -23,6 +24,32 @@ export function FacebookAccountForm({ draft, errors, setDraft }: PlatformFieldsP
       </InlineNote>
 
       <div className="form-grid" style={{ marginTop: 12 }}>
+        <div className="field full">
+          <Label htmlFor="facebook-account-type">Loại đích Facebook</Label>
+          <Select
+            id="facebook-account-type"
+            value={draft.facebookAccountType}
+            onChange={(event) => setDraft((current) => ({ ...current, facebookAccountType: event.target.value as "profile" | "page" }))}
+          >
+            <option value="profile">Profile cá nhân</option>
+            <option value="page">Page</option>
+          </Select>
+        </div>
+        <div className="field full">
+          <Label htmlFor="facebook-handle">Handle / URL</Label>
+          <Input
+            id="facebook-handle"
+            value={draft.handle}
+            onChange={(event) => setDraft((current) => ({ ...current, handle: event.target.value }))}
+            placeholder={draft.facebookAccountType === "page" ? "vd: tenpage hoặc https://facebook.com/tenpage" : "Tùy chọn, để trống để đăng vào profile mặc định"}
+          />
+          <small className="field-help">
+            {draft.facebookAccountType === "page"
+              ? "Nhập username hoặc URL page để bot vào đúng trang trước khi đăng."
+              : "Nếu nhập profile URL/username, bot sẽ điều hướng tới đúng profile trước khi đăng."}
+          </small>
+          <FormError message={errors.handle} />
+        </div>
         <div className="field full">
           <Label htmlFor="facebook-auth-path">authPath</Label>
           <Input
