@@ -1,4 +1,4 @@
-import { CheckCircle2, ChevronDown, Layers3, Plus, ShieldAlert } from "lucide-react";
+import { CheckCircle2, ChevronDown, Layers3, ShieldAlert } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { UseMutationResult } from "@tanstack/react-query";
 import { Dialog } from "../ui/Dialog";
@@ -179,19 +179,6 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
 
           {step === 3 ? (
             <div className="wizard-form-stack">
-              <InlineNote>
-                <Plus aria-hidden size={14} />
-                <span>
-                  Đang tạo <strong>{draft.kind === "source" ? "tài khoản nguồn" : "tài khoản đăng"}</strong> cho nền tảng <strong>{draft.platform}</strong>.
-                </span>
-              </InlineNote>
-
-              {isSimpleFacebookTarget ? (
-                <InlineNote tone="success">
-                  <span>Flow nhanh: chỉ cần nhập <strong>Tên hiển thị</strong>. Session Facebook sẽ mở và lưu sau ở bảng account.</span>
-                </InlineNote>
-              ) : null}
-
               <div className="form-grid">
                 <div className={isSimpleFacebookTarget ? "field full" : "field"}>
                   <Label htmlFor="dialog-name">Tên hiển thị</Label>
