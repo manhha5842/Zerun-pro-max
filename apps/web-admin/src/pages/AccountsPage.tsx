@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderLock, Plus, RefreshCw, ShieldCheck, Trash2, ExternalLink, CheckCircle2, AlertTriangle, Clock3, RotateCcw, Search } from "lucide-react";
 import { apiDelete, apiGet, apiPost } from "../api/client";
@@ -95,7 +95,6 @@ function getSessionStatusTone(status?: BrowserLoginSession["status"]) {
 
 export function AccountsPage() {
   const queryClient = useQueryClient();
-  const autoSavedSessionRef = useRef<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [browserLogin, setBrowserLogin] = useState<BrowserLoginSession | null>(null);
@@ -187,17 +186,6 @@ export function AccountsPage() {
     onError: (error: Error) => setFeedback({ type: "error", message: error.message })
   });
 
-  useEffect(() => {
-    if (!activeBrowserLogin?.sessionId) return;
-    if (activeBrowserLogin.status !== "pending") return;
-    if (!activeBrowserLogin.authDetected) return;
-    if (completeBrowserLogin.isPending) return;
-    if (autoSavedSessionRef.current === activeBrowserLogin.sessionId) return;
-
-    autoSavedSessionRef.current = activeBrowserLogin.sessionId;
-    completeBrowserLogin.mutate(activeBrowserLogin.sessionId);
-  }, [activeBrowserLogin, completeBrowserLogin]);
-
   const targetAccounts = (query.data?.accounts ?? []).filter((account) => account.kind === "target");
   const facebookAccounts = targetAccounts.filter((account) => account.platform === "facebook");
 
@@ -267,7 +255,6 @@ export function AccountsPage() {
                 <div className="feature-inline-actions">
                   <Badge tone={getSessionStatusTone(activeBrowserLogin.status)}>{activeBrowserLogin.status}</Badge>
                   <Badge tone={getAuthTone(activeBrowserLogin.authState)}>{getAuthLabel(activeBrowserLogin.authState)}</Badge>
-                  {activeBrowserLogin.status === "pending" && activeBrowserLogin.authDetected ? <Badge tone="good">Tự động lưu khi sẵn sàng</Badge> : null}
                   {activeBrowserLogin.browserOpen ? (
                     <span className="table-subtle" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                       <Clock3 size={14} aria-hidden /> Browser đang mở
@@ -291,11 +278,10 @@ export function AccountsPage() {
                       disabled={
                         completeBrowserLogin.isPending ||
                         cancelBrowserLogin.isPending ||
-                        activeBrowserLogin.status !== "pending" ||
-                        !activeBrowserLogin.authDetected
+                        activeBrowserLogin.status !== "pending"
                       }
                     >
-                      {completeBrowserLogin.isPending ? "Đang lưu..." : "Hoàn tất lưu session"}
+                      {completeBrowserLogin.isPending ? "Đang lưu..." : "Đã xong, lưu session"}
                     </Button>
                   ) : null}
                   {activeBrowserLogin.sessionId ? (

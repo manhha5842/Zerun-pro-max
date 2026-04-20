@@ -924,21 +924,6 @@ function registerFacebookBrowserLoginRoutes(app: FastifyInstance) {
     if (!session.browserContext) return reply.code(400).send(fail("SESSION_CLOSED", "Trình duyệt đăng nhập đã đóng trước khi hoàn tất."));
 
     try {
-      const runtime = await inspectFacebookBrowserLoginSession(session);
-      session.authDetected = runtime.authDetected;
-      session.authState = runtime.authState;
-      session.currentUrl = runtime.currentUrl;
-      session.cookieNames = runtime.cookieNames;
-      session.lastCheckedAt = runtime.lastCheckedAt;
-      session.lastError = runtime.lastError;
-      facebookLoginSessions.set(sessionId, session);
-
-      if (!runtime.authDetected) {
-        return reply.code(400).send(fail("FACEBOOK_NOT_AUTHENTICATED", runtime.authState === "checkpoint"
-          ? "Facebook đang ở trạng thái checkpoint/xác minh. Hãy xử lý trong browser trước."
-          : "Chưa phát hiện session đăng nhập Facebook hợp lệ."));
-      }
-
       await session.browserContext.storageState({ path: session.authPath });
       await prisma.targetAccount.update({
         where: { id: session.accountId },
