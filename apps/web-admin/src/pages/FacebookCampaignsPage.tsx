@@ -70,11 +70,11 @@ export function FacebookCampaignsPage() {
   return (
     <>
       <PageHeader
-        title="Luồng đăng bài"
-        subtitle="Quản lý luồng đăng Facebook theo lô bài, số bài/ngày và ngày bắt đầu."
+        title="Đăng bài"
+        subtitle="Trang này hiện đang quản lý batch/lô đăng Facebook theo số bài/ngày và ngày bắt đầu. Form nhập bài viết tay trong UI vẫn chưa hoàn thiện."
         actions={
           <Button onClick={() => setShowDialog(true)} icon={<Plus size={18} />}>
-            Tạo luồng đăng bài
+            Tạo lô đăng
           </Button>
         }
       />
@@ -84,11 +84,11 @@ export function FacebookCampaignsPage() {
           <div className="p-8 text-center text-muted">Đang tải...</div>
         ) : rows.length === 0 ? (
           <EmptyState
-            title="Chưa có luồng đăng bài nào"
-            description="Tạo luồng đầu tiên để bắt đầu phân phối bài đăng Facebook."
+            title="Chưa có lô đăng nào"
+            description="Tạo lô đầu tiên để bắt đầu phân phối bài đăng Facebook."
             action={
               <Button onClick={() => setShowDialog(true)} variant="secondary">
-                Tạo luồng đăng bài đầu tiên
+                Tạo lô đăng đầu tiên
               </Button>
             }
           />
@@ -96,7 +96,7 @@ export function FacebookCampaignsPage() {
           <DataTable
             columns={
               <>
-                <th>Tên luồng</th>
+                <th>Tên lô đăng</th>
                 <th>Số bài</th>
                 <th>Bài/ngày</th>
                 <th>Ngày bắt đầu</th>
@@ -138,7 +138,7 @@ export function FacebookCampaignsPage() {
                       icon={<Trash2 size={16} />}
                       disabled={deleteMutation.isPending}
                       onClick={() => {
-                        if (confirm(`Xoá luồng đăng bài "${c.name}"?`)) deleteMutation.mutate(c.id);
+                        if (confirm(`Xoá lô đăng "${c.name}"?`)) deleteMutation.mutate(c.id);
                       }}
                     >
                       Xoá
@@ -151,7 +151,7 @@ export function FacebookCampaignsPage() {
         )}
       </SectionCard>
 
-      <Dialog open={showDialog} onClose={() => setShowDialog(false)} title="Tạo luồng đăng bài mới">
+      <Dialog open={showDialog} onClose={() => setShowDialog(false)} title="Tạo lô đăng mới">
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -160,7 +160,7 @@ export function FacebookCampaignsPage() {
           className="flex flex-col gap-4"
         >
           <div className="field">
-            <Label htmlFor="name">Tên luồng đăng bài *</Label>
+            <Label htmlFor="name">Tên lô đăng *</Label>
             <Input
               id="name"
               value={form.name}
@@ -176,7 +176,7 @@ export function FacebookCampaignsPage() {
               id="description"
               value={form.description}
               onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-              placeholder="Mô tả ngắn gọn về luồng đăng bài (tuỳ chọn)"
+              placeholder="Mô tả ngắn gọn về lô đăng (tuỳ chọn)"
               rows={3}
             />
           </div>
@@ -210,7 +210,7 @@ export function FacebookCampaignsPage() {
               Huỷ
             </Button>
             <Button type="submit" disabled={!form.name || !form.startDate || createMutation.isPending}>
-              {createMutation.isPending ? "Đang tạo..." : "Tạo luồng đăng bài"}
+              {createMutation.isPending ? "Đang tạo..." : "Tạo lô đăng"}
             </Button>
           </div>
 

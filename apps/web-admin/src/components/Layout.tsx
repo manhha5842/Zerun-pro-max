@@ -19,7 +19,7 @@ const navSections = [
     label: "ĐĂNG BÀI",
     items: [
       { to: "/contents", label: "Quản lý bài viết", icon: FileText },
-      { to: "/facebook/campaigns", label: "Luồng đăng bài", icon: Send },
+      { to: "/facebook/campaigns", label: "Đăng bài", icon: Send },
       { to: "/schedules", label: "Lịch đăng", icon: CalendarClock },
       { to: "/accounts", label: "Tài khoản đăng bài", icon: Users }
     ]
