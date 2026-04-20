@@ -10,21 +10,15 @@ export function FacebookAccountForm({ draft, errors, setDraft }: PlatformFieldsP
       <div className="account-platform-header">
         <div>
           <h3>Facebook session</h3>
-          <p className="muted-copy">Dùng cho page, profile hoặc group. Hệ thống cần session Playwright đã đăng nhập sẵn.</p>
+          <p className="muted-copy">Các trường bên dưới là tùy chọn. Bạn có thể để trống rồi mở browser login sau khi tạo account.</p>
         </div>
         <FolderLock aria-hidden size={18} />
       </div>
 
-      <InlineNote tone="warning">
+      <InlineNote tone="info">
         <Info aria-hidden size={14} />
         <div>
-          <strong>Cách chuẩn bị session Facebook:</strong>
-          <ol className="note-list">
-            <li>Mở browser Playwright/persistent context và đăng nhập Facebook thủ công 1 lần.</li>
-            <li>Lưu session vào thư mục ví dụ <code>storage/sessions/facebook/account-name</code>.</li>
-            <li>Nhập đường dẫn đó vào <strong>authPath</strong> hoặc <strong>sessionDir</strong>.</li>
-            <li>Nếu bạn dùng storage state JSON riêng, có thể ghi rõ trong credentials/config bổ sung.</li>
-          </ol>
+          Sau khi tạo account xong, vào bảng tài khoản và bấm <strong>Mở trình duyệt đăng nhập</strong> hoặc <strong>Mở lại browser session</strong>.
         </div>
       </InlineNote>
 
@@ -35,9 +29,9 @@ export function FacebookAccountForm({ draft, errors, setDraft }: PlatformFieldsP
             id="facebook-auth-path"
             value={draft.authPath}
             onChange={(event) => setDraft((current) => ({ ...current, authPath: event.target.value }))}
-            placeholder="storage/sessions/facebook/page-a/state.json hoặc thư mục session"
+            placeholder="Để trống nếu sẽ login bằng browser sau khi tạo account"
           />
-          <small className="field-help">Dùng khi backend đọc trực tiếp authPath trong credentials.</small>
+          <small className="field-help">Tùy chọn. Dùng khi bạn đã có sẵn file storage state JSON.</small>
           <FormError message={errors.authPath} />
         </div>
         <div className="field full">
@@ -46,16 +40,16 @@ export function FacebookAccountForm({ draft, errors, setDraft }: PlatformFieldsP
             id="facebook-session-dir"
             value={draft.sessionDir}
             onChange={(event) => setDraft((current) => ({ ...current, sessionDir: event.target.value }))}
-            placeholder="storage/sessions/facebook/account-name"
+            placeholder="Để trống nếu sẽ login bằng browser sau khi tạo account"
           />
-          <small className="field-help">Dùng cho Playwright persistent context. Chỉ cần authPath hoặc sessionDir.</small>
+          <small className="field-help">Tùy chọn. Dùng cho Playwright persistent context nếu bạn đã có session folder sẵn.</small>
           <FormError message={errors.sessionDir} />
         </div>
       </div>
 
       <InlineNote tone="success">
         <ExternalLink aria-hidden size={14} />
-        <span>Mẹo: với tài khoản Facebook dùng để đăng bài, hãy tạo riêng từng thư mục session để tránh ghi đè cookie giữa các account.</span>
+        <span>Nếu một account Facebook đã đăng ổn định, nên giữ session riêng cho từng account để tránh ghi đè cookie.</span>
       </InlineNote>
     </section>
   );

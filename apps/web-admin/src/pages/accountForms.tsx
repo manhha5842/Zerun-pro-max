@@ -124,10 +124,6 @@ export function validateDraft(draft: AccountDraft): FormErrors {
   if (credentialsResult.error) errors.credentialsText = credentialsResult.error;
 
   if (draft.platform === "facebook") {
-    if (!draft.authPath.trim() && !draft.sessionDir.trim()) {
-      errors.authPath = "Nhập authPath hoặc sessionDir cho Facebook.";
-      errors.sessionDir = "Nhập authPath hoặc sessionDir cho Facebook.";
-    }
     const authPathError = validatePath(draft.authPath);
     const sessionDirError = validatePath(draft.sessionDir);
     if (authPathError) errors.authPath = authPathError;
