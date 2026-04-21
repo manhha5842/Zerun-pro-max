@@ -65,6 +65,7 @@ model TargetAccount {
   routingRules RoutingRule[]
   publishAttempts PublishAttempt[]
   schedules   Schedule[]
+  commentQueues CommentQueue[]
   fbPostTargets FbPostTarget[]
 
   @@index([platform])
@@ -128,6 +129,7 @@ model Content {
   links           ContentLink[]
   publishAttempts PublishAttempt[]
   schedules       Schedule[]
+  commentQueues   CommentQueue[]
 
   @@unique([platform, sourceId, externalId])
   @@index([status])
@@ -340,6 +342,27 @@ model FbPostComment {
   post         FbPost   @relation(fields: [postId], references: [id], onDelete: Cascade)
 
   @@index([postId])
+}
+
+model CommentQueue {
+  id          String        @id @default(cuid())
+  contentId   String
+  targetId    String
+  commentText String
+  commentMedia Json         @default("[]")
+  scheduledAt DateTime
+  status      String        @default("pending")
+  resultUrl   String?
+  error       String?
+  attemptNo   Int           @default(1)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  content     Content       @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  target      TargetAccount @relation(fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledAt])
+  @@index([contentId])
+  @@index([targetId])
 }
 
 model FbExecution {

@@ -96,6 +96,19 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
       createdAt: new Date().toISOString()
     });
 
+    try {
+      const tgSetting = await context.prisma.systemSetting.findUnique({ where: { key: "telegram_notify" } });
+      const tg = (tgSetting?.value ?? {}) as Record<string, unknown>;
+      if (tg.enabled && tg.botToken && tg.chatId) {
+        const msg = `✅ Đã đăng bài
+· Bài: ${content.code}
+· Tài khoản: ${target.name}
+· Nền tảng: ${target.platform}${result.url ? `
+· Link: ${result.url}` : ""}`; // eslint-disable-line no-useless-concat
+        await fetch(`https://api.telegram.org/bot${tg.botToken}/sendMessage?chat_id=${tg.chatId}&text=${encodeURIComponent(msg)}`).catch(() => {});
+      }
+    } catch {}
+
     await context.prisma.workerJobLog.update({
       where: { id: log.id },
       data: { status: "completed", completedAt: new Date() }
@@ -129,6 +142,19 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
       error: classified.message,
       createdAt: new Date().toISOString()
     });
+
+    try {
+      const tgSetting = await context.prisma.systemSetting.findUnique({ where: { key: "telegram_notify" } });
+      const tg = (tgSetting?.value ?? {}) as Record<string, unknown>;
+      if (tg.enabled && tg.botToken && tg.chatId) {
+        const msg = `❌ Đăng bài thất bại
+· Mã bài: ${job.contentId}
+· Nền tảng: ${targetPlatform ?? "unknown"}
+· Lỗi: ${classified.message}`;
+        await fetch(`https://api.telegram.org/bot${tg.botToken}/sendMessage?chat_id=${tg.chatId}&text=${encodeURIComponent(msg)}`).catch(() => {});
+      }
+    } catch {}
+
     await context.prisma.workerJobLog.update({
       where: { id: log.id },
       data: { status: "failed", error: classified.message, completedAt: new Date() }

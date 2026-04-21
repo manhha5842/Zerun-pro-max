@@ -246,6 +246,225 @@ async function registerProtectedRoutes(app: FastifyInstance) {
   registerImportRoutes(app);
   registerFacebookBrowserLoginRoutes(app);
   registerFacebookRoutes(app);
+  registerHistoryRoutes(app);
+  registerFailedRoutes(app);
+  registerCommentQueueRoutes(app);
+  registerTelegramSettingsRoutes(app);
+}
+
+function registerHistoryRoutes(app: FastifyInstance) {
+  app.get("/history", async (request) => {
+    const query = request.query as AnyBody;
+    const page = Math.max(Number(query.page ?? 1), 1);
+    const limit = Math.min(Math.max(Number(query.limit ?? 20), 1), 100);
+    const where: Prisma.PublishAttemptWhereInput = {};
+
+    if (query.status && String(query.status) !== "all") {
+      where.status = String(query.status);
+    }
+    if (query.platform && String(query.platform) !== "all") {
+      where.target = { is: { platform: String(query.platform) as Platform } };
+    }
+
+    const [total, attempts] = await Promise.all([
+      prisma.publishAttempt.count({ where }),
+      prisma.publishAttempt.findMany({
+        where,
+        include: {
+          content: { select: { id: true, code: true, originalText: true, draftText: true, finalText: true, metadata: true } },
+          target: { select: { id: true, name: true, platform: true } }
+        },
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit
+      })
+    ]);
+
+    return ok({ attempts }, buildPagination(page, limit, total));
+  });
+
+  app.get("/history/:attemptId/comments", async (request, reply) => {
+    const { attemptId } = request.params as { attemptId: string };
+    const attempt = await prisma.publishAttempt.findUnique({ where: { id: attemptId }, select: { contentId: true, targetId: true } });
+    if (!attempt) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy lần đăng."));
+
+    const queuedComments = await prisma.commentQueue.findMany({
+      where: { contentId: attempt.contentId, targetId: attempt.targetId },
+      orderBy: { createdAt: "desc" }
+    });
+
+    const content = await prisma.content.findUnique({
+      where: { id: attempt.contentId },
+      select: { metadata: true, updatedAt: true, createdAt: true }
+    });
+
+    const metadata = (content?.metadata ?? {}) as Record<string, unknown>;
+    const fallbackComment = typeof metadata.comment === "string" && metadata.comment.trim().length > 0
+      ? [{
+          id: `content-comment-${attemptId}`,
+          commentText: metadata.comment,
+          commentMedia: Array.isArray(metadata.commentMedia) ? metadata.commentMedia : [],
+          status: attempt.targetId ? "draft" : "draft",
+          scheduledAt: null,
+          resultUrl: null,
+          error: null,
+          createdAt: (content?.updatedAt ?? content?.createdAt ?? new Date()).toISOString(),
+          updatedAt: (content?.updatedAt ?? content?.createdAt ?? new Date()).toISOString()
+        }]
+      : [];
+
+    return ok({ comments: queuedComments.length > 0 ? queuedComments : fallbackComment });
+  });
+}
+
+function registerFailedRoutes(app: FastifyInstance) {
+  app.get("/failed", async (request) => {
+    const query = request.query as AnyBody;
+    const page = Math.max(Number(query.page ?? 1), 1);
+    const limit = Math.min(Math.max(Number(query.limit ?? 20), 1), 100);
+
+    const [total, contents] = await Promise.all([
+      prisma.content.count({ where: { status: "failed" } }),
+      prisma.content.findMany({
+        where: { status: "failed" },
+        include: {
+          publishAttempts: {
+            include: { target: { select: { id: true, name: true, platform: true } } },
+            orderBy: { createdAt: "desc" },
+            take: 5
+          }
+        },
+        orderBy: { updatedAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit
+      })
+    ]);
+
+    return ok({ contents }, buildPagination(page, limit, total));
+  });
+
+  app.post("/failed/:code/retry", async (request, reply) => {
+    const { code } = request.params as { code: string };
+    const body = request.body as AnyBody;
+    const content = await prisma.content.findUnique({ where: { code } });
+    if (!content) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy nội dung."));
+
+    let targetIds: string[] = [];
+    if (Array.isArray(body.targetIds) && body.targetIds.length > 0) {
+      targetIds = body.targetIds.map(String);
+    } else if (Array.isArray(content.scheduledTargets) && (content.scheduledTargets as unknown[]).length > 0) {
+      targetIds = (content.scheduledTargets as unknown[]).map(String);
+    } else {
+      const attempts = await prisma.publishAttempt.findMany({ where: { contentId: content.id }, orderBy: { createdAt: "desc" }, take: 5, select: { targetId: true } });
+      targetIds = [...new Set(attempts.map((item) => item.targetId))];
+    }
+
+    if (targetIds.length === 0) return reply.code(400).send(fail("NO_TARGETS", "Cần chỉ định tài khoản đăng."));
+
+    await prisma.content.update({ where: { code }, data: { status: "ready_to_publish" } });
+    await Promise.all(targetIds.map((targetId) => app.workerCore.publishNow(content.id, targetId, "admin")));
+    return ok({ queued: true, targetCount: targetIds.length });
+  });
+
+  app.post("/failed/:code/reschedule", async (request, reply) => {
+    const { code } = request.params as { code: string };
+    const body = request.body as AnyBody;
+    const content = await prisma.content.findUnique({ where: { code } });
+    if (!content) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy nội dung."));
+
+    const scheduledAt = body.scheduledAt ? new Date(String(body.scheduledAt)) : null;
+    if (!scheduledAt || Number.isNaN(scheduledAt.getTime())) {
+      return reply.code(400).send(fail("BAD_REQUEST", "Cần cung cấp scheduledAt hợp lệ."));
+    }
+
+    const targetIds = Array.isArray(content.scheduledTargets) ? (content.scheduledTargets as unknown[]).map(String) : [];
+    const schedules = await Promise.all(
+      targetIds.map((targetId) =>
+        prisma.schedule.create({
+          data: { contentId: content.id, targetId, scheduledAt }
+        })
+      )
+    );
+    await prisma.content.update({ where: { code }, data: { status: "scheduled", scheduledAt } });
+    await Promise.all(schedules.map((schedule) => app.workerCore.scheduleRelease(schedule.id, scheduledAt)));
+    return ok({ rescheduled: true, targetCount: targetIds.length });
+  });
+}
+
+function registerCommentQueueRoutes(app: FastifyInstance) {
+  app.get("/pending-comments", async (request) => {
+    const query = request.query as AnyBody;
+    const page = Math.max(Number(query.page ?? 1), 1);
+    const limit = Math.min(Math.max(Number(query.limit ?? 20), 1), 100);
+    const where: Prisma.CommentQueueWhereInput = {};
+
+    if (query.status && String(query.status) !== "all") {
+      where.status = String(query.status);
+    } else {
+      where.status = { in: ["pending", "failed"] };
+    }
+
+    const [total, comments] = await Promise.all([
+      prisma.commentQueue.count({ where }),
+      prisma.commentQueue.findMany({
+        where,
+        include: {
+          content: { select: { id: true, code: true, originalText: true, draftText: true, finalText: true } },
+          target: { select: { id: true, name: true, platform: true } }
+        },
+        orderBy: [{ scheduledAt: "asc" }, { createdAt: "desc" }],
+        skip: (page - 1) * limit,
+        take: limit
+      })
+    ]);
+
+    return ok({ comments }, buildPagination(page, limit, total));
+  });
+
+  app.post("/pending-comments/:id/retry", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const comment = await prisma.commentQueue.findUnique({ where: { id } });
+    if (!comment) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy comment."));
+    await prisma.commentQueue.update({ where: { id }, data: { status: "pending", scheduledAt: new Date(), error: null, updatedAt: new Date() } });
+    return ok({ queued: true });
+  });
+
+  app.post("/pending-comments/:id/reschedule", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as AnyBody;
+    const scheduledAt = body.scheduledAt ? new Date(String(body.scheduledAt)) : null;
+    if (!scheduledAt || Number.isNaN(scheduledAt.getTime())) return reply.code(400).send(fail("BAD_REQUEST", "Cần cung cấp scheduledAt."));
+    const comment = await prisma.commentQueue.findUnique({ where: { id } });
+    if (!comment) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy comment."));
+    await prisma.commentQueue.update({ where: { id }, data: { status: "pending", scheduledAt, error: null } });
+    return ok({ rescheduled: true });
+  });
+
+  app.delete("/pending-comments/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const comment = await prisma.commentQueue.findUnique({ where: { id } });
+    if (!comment) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy comment."));
+    await prisma.commentQueue.update({ where: { id }, data: { status: "cancelled" } });
+    return ok({ cancelled: true });
+  });
+}
+
+function registerTelegramSettingsRoutes(app: FastifyInstance) {
+  app.get("/settings/telegram", async () => {
+    const setting = await prisma.systemSetting.findUnique({ where: { key: "telegram_notify" } });
+    const data = (setting?.value ?? {}) as Record<string, unknown>;
+    return ok({ botToken: data.botToken ?? "", chatId: data.chatId ?? "", enabled: data.enabled ?? false });
+  });
+
+  app.put("/settings/telegram", async (request) => {
+    const body = request.body as AnyBody;
+    await prisma.systemSetting.upsert({
+      where: { key: "telegram_notify" },
+      create: { key: "telegram_notify", value: { botToken: String(body.botToken ?? ""), chatId: String(body.chatId ?? ""), enabled: Boolean(body.enabled) } },
+      update: { value: { botToken: String(body.botToken ?? ""), chatId: String(body.chatId ?? ""), enabled: Boolean(body.enabled) } }
+    });
+    return ok({ saved: true });
+  });
 }
 
 function registerContentRoutes(app: FastifyInstance) {

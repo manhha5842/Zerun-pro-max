@@ -5,7 +5,10 @@ import { CrawlDataPage } from "./pages/CrawlDataPage";
 import { ContentsPage } from "./pages/ContentsPage";
 import { ContentDetailPage } from "./pages/ContentDetailPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { FailedPage } from "./pages/FailedPage";
+import { HistoryPage } from "./pages/HistoryPage";
 import { ImportPage } from "./pages/ImportPage";
+import { PendingCommentsPage } from "./pages/PendingCommentsPage";
 import { PostComposerPage } from "./pages/PostComposerPage";
 import { SchedulesPage } from "./pages/SchedulesPage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -23,6 +26,9 @@ export function App() {
         <Route path="/crawl" element={<CrawlDataPage />} />
         <Route path="/import" element={<ImportPage />} />
         <Route path="/schedules" element={<SchedulesPage />} />
+        <Route path="/history" element={<HistoryPage />} />
+        <Route path="/failed" element={<FailedPage />} />
+        <Route path="/pending-comments" element={<PendingCommentsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/login" element={<Navigate to="/dashboard" replace />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
