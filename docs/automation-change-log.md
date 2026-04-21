@@ -25,12 +25,13 @@ Ghi lại từng thay đổi liên quan tới platform automation, kèm nguồn 
     - internal Playwright selector failure logs captured during publish debugging
 - **Confidence:** `github-reference` + `runtime-verified`
 
-### Instagram - feed publish fallback expansion
+### Instagram - feed publish hardening
 - **Files:**
   - `packages/adapters/src/platforms/instagram.ts`
 - **Summary:**
   - Mở rộng selector cho `Create/New post`, caption input và nút `Share`.
   - Tăng fallback cho upload file và submit.
+  - Thêm loop `Next/Continue` tới share screen và retry `Share` nhiều lần trước khi fail.
 - **Sources:**
   - GitHub reference:
     - `https://github.com/cagatayalptekin/video-poster/blob/e968419608aff9169231a22b1317e788ffd535fc/src/services/publishers/instagram-playwright.publisher.ts`
@@ -75,12 +76,13 @@ Ghi lại từng thay đổi liên quan tới platform automation, kèm nguồn 
     - chưa runtime-verified end-to-end trên máy hiện tại
 - **Confidence:** `github-reference`
 
-### Threads - post publish fallback expansion
+### Threads - post publish hardening
 - **Files:**
   - `packages/adapters/src/platforms/threads.ts`
 - **Summary:**
   - Mở rộng selector cho `New thread/Create/Compose/Viết`.
   - Mở rộng textbox fallback, media attach fallback, và `Post` submit fallback.
+  - Thêm retry `Post`, mở rộng media input (`image/video/file`) và attach flow để xử lý post media ổn định hơn.
 - **Sources:**
   - GitHub reference:
     - `https://github.com/NomaDamas/auto-hongmyungbo/blob/270a4520d2e7f5e22f9b89c159e548d34e2704af/frontend/src/server/browser-automation.ts`

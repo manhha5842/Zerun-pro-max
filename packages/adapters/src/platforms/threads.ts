@@ -96,50 +96,71 @@ export class ThreadsAdapter implements SourceAdapter, PublishAdapter {
         '[aria-label*="New thread" i]',
         '[aria-label*="Create" i]',
         '[aria-label*="Compose" i]',
-        'text=/New thread|Start a thread|Chuỗi mới|Bắt đầu/i',
+        '[aria-label*="new" i]',
+        'text=/New thread|Start a thread|Chuỗi mới|Bắt đầu|Viết/i',
         'div[role="button"]:has([class*="pencil"])',
         'div[role="button"]:has([class*="compose"])',
-        'a[href*="/intent/post"]'
+        'a[href*="/intent/post"]',
+        'a[href="/intent/post"]'
       ], { timeout: 15_000 });
 
       await page.waitForTimeout(1_000);
 
-      const textbox = page.locator('[role="dialog"] [role="textbox"], [role="textbox"], [contenteditable="true"]').first();
+      const textbox = page.locator('[role="dialog"] [role="textbox"], [role="textbox"], [contenteditable="true"], textarea').first();
       await textbox.click({ timeout: 10_000 });
       await textbox.fill(input.text);
       await page.waitForTimeout(500);
 
       if (mediaPaths.length > 0) {
-        const fileInput = page.locator('input[type="file"]');
+        const fileInput = page.locator('input[type="file"][accept*="image"], input[type="file"][accept*="video"], input[type="file"]');
         if (await fileInput.count() > 0) {
           await fileInput.first().setInputFiles(mediaPaths);
-          await page.waitForTimeout(3_000);
+          await page.waitForTimeout(4_000);
         } else {
           const opened = await clickFirstVisible(page, [
             '[aria-label*="photo" i]',
             '[aria-label*="media" i]',
             '[aria-label*="image" i]',
             '[aria-label*="attach" i]',
+            '[aria-label*="gallery" i]',
+            '[aria-label*="camera" i]',
             'button:has([class*="photo"])',
-            'button:has([class*="media"])'
+            'button:has([class*="media"])',
+            'div[role="button"]:has-text("Ảnh")'
           ], { timeout: 8_000 });
 
           if (opened) {
-            const [fileChooser] = await Promise.all([
-              page.waitForEvent("filechooser", { timeout: 15_000 }),
-              clickFirst(page, ['[aria-label*="Select" i]', 'button:has-text("Select")'], { timeout: 15_000 })
-            ]);
-            await fileChooser.setFiles(mediaPaths);
-            await page.waitForTimeout(3_000);
+            const chooserInput = page.locator('input[type="file"]').first();
+            if (await chooserInput.count().catch(() => 0)) {
+              await chooserInput.setInputFiles(mediaPaths);
+            } else {
+              const [fileChooser] = await Promise.all([
+                page.waitForEvent("filechooser", { timeout: 15_000 }),
+                clickFirst(page, ['[aria-label*="Select" i]', 'button:has-text("Select")', 'text=/Select|Chọn/i'], { timeout: 15_000 })
+              ]);
+              await fileChooser.setFiles(mediaPaths);
+            }
+            await page.waitForTimeout(4_000);
           }
         }
       }
 
-      await clickFirst(page, [
-        'text=/^Post$|^Dang$/i',
-        '[aria-label*="Post" i]',
-        'div[role="button"]:has-text("Post")'
-      ], { timeout: 20_000 });
+      let posted = false;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        posted = await clickFirstVisible(page, [
+          'text=/^Post$|^Dang$/i',
+          '[aria-label*="Post" i]',
+          'div[role="button"]:has-text("Post")',
+          'button:has-text("Post")',
+          'button[type="submit"]'
+        ], { timeout: 8_000 }).catch(() => false);
+        if (posted) break;
+        await page.waitForTimeout(1_000);
+      }
+
+      if (!posted) {
+        throw new Error("Could not find the Post button for Threads publish.");
+      }
 
       await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => undefined);
       await page.waitForTimeout(2_000);

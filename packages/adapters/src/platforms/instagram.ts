@@ -155,19 +155,26 @@ export class InstagramAdapter implements SourceAdapter, PublishAdapter {
       await page.waitForTimeout(3_000);
     }
 
-    await clickFirstVisible(page, [
-      'button:has-text("Next")',
-      '[aria-label*="Next" i]',
-      'text=/^Next$/i'
-    ], { timeout: 10_000 });
-    await page.waitForTimeout(1_000);
+    // Loop Next/Continue until Share screen appears (similar to reel flow)
+    for (let step = 0; step < 3; step += 1) {
+      const shareVisible = await hasVisible(page, [
+        'button:has-text("Share")',
+        '[aria-label*="Share" i]',
+        'text=/^Share$/i'
+      ], 3_000);
+      if (shareVisible) break;
 
-    await clickFirstVisible(page, [
-      'button:has-text("Next")',
-      '[aria-label*="Next" i]',
-      'text=/^Next$/i'
-    ], { timeout: 5_000 });
-    await page.waitForTimeout(1_000);
+      const nextClicked = await clickFirstVisible(page, [
+        'button:has-text("Next")',
+        'button:has-text("Continue")',
+        '[aria-label*="Next" i]',
+        '[aria-label*="Continue" i]',
+        'text=/^Next$|^Continue$/i'
+      ], { timeout: 6_000 }).catch(() => false);
+
+      if (!nextClicked) break;
+      await page.waitForTimeout(1_500);
+    }
 
     if (caption) {
       const textbox = page.locator('[aria-label*="Write a caption" i], textarea[aria-label*="caption" i], [contenteditable="true"][role="textbox"], textarea').first();
@@ -176,13 +183,22 @@ export class InstagramAdapter implements SourceAdapter, PublishAdapter {
       await page.waitForTimeout(500);
     }
 
-    await clickFirst(page, [
-      'button:has-text("Share")',
-      '[aria-label*="Share" i]',
-      'text=/^Share$/i',
-      'div[role="button"]:has-text("Share")',
-      'button[type="submit"]'
-    ], { timeout: 20_000 });
+    let shared = false;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      shared = await clickFirstVisible(page, [
+        'button:has-text("Share")',
+        '[aria-label*="Share" i]',
+        'text=/^Share$/i',
+        'div[role="button"]:has-text("Share")',
+        'button[type="submit"]'
+      ], { timeout: 8_000 }).catch(() => false);
+      if (shared) break;
+      await page.waitForTimeout(1_000);
+    }
+
+    if (!shared) {
+      throw new Error("Could not find the Share button for Instagram feed post.");
+    }
 
     await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => undefined);
     return { url: page.url(), metadata: { platform: "instagram", type: "feed" } };
