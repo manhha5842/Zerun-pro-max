@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FileText, RefreshCw, Search } from "lucide-react";
+import { Link } from "react-router-dom";
 import { apiGet } from "../api/client";
 import { EmptyState } from "../components/common/EmptyState";
 import { PageHeader } from "../components/common/PageHeader";
@@ -27,7 +28,9 @@ const statusLabel: Record<string, string> = {
   scheduled: "Đã lên lịch",
   publishing: "Đang đăng",
   failed: "Lỗi",
-  draft: "Nháp"
+  draft: "Nháp",
+  discovered: "Mới tạo",
+  processing: "Đang xử lý"
 };
 
 export function ContentsPage() {
@@ -48,11 +51,16 @@ export function ContentsPage() {
     <>
       <PageHeader
         title="Quản lý bài viết"
-        subtitle="Danh sách bài đã nhập, crawl hoặc import. Ưu tiên nhìn nhanh, bấm nhanh, không làm bạn phải đọc từng ô."
+        subtitle="Xem nhanh bài đã tạo, tìm theo mã hoặc nội dung, rồi mở chi tiết để sửa hoặc đăng lại."
         actions={
-          <Button variant="secondary" icon={<RefreshCw aria-hidden />} onClick={() => query.refetch()}>
-            Làm mới
-          </Button>
+          <div className="actions">
+            <Link to="/contents/new">
+              <Button>Tạo bài mới</Button>
+            </Link>
+            <Button variant="secondary" icon={<RefreshCw aria-hidden />} onClick={() => query.refetch()}>
+              Làm mới
+            </Button>
+          </div>
         }
       />
 
@@ -73,8 +81,8 @@ export function ContentsPage() {
         ) : (
           <div className="content-list">
             {filteredContents.map((content) => (
-              <a key={content.id} href={`/contents/${content.code}`} className="content-row-link">
-                <article className="content-row-card">
+              <Link key={content.id} to={`/contents/${content.code}`} className="content-row-link">
+                <article className="content-row-card content-row-card-clean">
                   <div className="content-row-main">
                     <div className="content-row-head">
                       <div className="content-row-title-wrap">
@@ -98,10 +106,10 @@ export function ContentsPage() {
                         <span>{content.platform}</span>
                       </div>
                     </div>
-                    <div className="content-row-action">{statusLabel[content.status] ?? content.status} • Xem chi tiết</div>
+                    <div className="content-row-action">{statusLabel[content.status] ?? content.status} · Xem chi tiết</div>
                   </div>
                 </article>
-              </a>
+              </Link>
             ))}
           </div>
         )}

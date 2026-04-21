@@ -292,10 +292,15 @@ button svg {
   align-items: start;
 }
 
+.composer-single-card {
+  max-width: 960px;
+}
+
 .composer-main-card {
   min-width: 0;
 }
 
+.composer-flow-grid,
 .composer-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -304,6 +309,17 @@ button svg {
 
 .compact-field {
   gap: 6px;
+}
+
+.composer-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.composer-checkbox-row {
+  padding-top: 4px;
 }
 
 .selection-summary {
@@ -337,7 +353,7 @@ button svg {
 }
 
 .composer-actions {
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
 }
 
@@ -781,9 +797,13 @@ button svg {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 220px;
   gap: 18px;
-  padding: 18px 20px;
+  padding: 16px 18px;
   border-top: 1px solid #eef1ed;
   transition: background 160ms ease;
+}
+
+.content-row-card-clean {
+  border-radius: 12px;
 }
 
 .content-row-link:first-child .content-row-card {
@@ -868,6 +888,7 @@ button svg {
     width: 100%;
   }
 
+  .composer-flow-grid,
   .content-row-card {
     grid-template-columns: 1fr;
   }
