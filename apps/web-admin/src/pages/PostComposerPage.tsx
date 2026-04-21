@@ -372,113 +372,8 @@ export function PostComposerPage() {
         </SectionCard>
       ) : null}
 
-      <SectionCard title="Nội dung bài đăng">
-        <div className="form-grid">
-          <div className="field">
-            <Label htmlFor="post-type">Loại bài</Label>
-            <Select
-              id="post-type"
-              value={form.type}
-              onChange={(event) => {
-                setError(null);
-                setMediaFiles([]);
-                setForm((current) => ({ ...current, type: event.target.value }));
-              }}
-            >
-              {postTypeOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </Select>
-          </div>
-          <div className="field full">
-            <Label htmlFor="post-content">Nội dung</Label>
-            <Textarea id="post-content" value={form.content} onChange={(event) => setForm((current) => ({ ...current, content: event.target.value }))} placeholder="Nhập nội dung bài đăng..." rows={8} />
-          </div>
-          <div className="field full">
-            <div className="inline-head">
-              <Label>Media</Label>
-              <Button type="button" variant="secondary" size="sm" icon={<Upload aria-hidden />} onClick={() => fileInputRef.current?.click()} disabled={uploadMutation.isPending}>
-                Upload file
-              </Button>
-            </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple={form.type === "feed"}
-              accept={form.type === "reel" ? "video/*" : "image/*,video/*"}
-              style={{ display: "none" }}
-              onChange={(event) => {
-                const files = Array.from(event.target.files ?? []);
-                for (const file of files) {
-                  uploadMutation.mutate({ file, kind: "post" });
-                }
-                event.currentTarget.value = "";
-              }}
-            />
-            <div className="upload-list">
-              {mediaFiles.length === 0 ? <div className="upload-empty">Chưa có file media.</div> : null}
-              {mediaFiles.map((file, index) => (
-                <div key={`${file.localPath}-${index}`} className="upload-item">
-                  <div>
-                    <strong>{file.filename}</strong>
-                    <small>{file.mimeType}</small>
-                  </div>
-                  <Button type="button" variant="ghost" size="icon" onClick={() => setMediaFiles((current) => current.filter((item) => item.localPath !== file.localPath))}>
-                    <X aria-hidden />
-                  </Button>
-                </div>
-              ))}
-            </div>
-            <small className="field-help">
-              {enabledAccountPlatforms.length === 1
-                ? mediaHint(enabledAccountPlatforms[0]!, form.type)
-                : mediaHint("facebook", form.type)}
-            </small>
-          </div>
-          <div className="field full">
-            <Label htmlFor="post-comment">Comment đầu tiên</Label>
-            <Textarea id="post-comment" value={form.comment} onChange={(event) => setForm((current) => ({ ...current, comment: event.target.value }))} rows={3} />
-          </div>
-          <div className="field full">
-            <div className="inline-head">
-              <Label>Media comment</Label>
-              <Button type="button" variant="secondary" size="sm" icon={<Upload aria-hidden />} onClick={() => commentFileInputRef.current?.click()} disabled={uploadMutation.isPending}>
-                Upload file
-              </Button>
-            </div>
-            <input
-              ref={commentFileInputRef}
-              type="file"
-              multiple
-              accept="image/*,video/*"
-              style={{ display: "none" }}
-              onChange={(event) => {
-                const files = Array.from(event.target.files ?? []);
-                for (const file of files) {
-                  uploadMutation.mutate({ file, kind: "comment" });
-                }
-                event.currentTarget.value = "";
-              }}
-            />
-            <div className="upload-list compact">
-              {commentMediaFiles.length === 0 ? <div className="upload-empty">Chưa có media comment.</div> : null}
-              {commentMediaFiles.map((file, index) => (
-                <div key={`${file.localPath}-${index}`} className="upload-item">
-                  <div>
-                    <strong>{file.filename}</strong>
-                    <small>{file.mimeType}</small>
-                  </div>
-                  <Button type="button" variant="ghost" size="icon" onClick={() => setCommentMediaFiles((current) => current.filter((item) => item.localPath !== file.localPath))}>
-                    <X aria-hidden />
-                  </Button>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Tài khoản đăng" description="Mỗi tài khoản có thể đăng ngay hoặc hẹn giờ riêng." style={{ marginTop: 16 }}>
+      <div className="composer-layout">
+        <SectionCard title="1. Chọn tài khoản đăng" description="Chọn account trước. Sau khi chọn account, loại bài và rule media sẽ tự rõ ràng hơn." className="composer-main-card">
         {targetAccounts.length === 0 ? (
           <EmptyState title="Chưa có tài khoản đăng bài nào" description="Hãy vào mục Tài khoản đăng bài để tạo account trước." />
         ) : (
@@ -488,7 +383,7 @@ export function PostComposerPage() {
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                   <Badge tone={PLATFORM_BADGE_TONE[platform] ?? "neutral"}>{getPlatformLabel(platform)}</Badge>
                   {platform === "threads" ? (
-                    <small style={{ color: "#68746d" }}>Threads: chỉ hỗ trợ loại bài feed.</small>
+                    <small style={{ color: "#68746d" }}>Threads chỉ hỗ trợ feed.</small>
                   ) : null}
                 </div>
                 {accounts.map((account) => {
@@ -522,7 +417,7 @@ export function PostComposerPage() {
 
                       {config.enabled ? (
                         <div className="target-schedule-controls">
-                          <div className="field">
+                          <div className="field compact-field">
                             <Label>Chế độ</Label>
                             <Select
                               value={config.mode}
@@ -538,7 +433,7 @@ export function PostComposerPage() {
                               <option value="schedule">Hẹn lịch</option>
                             </Select>
                           </div>
-                          <div className="field">
+                          <div className="field compact-field">
                             <Label>Thời gian</Label>
                             <Input
                               type="datetime-local"
@@ -561,14 +456,134 @@ export function PostComposerPage() {
             ))}
           </div>
         )}
+      </SectionCard>
 
-        <div className="actions" style={{ marginTop: 16 }}>
+      <SectionCard title="2. Nội dung bài đăng" className="composer-main-card">
+        <div className="composer-form-grid">
+          <div className="field compact-field">
+            <Label htmlFor="post-type">Loại bài</Label>
+            <Select
+              id="post-type"
+              value={form.type}
+              onChange={(event) => {
+                setError(null);
+                setMediaFiles([]);
+                setForm((current) => ({ ...current, type: event.target.value }));
+              }}
+            >
+              {postTypeOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </Select>
+          </div>
+
+          <div className="field compact-field">
+            <Label>Tài khoản đã chọn</Label>
+            <div className="selection-summary">
+              <strong>{selectedTargetCount}</strong>
+              <span>account</span>
+            </div>
+          </div>
+
+          <div className="field full">
+            <Label htmlFor="post-content">Nội dung</Label>
+            <Textarea id="post-content" value={form.content} onChange={(event) => setForm((current) => ({ ...current, content: event.target.value }))} placeholder="Nhập nội dung bài đăng..." rows={6} className="composer-textarea" />
+          </div>
+
+          <div className="field full">
+            <div className="inline-head">
+              <Label>Media</Label>
+              <Button type="button" variant="secondary" size="sm" icon={<Upload aria-hidden />} onClick={() => fileInputRef.current?.click()} disabled={uploadMutation.isPending}>
+                Upload file
+              </Button>
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple={form.type === "feed"}
+              accept={form.type === "reel" ? "video/*" : "image/*,video/*"}
+              style={{ display: "none" }}
+              onChange={(event) => {
+                const files = Array.from(event.target.files ?? []);
+                for (const file of files) {
+                  uploadMutation.mutate({ file, kind: "post" });
+                }
+                event.currentTarget.value = "";
+              }}
+            />
+            <div className="upload-list compact-two-col">
+              {mediaFiles.length === 0 ? <div className="upload-empty">Chưa có file media.</div> : null}
+              {mediaFiles.map((file, index) => (
+                <div key={`${file.localPath}-${index}`} className="upload-item">
+                  <div>
+                    <strong>{file.filename}</strong>
+                    <small>{file.mimeType}</small>
+                  </div>
+                  <Button type="button" variant="ghost" size="icon" onClick={() => setMediaFiles((current) => current.filter((item) => item.localPath !== file.localPath))}>
+                    <X aria-hidden />
+                  </Button>
+                </div>
+              ))}
+            </div>
+            <small className="field-help">
+              {enabledAccountPlatforms.length === 1
+                ? mediaHint(enabledAccountPlatforms[0]!, form.type)
+                : mediaHint("facebook", form.type)}
+            </small>
+          </div>
+
+          <div className="field full">
+            <Label htmlFor="post-comment">Comment đầu tiên</Label>
+            <Textarea id="post-comment" value={form.comment} onChange={(event) => setForm((current) => ({ ...current, comment: event.target.value }))} rows={3} className="composer-textarea composer-textarea-sm" />
+          </div>
+
+          <div className="field full">
+            <div className="inline-head">
+              <Label>Media comment</Label>
+              <Button type="button" variant="secondary" size="sm" icon={<Upload aria-hidden />} onClick={() => commentFileInputRef.current?.click()} disabled={uploadMutation.isPending}>
+                Upload file
+              </Button>
+            </div>
+            <input
+              ref={commentFileInputRef}
+              type="file"
+              multiple
+              accept="image/*,video/*"
+              style={{ display: "none" }}
+              onChange={(event) => {
+                const files = Array.from(event.target.files ?? []);
+                for (const file of files) {
+                  uploadMutation.mutate({ file, kind: "comment" });
+                }
+                event.currentTarget.value = "";
+              }}
+            />
+            <div className="upload-list compact-two-col compact">
+              {commentMediaFiles.length === 0 ? <div className="upload-empty">Chưa có media comment.</div> : null}
+              {commentMediaFiles.map((file, index) => (
+                <div key={`${file.localPath}-${index}`} className="upload-item">
+                  <div>
+                    <strong>{file.filename}</strong>
+                    <small>{file.mimeType}</small>
+                  </div>
+                  <Button type="button" variant="ghost" size="icon" onClick={() => setCommentMediaFiles((current) => current.filter((item) => item.localPath !== file.localPath))}>
+                    <X aria-hidden />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="actions composer-actions" style={{ marginTop: 16 }}>
           <Button icon={<Send aria-hidden />} onClick={() => { setError(null); submitMutation.mutate(); }} disabled={selectedTargetCount === 0 || submitMutation.isPending || uploadMutation.isPending}>
             {submitMutation.isPending ? "Đang xử lý..." : "Lưu và chạy"}
           </Button>
           <div className="actions-note">Đã chọn {selectedTargetCount} tài khoản</div>
         </div>
       </SectionCard>
+      </div>
+
     </>
   );
 }

@@ -8,7 +8,7 @@ import {
   Settings,
   Users
 } from "lucide-react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 
 const navSections = [
   {
@@ -35,6 +35,8 @@ const navSections = [
 ];
 
 export function Layout() {
+  const location = useLocation();
+
   return (
     <div className="app-shell auto-style-shell">
       <aside className="sidebar auto-style-sidebar">
@@ -53,12 +55,18 @@ export function Layout() {
             <div key={`${section.label}-${index}`} className="nav-section-block">
               {section.label ? <div className="nav-section-label">{section.label}</div> : null}
               <div className="nav-list">
-                {section.items.map((item) => (
-                  <NavLink key={item.to + item.label} to={item.to} className={({ isActive }) => `nav-item auto-style-nav ${isActive ? "active" : ""}`}>
-                    <item.icon aria-hidden />
-                    <span>{item.label}</span>
-                  </NavLink>
-                ))}
+                {section.items.map((item) => {
+                  const active = item.to === "/contents"
+                    ? location.pathname === "/contents" || /^\/contents\/[^/]+(?:\/edit)?$/.test(location.pathname)
+                    : location.pathname === item.to;
+
+                  return (
+                    <NavLink key={item.to + item.label} to={item.to} end className={`nav-item auto-style-nav ${active ? "active" : ""}`}>
+                      <item.icon aria-hidden />
+                      <span>{item.label}</span>
+                    </NavLink>
+                  );
+                })}
               </div>
             </div>
           ))}
