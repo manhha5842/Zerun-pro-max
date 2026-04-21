@@ -3,6 +3,7 @@ import path from "node:path";
 import { AdapterAuthError, AdapterCheckpointError, RetryableNetworkError, type Platform } from "@zerun/shared";
 import type { AdapterAccount, AdapterHealth, CrawlInput, CrawlResult, PublishAdapter, PublishInput, PublishResult, SourceAdapter } from "../contracts.js";
 import { readString } from "../utils/credentials.js";
+import { clickFirst, clickFirstVisible, hasVisible } from "../utils/playwright-helpers.js";
 
 export class InstagramAdapter implements SourceAdapter, PublishAdapter {
   readonly platform: Platform = "instagram";
@@ -400,19 +401,6 @@ async function captureScreenshot(context: any, dir: string, name: string): Promi
   return filePath;
 }
 
-async function clickFirst(page: any, selectors: string[], options: { timeout?: number } = {}): Promise<void> {
-  let lastError: unknown;
-  for (const selector of selectors) {
-    try {
-      await page.locator(selector).first().click({ timeout: options.timeout ?? 8_000 });
-      return;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error(`Could not click any selector: ${selectors.join(" | ")}`);
-}
-
 function resolveInstagramPublishType(input: PublishInput): "feed" | "story" | "reel" {
   const metadataType = String(input.media[0]?.metadata?.postType ?? input.media[0]?.metadata?.type ?? "").toLowerCase();
   const configType = String((input.account.config as Record<string, unknown>)?.publishType ?? "").toLowerCase();
@@ -420,34 +408,6 @@ function resolveInstagramPublishType(input: PublishInput): "feed" | "story" | "r
   if (combined === "story") return "story";
   if (combined === "reel") return "reel";
   return "feed";
-}
-
-async function clickFirstVisible(page: any, selectors: string[], options: { timeout?: number } = {}): Promise<boolean> {
-  for (const selector of selectors) {
-    try {
-      const loc = page.locator(selector).first();
-      const visible = await loc.isVisible({ timeout: options.timeout ?? 3_000 }).catch(() => false);
-      if (visible) {
-        await loc.click({ timeout: options.timeout ?? 3_000 });
-        return true;
-      }
-    } catch {
-      // try next
-    }
-  }
-  return false;
-}
-
-async function hasVisible(page: any, selectors: string[], timeout = 3_000): Promise<boolean> {
-  for (const selector of selectors) {
-    try {
-      const visible = await page.locator(selector).first().isVisible({ timeout }).catch(() => false);
-      if (visible) return true;
-    } catch {
-      // try next
-    }
-  }
-  return false;
 }
 
 function collectInstagramMedia(item: any) {

@@ -60,6 +60,7 @@ export class ZaloBotAdapter implements SourceAdapter, PublishAdapter {
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
+    // TODO: not yet implemented - Zalo OA publish is scaffold only; needs runtime validation before production use
     const accessToken = readString(input.account.credentials, "accessToken");
     const userId = readString(input.account.credentials, "userId", input.account.handle ?? undefined);
     const imageUrl = input.media.find((m) => m.type === "image")?.url ?? readOptionalString(input.account.credentials, "imageUrl");

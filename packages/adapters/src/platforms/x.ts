@@ -49,6 +49,7 @@ export class XAdapter implements SourceAdapter, PublishAdapter {
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
+    // TODO: not yet implemented - X/Twitter publish is scaffold only; needs runtime validation before production use
     if ((input.account.config as Record<string, unknown>)?.usePlaywright === true) {
       return this.publishViaPlaywright(input);
     }

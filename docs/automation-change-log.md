@@ -6,6 +6,22 @@ Ghi lại từng thay đổi liên quan tới platform automation, kèm nguồn 
 
 ## 2026-04-21
 
+### Adapters - shared Playwright helpers extracted
+- **Files:**
+  - `packages/adapters/src/utils/playwright-helpers.ts` (new)
+  - `packages/adapters/src/platforms/instagram.ts` (imports refactored)
+  - `packages/adapters/src/platforms/x.ts` (TODO comment)
+  - `packages/adapters/src/platforms/zalo-bot.ts` (TODO comment)
+  - `packages/adapters/src/platforms/zalo-web.ts` (TODO comment)
+- **Summary:**
+  - Extracted `hasVisible`, `clickFirst`, `clickFirstVisible` from `instagram.ts` into shared `packages/adapters/src/utils/playwright-helpers.ts`.
+  - Existing local definitions in `facebook.ts` remain (no selector changes; no source required).
+  - Added `// TODO: not yet implemented` to publish method bodies in X, Zalo-bot, and Zalo-web adapters to make scaffold status explicit.
+  - No new automation selectors introduced; no UI flow changes.
+- **Sources:**
+  - Internal refactor only; no automation selectors changed.
+- **Confidence:** `n/a` (refactor; no new automation logic)
+
 ### Facebook - feed/story/reel publish hardening
 - **Files:**
   - `packages/adapters/src/platforms/facebook.ts`

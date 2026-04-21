@@ -63,6 +63,7 @@ export class ZaloWebAdapter implements SourceAdapter, PublishAdapter {
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
+    // TODO: not yet implemented - Zalo Web publish automation is scaffold only; needs runtime validation before production use
     const context = await this.openContext(input.account);
     const targetUrl = readOptionalString(input.account.credentials, "targetUrl");
     const targetName = readOptionalString(input.account.credentials, "targetName") ?? input.account.handle ?? undefined;
