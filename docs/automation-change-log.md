@@ -34,8 +34,10 @@ Ghi lại từng thay đổi liên quan tới platform automation, kèm nguồn 
 - **Sources:**
   - GitHub reference:
     - `https://github.com/cagatayalptekin/video-poster/blob/e968419608aff9169231a22b1317e788ffd535fc/src/services/publishers/instagram-playwright.publisher.ts`
-    - `https://github.com/nmthangdn2000/social-tool/blob/5079d9b7c33b2d0014dacfe8d86ad3eacaee9507/src/commands/post-reels-instagram/post-reels-instagram.command.ts`
-    - `https://github.com/angelcgar/social-bot/blob/076e8af879ba3595ffbe50604b6dc9e8c41b8b92/src/networks/instagram.ts`
+    - `https://github.com/billion-app/billion/blob/6845aa689d10d0630fd4bb73e3481f44bc80a665/social-media-agent/example-instagram-post.ts`
+    - `https://github.com/eugineous/propost/blob/2ebf0b3d22c8a3578758e789f882f7be83518dfd/lib/fallback/playwright.ts`
+    - `https://github.com/KhungLongAnCo/auto-upload-videos/blob/39ac54e2049c09f157d9ad9af51631e3d208e21b/lib/publishers/instagram.ts`
+    - `https://github.com/johnumarattil/social-post-engine/blob/d1ba7e9b30f934d73fa9c5edd0bf52991c28b2bd/packages/agents/src/instagram-publisher.ts`
   - Status:
     - chưa runtime-verified end-to-end trên máy hiện tại
 - **Confidence:** `github-reference`
@@ -45,16 +47,19 @@ Ghi lại từng thay đổi liên quan tới platform automation, kèm nguồn 
   - `packages/adapters/src/platforms/instagram.ts`
 - **Summary:**
   - Thêm auth check trước khi publish story.
-  - Thêm direct route `https://www.instagram.com/stories/create/`.
   - Thêm fallback từ home vào `Your Story / Tin của bạn`.
   - Thêm upload fallback và bước `Next / Tiếp` trước khi `Add to story / Share to story`.
+  - Có thử direct route `https://www.instagram.com/stories/create/`, nhưng hiện chưa có bằng chứng automation đủ mạnh để coi là nguồn xác nhận.
 - **Sources:**
-  - GitHub reference:
+  - GitHub reference cho story/share patterns:
     - `https://github.com/Akbar120/Ai-Assistant-Project/blob/b9fd9ad29e3bff977c0bd1e3c2e97cbbab7f8ad5/src/lib/automation.ts`
     - `https://github.com/RhythrosaLabs/otto-mate-2/blob/458bc1d8a6ac02a00eb317a8a9b57a0b4d972ea4/src/lib/social-media-browser.ts`
+  - GitHub search result có literal URL nhưng không phải bằng chứng automation đủ mạnh:
+    - `https://github.com/aqua-019/djpepewtf/blob/a3b7d8678acca4fc41d4e7d74c8e3345be126ee7/src/lib/shareUtils.js`
+    - `https://github.com/future-fwp/feature-testing/blob/5be7c68ff852d80908f71e215c17c51f3f731818/src/hooks/useShareToInstagram.tsx`
   - Note:
-    - direct route `/stories/create/` hiện mới ở mức **GitHub/pattern-based reference**, chưa có official doc và chưa runtime-verified end-to-end tại thời điểm ghi log.
-- **Confidence:** `github-reference`
+    - direct route `/stories/create/` hiện phải xem là **hypothesis/pattern inference**, chưa có official doc và chưa runtime-verified end-to-end.
+- **Confidence:** `hypothesis` + `github-reference`
 
 ### Threads - post publish fallback expansion
 - **Files:**
@@ -64,8 +69,8 @@ Ghi lại từng thay đổi liên quan tới platform automation, kèm nguồn 
   - Mở rộng textbox fallback, media attach fallback, và `Post` submit fallback.
 - **Sources:**
   - GitHub reference:
-    - `https://github.com/AlanAndreUP/scrapper_theards/blob/8782d0536f081b1aa50b1ec341e3990f2196a570/src/scraper/threadsScraper.ts`
     - `https://github.com/NomaDamas/auto-hongmyungbo/blob/270a4520d2e7f5e22f9b89c159e548d34e2704af/frontend/src/server/browser-automation.ts`
+    - `https://github.com/AlanAndreUP/scrapper_theards/blob/8782d0536f081b1aa50b1ec341e3990f2196a570/src/scraper/threadsScraper.ts`
   - Status:
     - chưa runtime-verified end-to-end trên máy hiện tại
 - **Confidence:** `github-reference`
