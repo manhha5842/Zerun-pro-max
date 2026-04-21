@@ -111,8 +111,7 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
 
     try {
       const page = await context.newPage();
-      const landingUrl = this.resolvePublishUrl(input.account);
-      await page.goto(landingUrl, { waitUntil: "domcontentloaded", timeout: 40_000 });
+      await page.goto(FACEBOOK_HOME_URL, { waitUntil: "domcontentloaded", timeout: 40_000 });
       await dismissCookieDialog(page);
       await this.ensureAuthenticated(page, context);
 
@@ -287,16 +286,6 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
     }
 
     await clickFirst(page, publishSelectors, { timeout: 20_000 });
-  }
-
-  private resolvePublishUrl(account: AdapterAccount): string {
-    const accountType = readString(account.credentials, "accountType", "profile");
-    const handle = account.handle?.trim();
-    if (handle) {
-      const slug = handle.replace(/^https?:\/\/(www\.)?facebook\.com\//, "").replace(/\/$/, "");
-      if (slug) return `https://www.facebook.com/${slug}`;
-    }
-    return FACEBOOK_HOME_URL;
   }
 
   private async openComposer(page: any): Promise<void> {
