@@ -3,6 +3,11 @@ import { publishExecuteJobSchema, type PublishExecuteJob } from "../types.js";
 import type { ProcessorContext } from "./context.js";
 import { mapMediaAssets, toAdapterAccount } from "./helpers.js";
 
+// BullMQ handles retries automatically via defaultJobOptions in runtime.ts:
+// - attempts: 3 (max 3 total attempts)
+// - backoff: exponential, starting at 5_000ms (approx 5s, 10s, 20s for attempts 1-3)
+// If you need finer control (1s/2s/4s), set per-job options when enqueuing.
+
 export async function processPublish(rawJob: unknown, context: ProcessorContext) {
   const job = publishExecuteJobSchema.parse(rawJob) satisfies PublishExecuteJob;
   const startedAt = new Date();
@@ -27,16 +32,21 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
     }
   });
 
+  let targetPlatform: string | undefined;
+
   try {
     const content = await context.prisma.content.findUniqueOrThrow({
       where: { id: job.contentId },
       include: { media: true, source: { include: { routingRules: true } } }
     });
     const target = await context.prisma.targetAccount.findUniqueOrThrow({ where: { id: job.targetId } });
+    targetPlatform = target.platform;
     if (!target.isActive || target.health === "paused") throw new Error("Target đang tắt hoặc bị pause");
 
     await context.prisma.content.update({ where: { id: content.id }, data: { status: "publishing" } });
 
+    // Routes by target.platform: facebook, instagram, threads, x, zalo-bot, zalo-web, etc.
+    // The adapter registry resolves the correct adapter for each platform automatically.
     const adapter = context.registry.getPublish(target.platform as never);
     const result = await adapter.publish({
       account: toAdapterAccount(target),
@@ -115,7 +125,7 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
       type: "publish:failed",
       contentId: job.contentId,
       targetId: job.targetId,
-      platform: "telegram",
+      platform: (targetPlatform ?? "telegram") as never,
       error: classified.message,
       createdAt: new Date().toISOString()
     });
