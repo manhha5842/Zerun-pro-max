@@ -18,7 +18,7 @@ export function App() {
         <Route path="/contents" element={<ContentsPage />} />
         <Route path="/contents/new" element={<PostComposerPage />} />
         <Route path="/contents/:code" element={<ContentDetailPage />} />
-        <Route path="/contents/:code/edit" element={<ContentDetailPage editMode />} />
+        <Route path="/contents/:code/edit" element={<ContentDetailPage />} />
         <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/crawl" element={<CrawlDataPage />} />
         <Route path="/import" element={<ImportPage />} />

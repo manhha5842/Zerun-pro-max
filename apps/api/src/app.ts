@@ -315,6 +315,34 @@ function registerContentRoutes(app: FastifyInstance) {
     return ok({ text: content.finalText ?? content.draftText ?? content.originalText });
   });
 
+  app.put("/contents/:code/edit", async (request, reply) => {
+    const { code } = request.params as { code: string };
+    const body = request.body as AnyBody;
+    const current = await prisma.content.findUnique({ where: { code } });
+    if (!current) return reply.code(404).send(fail("NOT_FOUND", "Khong tim thay noi dung."));
+
+    const baseMetadata = current.metadata && typeof current.metadata === "object" && !Array.isArray(current.metadata)
+      ? (current.metadata as Record<string, unknown>)
+      : {};
+    const nextMetadata = {
+      ...baseMetadata,
+      ...(body.type !== undefined ? { type: String(body.type) } : {}),
+      ...(body.comment !== undefined ? { comment: String(body.comment) } : {}),
+      ...(Array.isArray(body.mediaPaths) ? { mediaPaths: body.mediaPaths.map(String) } : {})
+    };
+    const nextTargetIds = Array.isArray(body.targetIds) ? body.targetIds.map(String) : current.scheduledTargets;
+
+    const content = await prisma.content.update({
+      where: { code },
+      data: {
+        ...(body.draftText !== undefined ? { draftText: String(body.draftText) } : {}),
+        scheduledTargets: (nextTargetIds ?? undefined) as Prisma.InputJsonValue | undefined,
+        metadata: nextMetadata as Prisma.InputJsonValue
+      }
+    });
+    return ok({ content });
+  });
+
   app.put("/contents/:code/draft", async (request, reply) => {
     const { code } = request.params as { code: string };
     const body = request.body as AnyBody;
