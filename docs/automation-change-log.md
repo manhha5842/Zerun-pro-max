@@ -1,5 +1,7 @@
 # Automation Change Log
 
+> Trước khi merge thay đổi automation/publish flow, kiểm tra nhanh `IMPLEMENTATION_CHECKLIST.md`.
+
 Ghi lại từng thay đổi liên quan tới platform automation, kèm nguồn tham chiếu cụ thể.
 
 ---

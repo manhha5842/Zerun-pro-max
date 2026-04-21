@@ -1,4 +1,4 @@
-export const platforms = ["telegram", "x", "threads", "instagram", "facebook"] as const;
+export const platforms = ["telegram", "x", "threads", "instagram", "facebook", "zalo-bot", "zalo-web"] as const;
 export type Platform = (typeof platforms)[number];
 
 export const accountKinds = ["source", "target"] as const;

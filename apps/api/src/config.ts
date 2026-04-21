@@ -10,6 +10,8 @@ const envSchema = z.object({
   REFRESH_TOKEN_DAYS: z.coerce.number().default(30),
   REDIS_URL: z.string().default("redis://localhost:6379"),
   FACEBOOK_SESSION_ROOT: z.string().default("storage/sessions/facebook"),
+  INSTAGRAM_SESSION_ROOT: z.string().default("storage/sessions/instagram"),
+  THREADS_SESSION_ROOT: z.string().default("storage/sessions/threads"),
   MEDIA_UPLOAD_ROOT: z.string().default("storage/uploads/manual")
 });
 
