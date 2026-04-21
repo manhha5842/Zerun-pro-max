@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Brain, Download, Play, RefreshCw, Sparkles, Wand2 } from "lucide-react";
 import { apiGet, apiPost } from "../api/client";
+import { PageHeader } from "../components/common/PageHeader";
+import { SectionCard } from "../components/common/SectionCard";
 import { StatusBadge } from "../components/common/StatusBadge";
 import { Button } from "../components/ui/Button";
 import { AccountForm, type AccountFormValues } from "./accountForms";
@@ -26,7 +28,7 @@ export function CrawlDataPage() {
     mutationFn: (values: AccountFormValues) => apiPost("/sources", values),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["sources"] });
-      setFeedback({ type: "success", message: "Đã thêm tài khoản nguồn crawl." });
+      setFeedback({ type: "success", message: "Đã thêm tài khoản nguồn." });
     },
     onError: (error: Error) => setFeedback({ type: "error", message: error.message })
   });
@@ -35,55 +37,55 @@ export function CrawlDataPage() {
     mutationFn: (id: string) => apiPost(`/sources/${id}/crawl`),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["sources"] });
-      setFeedback({ type: "success", message: "Đã đưa nguồn vào hàng đợi crawl." });
+      setFeedback({ type: "success", message: "Đã đưa nguồn vào hàng chờ crawl." });
     },
     onError: (error: Error) => setFeedback({ type: "error", message: error.message })
   });
 
   return (
     <>
-      <header className="page-head">
-        <div>
-          <h1 className="page-title">Crawl data</h1>
-          <p className="page-subtitle">Tài khoản nguồn và luồng thu thập nội dung được tách riêng khỏi quản lý tài khoản đăng bài.</p>
-        </div>
-        <Button variant="secondary" icon={<RefreshCw aria-hidden />} onClick={() => query.refetch()} disabled={query.isFetching}>
-          {query.isFetching ? "Đang tải..." : "Làm mới"}
-        </Button>
-      </header>
+      <PageHeader
+        title="Crawl data"
+        subtitle="Quản lý tài khoản nguồn và luồng lấy nội dung, tách riêng khỏi tài khoản đăng bài."
+        actions={
+          <Button variant="secondary" icon={<RefreshCw aria-hidden />} onClick={() => query.refetch()} disabled={query.isFetching}>
+            {query.isFetching ? "Đang tải..." : "Làm mới"}
+          </Button>
+        }
+      />
 
-      <section className="feature-grid" style={{ marginBottom: 18 }}>
+      <section className="feature-grid feature-grid-tight" style={{ marginBottom: 18 }}>
         <div className="panel panel-pad feature-card">
           <div className="feature-card-head">
             <Brain aria-hidden />
             <strong>Tối ưu nội dung sau crawl</strong>
           </div>
-          <p className="muted-copy">Chuẩn bị khu vực để rewrite/optimistic nội dung sau khi crawl trước khi đưa sang đăng bài.</p>
+          <p className="muted-copy">Chuẩn bị vùng xử lý lại nội dung sau khi crawl trước khi đưa sang đăng bài.</p>
           <div className="inline-note">
             <Sparkles aria-hidden size={14} />
-            <span>UI đã tách flow. Bước tối ưu sâu sẽ nối thêm vào API xử lý nội dung.</span>
+            <span>Phần UI đã tách riêng. Bước xử lý sâu sẽ nối tiếp vào API sau.</span>
           </div>
         </div>
 
         <div className="panel panel-pad feature-card">
           <div className="feature-card-head">
             <ArrowRight aria-hidden />
-            <strong>Đẩy thẳng sang luồng đăng</strong>
+            <strong>Đẩy sang luồng đăng</strong>
           </div>
-          <p className="muted-copy">Sau crawl có thể chọn nội dung để đưa trực tiếp sang tài khoản đăng hoặc campaign phù hợp.</p>
+          <p className="muted-copy">Sau khi crawl xong, có thể chọn nội dung phù hợp để chuyển sang luồng đăng bài.</p>
           <Button variant="secondary" disabled>
-            Sắp nối flow đăng ngay
+            Sẽ nối tiếp
           </Button>
         </div>
 
         <div className="panel panel-pad feature-card">
           <div className="feature-card-head">
             <Download aria-hidden />
-            <strong>Xuất Excel để import lại</strong>
+            <strong>Xuất Excel</strong>
           </div>
-          <p className="muted-copy">Giữ đúng luồng bạn muốn: crawl xong có thể xuất file Excel để rà lại và import vào thư viện bài viết.</p>
+          <p className="muted-copy">Giữ đúng flow đang dùng: crawl xong có thể xuất file để rà lại rồi import vào thư viện bài viết.</p>
           <Button variant="secondary" disabled>
-            Sắp nối export Excel
+            Sẽ nối tiếp
           </Button>
         </div>
       </section>
@@ -91,20 +93,14 @@ export function CrawlDataPage() {
       {feedback ? <div className={`banner ${feedback.type}`}>{feedback.message}</div> : null}
 
       <section className="split split-wide">
-        <div className="panel">
-          <div className="section-block-head">
-            <div>
-              <h2>Tài khoản nguồn crawl</h2>
-              <p className="muted-copy">Chỉ các tài khoản dùng để lấy dữ liệu đầu vào. Không trộn với tài khoản đăng.</p>
-            </div>
-          </div>
-          <table className="table">
+        <SectionCard title="Tài khoản nguồn" description="Chỉ các tài khoản dùng để lấy dữ liệu đầu vào.">
+          <table className="table table-compact">
             <thead>
               <tr>
                 <th>Tên</th>
                 <th>Nền tảng</th>
                 <th>Handle</th>
-                <th>Sức khỏe</th>
+                <th>Trạng thái</th>
                 <th>Thao tác</th>
               </tr>
             </thead>
@@ -119,10 +115,11 @@ export function CrawlDataPage() {
                   <td>{source.handle || <span className="table-subtle">Chưa có</span>}</td>
                   <td>
                     <StatusBadge status={source.health} />
+                    {source.lastCrawledAt ? <div className="table-subtle" style={{ marginTop: 6 }}>Lần gần nhất: {new Date(source.lastCrawledAt).toLocaleString("vi-VN")}</div> : null}
                   </td>
                   <td>
                     <Button variant="secondary" icon={<Play aria-hidden />} onClick={() => crawl.mutate(source.id)} disabled={crawl.isPending}>
-                      {crawl.isPending ? "Đang queue..." : "Crawl"}
+                      {crawl.isPending ? "Đang đưa vào hàng chờ..." : "Chạy crawl"}
                     </Button>
                   </td>
                 </tr>
@@ -136,11 +133,11 @@ export function CrawlDataPage() {
               ) : null}
             </tbody>
           </table>
-        </div>
+        </SectionCard>
 
         <AccountForm
           label="Thêm tài khoản nguồn"
-          description="Khu vực riêng cho crawl data. Source account không còn nằm trong flow lưu tài khoản đăng bài."
+          description="Tài khoản nguồn được tạo và quản lý riêng trong khu vực crawl data."
           submitLabel="Thêm nguồn"
           fixedKind="source"
           isSubmitting={create.isPending}
@@ -153,18 +150,18 @@ export function CrawlDataPage() {
         />
       </section>
 
-      <section className="panel panel-pad" style={{ marginTop: 18 }}>
+      <SectionCard title="Flow crawl" description="Luồng làm việc dự kiến, bám theo cấu trúc gọn và tách bước rõ ràng.">
         <div className="feature-card-head">
           <Wand2 aria-hidden />
-          <strong>Flow mục tiêu theo style auto_post_agent</strong>
+          <strong>Luồng thao tác</strong>
         </div>
         <ol className="note-list">
-          <li>Thêm tài khoản nguồn crawl tại đây.</li>
+          <li>Thêm tài khoản nguồn.</li>
           <li>Chạy crawl để lấy dữ liệu.</li>
-          <li>Tối ưu/chỉnh nội dung sau crawl.</li>
-          <li>Chọn đẩy sang đăng ngay hoặc xuất Excel để import lại.</li>
+          <li>Rà và chỉnh lại nội dung sau crawl.</li>
+          <li>Đẩy sang đăng bài hoặc xuất Excel để nhập lại.</li>
         </ol>
-      </section>
+      </SectionCard>
     </>
   );
 }

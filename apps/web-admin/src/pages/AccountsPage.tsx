@@ -1,6 +1,18 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FolderLock, Plus, RefreshCw, ShieldCheck, Trash2, ExternalLink, CheckCircle2, AlertTriangle, Clock3, RotateCcw, Search } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Clock3,
+  ExternalLink,
+  FolderLock,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  ShieldCheck,
+  Trash2
+} from "lucide-react";
 import { apiDelete, apiGet, apiPost } from "../api/client";
 import { AddAccountDialog } from "../components/accounts/AddAccountDialog";
 import { EmptyState } from "../components/common/EmptyState";
@@ -71,11 +83,11 @@ function getAuthLabel(state?: BrowserLoginSession["authState"]) {
     case "authenticated":
       return "Đã đăng nhập";
     case "checkpoint":
-      return "Checkpoint / xác minh";
+      return "Cần xác minh";
     case "login_required":
       return "Chưa đăng nhập";
     default:
-      return "Chưa xác định";
+      return "Chưa rõ";
   }
 }
 
@@ -109,8 +121,8 @@ export function AccountsPage() {
     queryKey: ["browser-login", activePlatform, browserLogin?.sessionId],
     queryFn: () => apiGet<BrowserLoginSession>(`/${activePlatform}/browser-login/${browserLogin?.sessionId}`),
     enabled: Boolean(browserLogin?.sessionId),
-    refetchInterval: (query) => {
-      const data = query.state.data;
+    refetchInterval: (state) => {
+      const data = state.state.data;
       if (!data) return 3000;
       return data.status === "pending" ? 3000 : false;
     }
@@ -123,7 +135,7 @@ export function AccountsPage() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["accounts"] });
       void queryClient.invalidateQueries({ queryKey: ["targets"] });
-      setFeedback({ type: "success", message: "Đã tạo tài khoản đăng mới." });
+      setFeedback({ type: "success", message: "Đã thêm tài khoản đăng." });
     },
     onError: (error: Error) => setFeedback({ type: "error", message: error.message })
   });
@@ -132,7 +144,7 @@ export function AccountsPage() {
     mutationFn: (account: Account) => apiPost(`/accounts/${account.id}/test`, { kind: account.kind }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["accounts"] });
-      setFeedback({ type: "success", message: "Đã gửi yêu cầu test account." });
+      setFeedback({ type: "success", message: "Đã gửi yêu cầu kiểm tra tài khoản." });
     },
     onError: (error: Error) => setFeedback({ type: "error", message: error.message })
   });
@@ -151,9 +163,8 @@ export function AccountsPage() {
     mutationFn: (account: Account) => apiPost<BrowserLoginSession>(`/${account.platform}/accounts/${account.id}/browser-login/start`),
     onSuccess: (data) => {
       setBrowserLogin(data);
-      setFeedback({ type: "success", message: data.message ?? "Đã mở browser đăng nhập Facebook." });
+      setFeedback({ type: "success", message: data.message ?? "Đã mở trình duyệt để đăng nhập." });
       void queryClient.invalidateQueries({ queryKey: ["accounts"] });
-      if (data.sessionId) void queryClient.invalidateQueries({ queryKey: ["facebook-browser-login", data.sessionId] });
     },
     onError: (error: Error) => setFeedback({ type: "error", message: error.message })
   });
@@ -162,10 +173,9 @@ export function AccountsPage() {
     mutationFn: ({ platform, sessionId }: { platform: string; sessionId: string }) => apiPost<BrowserLoginSession>(`/${platform}/browser-login/${sessionId}/complete`),
     onSuccess: (data) => {
       setBrowserLogin(data);
-      setFeedback({ type: "success", message: data.message ?? "Đã lưu session Facebook." });
+      setFeedback({ type: "success", message: data.message ?? "Đã lưu session." });
       void queryClient.invalidateQueries({ queryKey: ["accounts"] });
       void queryClient.invalidateQueries({ queryKey: ["targets"] });
-      if (data.sessionId) void queryClient.invalidateQueries({ queryKey: ["facebook-browser-login", data.sessionId] });
     },
     onError: (error: Error) => setFeedback({ type: "error", message: error.message })
   });
@@ -173,9 +183,8 @@ export function AccountsPage() {
   const cancelBrowserLogin = useMutation({
     mutationFn: ({ platform, sessionId }: { platform: string; sessionId: string }) => apiPost<BrowserLoginSession>(`/${platform}/browser-login/${sessionId}/cancel`),
     onSuccess: (data) => {
-      setFeedback({ type: "success", message: "Đã huỷ phiên đăng nhập Facebook." });
+      setFeedback({ type: "success", message: "Đã huỷ phiên đăng nhập." });
       setBrowserLogin(data);
-      if (data.sessionId) void queryClient.invalidateQueries({ queryKey: ["facebook-browser-login", data.sessionId] });
       void queryClient.invalidateQueries({ queryKey: ["accounts"] });
     },
     onError: (error: Error) => setFeedback({ type: "error", message: error.message })
@@ -193,28 +202,27 @@ export function AccountsPage() {
   });
 
   const targetAccounts = (query.data?.accounts ?? []).filter((account) => account.kind === "target");
-  const facebookAccounts = targetAccounts.filter((account) => account.platform === "facebook");
+  const browserAccounts = targetAccounts.filter((account) => ["facebook", "instagram", "threads"].includes(account.platform));
 
   const stats = useMemo(() => {
-    const unhealthyFacebook = facebookAccounts.filter((account) => {
+    const needsAttention = browserAccounts.filter((account) => {
       const authState = account.sessionState?.authState ?? account.sessionState?.health?.authState;
       return authState && authState !== "authenticated";
     }).length;
 
     return {
       total: targetAccounts.length,
-      facebookTargets: facebookAccounts.length,
+      browser: browserAccounts.length,
       healthy: targetAccounts.filter((account) => account.health === "healthy").length,
-      active: targetAccounts.filter((account) => account.isActive).length,
-      unhealthyFacebook
+      needsAttention
     };
-  }, [facebookAccounts, targetAccounts]);
+  }, [browserAccounts, targetAccounts]);
 
   return (
     <>
       <PageHeader
-        title="Tài khoản đăng bài"
-        subtitle="Trang này chỉ quản lý tài khoản dùng để publish. Tài khoản nguồn crawl đã được tách sang mục Crawl data."
+        title="Tài khoản đăng"
+        subtitle="Chỉ quản lý các tài khoản dùng để đăng bài. Tài khoản nguồn đã tách sang Crawl data."
         actions={
           <>
             <Button variant="secondary" icon={<RefreshCw aria-hidden />} onClick={() => query.refetch()} disabled={query.isFetching}>
@@ -229,41 +237,40 @@ export function AccountsPage() {
 
       <section className="grid-metrics" style={{ marginBottom: 18 }}>
         <div className="panel metric">
-          <p className="metric-label">Tổng tài khoản đăng</p>
+          <p className="metric-label">Tổng tài khoản</p>
           <p className="metric-value">{stats.total}</p>
         </div>
         <div className="panel metric">
-          <p className="metric-label">Facebook</p>
-          <p className="metric-value">{stats.facebookTargets}</p>
+          <p className="metric-label">Có browser session</p>
+          <p className="metric-value">{stats.browser}</p>
         </div>
         <div className="panel metric">
-          <p className="metric-label">Healthy</p>
+          <p className="metric-label">Đang ổn</p>
           <p className="metric-value">{stats.healthy}</p>
         </div>
         <div className="panel metric">
-          <p className="metric-label">Session FB cần chú ý</p>
-          <p className="metric-value">{stats.unhealthyFacebook}</p>
+          <p className="metric-label">Cần xử lý session</p>
+          <p className="metric-value">{stats.needsAttention}</p>
         </div>
       </section>
 
       <SectionCard
-        title="Browser login/session"
-        description="Facebook, Instagram và Threads đều có thể mở browser session thủ công từ đây. Trạng thái session được lưu theo account ở backend."
+        title="Browser session"
+        description="Mở trình duyệt để đăng nhập thủ công cho Facebook, Instagram hoặc Threads rồi lưu lại session."
         className="mb-4"
       >
         <div className="account-form-header">
           <div>
-            <p className="muted-copy">
-              Bạn có thể mở browser login mới cho Facebook, Instagram hoặc Threads. Facebook hiện có thêm health/session check riêng ở bảng account.
-            </p>
+            <p className="muted-copy">Phiên đang mở sẽ hiện tại đây. Trạng thái đã lưu vẫn hiển thị trực tiếp trong bảng tài khoản bên dưới.</p>
+
             {activeBrowserLogin ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 12 }}>
+              <div className="stack-tight" style={{ marginTop: 12 }}>
                 <div className="feature-inline-actions">
                   <Badge tone={getSessionStatusTone(activeBrowserLogin.status)}>{activeBrowserLogin.status}</Badge>
                   <Badge tone={getAuthTone(activeBrowserLogin.authState)}>{getAuthLabel(activeBrowserLogin.authState)}</Badge>
                   {activeBrowserLogin.browserOpen ? (
                     <span className="table-subtle" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                      <Clock3 size={14} aria-hidden /> Browser đang mở
+                      <Clock3 size={14} aria-hidden /> Trình duyệt đang mở
                     </span>
                   ) : null}
                   {activeBrowserLogin.authDetected ? (
@@ -281,22 +288,19 @@ export function AccountsPage() {
                       variant="secondary"
                       icon={<ShieldCheck aria-hidden />}
                       onClick={() => completeBrowserLogin.mutate({ platform: activeBrowserLogin.platform ?? "facebook", sessionId: activeBrowserLogin.sessionId! })}
-                      disabled={
-                        completeBrowserLogin.isPending ||
-                        cancelBrowserLogin.isPending ||
-                        activeBrowserLogin.status !== "pending"
-                      }
+                      disabled={completeBrowserLogin.isPending || cancelBrowserLogin.isPending || activeBrowserLogin.status !== "pending"}
                     >
-                      {completeBrowserLogin.isPending ? "Đang lưu..." : "Đã xong, lưu session"}
+                      {completeBrowserLogin.isPending ? "Đang lưu..." : "Lưu session"}
                     </Button>
                   ) : null}
                   {activeBrowserLogin.sessionId ? (
                     <Button
                       variant="ghost"
+                      icon={<RotateCcw aria-hidden />}
                       onClick={() => cancelBrowserLogin.mutate({ platform: activeBrowserLogin.platform ?? "facebook", sessionId: activeBrowserLogin.sessionId! })}
                       disabled={completeBrowserLogin.isPending || cancelBrowserLogin.isPending || activeBrowserLogin.status !== "pending"}
                     >
-                      Huỷ phiên login
+                      Huỷ phiên
                     </Button>
                   ) : null}
                 </div>
@@ -310,9 +314,7 @@ export function AccountsPage() {
                 ) : null}
               </div>
             ) : (
-              <div className="feature-inline-actions" style={{ marginTop: 12 }}>
-                <span className="table-subtle">Chưa có phiên login nào đang mở. Trạng thái đã lưu vẫn hiện trực tiếp ở bảng account bên dưới.</span>
-              </div>
+              <div className="table-subtle" style={{ marginTop: 10 }}>Chưa có phiên đăng nhập nào đang mở.</div>
             )}
           </div>
           <FolderLock aria-hidden size={18} />
@@ -322,26 +324,31 @@ export function AccountsPage() {
       {feedback ? <div className={`banner ${feedback.type}`}>{feedback.message}</div> : null}
       {query.error instanceof Error ? <div className="banner error">{query.error.message}</div> : null}
 
-      <SectionCard padded={false}>
-        <table className="table">
+      <SectionCard title="Danh sách tài khoản" description="Tập trung vào trạng thái session, tình trạng hoạt động và thao tác nhanh." padded={false}>
+        <table className="table table-compact">
           <thead>
             <tr>
               <th>Tên</th>
               <th>Nền tảng</th>
               <th>Handle</th>
-              <th>Sức khỏe</th>
+              <th>Trạng thái</th>
               <th>Session</th>
               <th>Thao tác</th>
             </tr>
           </thead>
           <tbody>
             {targetAccounts.map((account) => {
-              const sessionHint = (account.credentials?.sessionDir as string) || (account.credentials?.authPath as string) || account.sessionState?.sessionDir || account.sessionState?.authPath || "Chưa cấu hình";
-              const isCurrentBrowserLogin = activeBrowserLogin?.accountId === account.id;
               const persistedSession = account.sessionState;
+              const sessionHint =
+                (account.credentials?.sessionDir as string) ||
+                (account.credentials?.authPath as string) ||
+                persistedSession?.sessionDir ||
+                persistedSession?.authPath ||
+                "Chưa cấu hình";
               const authState = persistedSession?.authState ?? persistedSession?.health?.authState;
               const sessionStatus = persistedSession?.status ?? persistedSession?.health?.status;
               const sessionMessage = persistedSession?.health?.message ?? persistedSession?.lastError;
+              const isCurrentBrowserLogin = activeBrowserLogin?.accountId === account.id;
 
               return (
                 <tr key={`${account.kind}-${account.id}`}>
@@ -359,21 +366,15 @@ export function AccountsPage() {
                   <td>{account.platform}</td>
                   <td>{account.handle || <span className="table-subtle">Chưa có</span>}</td>
                   <td>
-                    <StatusBadge status={account.platform === "facebook" && sessionStatus ? String(sessionStatus) : account.health} />
+                    <StatusBadge status={sessionStatus ? String(sessionStatus) : account.health} />
                   </td>
                   <td>
                     <code className="code-inline">{sessionHint}</code>
-                    {["facebook", "instagram", "threads"].includes(account.platform) && persistedSession?.lastCheckedAt ? (
-                      <div className="table-subtle" style={{ marginTop: 6 }}>
-                        Check gần nhất: {new Date(persistedSession.lastCheckedAt).toLocaleString("vi-VN")}
-                      </div>
-                    ) : null}
-                    {["facebook", "instagram", "threads"].includes(account.platform) && sessionMessage ? (
-                      <div className="table-subtle" style={{ marginTop: 6 }}>{sessionMessage}</div>
-                    ) : null}
+                    {persistedSession?.lastCheckedAt ? <div className="table-subtle" style={{ marginTop: 6 }}>Kiểm tra gần nhất: {new Date(persistedSession.lastCheckedAt).toLocaleString("vi-VN")}</div> : null}
+                    {sessionMessage ? <div className="table-subtle" style={{ marginTop: 6 }}>{sessionMessage}</div> : null}
                   </td>
                   <td>
-                    <div className="actions">
+                    <div className="actions actions-tight">
                       {["facebook", "instagram", "threads"].includes(account.platform) ? (
                         <>
                           <Button
@@ -382,7 +383,7 @@ export function AccountsPage() {
                             onClick={() => startBrowserLogin.mutate(account)}
                             disabled={startBrowserLogin.isPending || completeBrowserLogin.isPending || cancelBrowserLogin.isPending}
                           >
-                            {persistedSession?.authPath ? "Mở lại browser session" : startBrowserLogin.isPending ? "Đang mở..." : "Mở trình duyệt đăng nhập"}
+                            {persistedSession?.authPath ? "Mở lại session" : startBrowserLogin.isPending ? "Đang mở..." : "Mở đăng nhập"}
                           </Button>
                           <Button
                             variant="ghost"
@@ -394,9 +395,11 @@ export function AccountsPage() {
                           </Button>
                         </>
                       ) : null}
+
                       <Button variant="secondary" icon={<ShieldCheck aria-hidden />} onClick={() => test.mutate(account)} disabled={test.isPending || remove.isPending}>
-                        {test.isPending ? "Đang test..." : "Test"}
+                        {test.isPending ? "Đang kiểm tra..." : "Kiểm tra"}
                       </Button>
+
                       <Button
                         variant="danger"
                         icon={<Trash2 aria-hidden />}
@@ -414,10 +417,11 @@ export function AccountsPage() {
                 </tr>
               );
             })}
+
             {query.data && targetAccounts.length === 0 ? (
               <tr>
                 <td colSpan={6}>
-                  <EmptyState title="Chưa có tài khoản đăng nào" description="Hãy dùng nút “Thêm tài khoản” để tạo tài khoản publish đầu tiên." />
+                  <EmptyState title="Chưa có tài khoản đăng" description="Dùng nút Thêm tài khoản để tạo tài khoản đăng đầu tiên." />
                 </td>
               </tr>
             ) : null}
@@ -425,13 +429,7 @@ export function AccountsPage() {
         </table>
       </SectionCard>
 
-      <AddAccountDialog
-        open={dialogOpen}
-        onClose={() => setDialogOpen(false)}
-        sourceMutation={{} as any}
-        targetMutation={createTarget as any}
-        targetOnly
-      />
+      <AddAccountDialog open={dialogOpen} onClose={() => setDialogOpen(false)} sourceMutation={{} as any} targetMutation={createTarget as any} targetOnly />
     </>
   );
 }

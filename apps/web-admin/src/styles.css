@@ -110,6 +110,37 @@ body {
   gap: 8px;
 }
 
+.stack-tight {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.simple-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.simple-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.simple-row-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
 .upload-empty {
   padding: 12px 14px;
   border: 1px dashed var(--color-border);
@@ -184,7 +215,8 @@ body {
   .inline-head,
   .upload-item,
   .target-schedule-head,
-  .composer-actions {
+  .composer-actions,
+  .simple-row {
     flex-direction: column;
     align-items: stretch;
   }
@@ -538,6 +570,10 @@ button svg {
   gap: 14px;
 }
 
+.feature-grid-tight {
+  gap: 12px;
+}
+
 .metric {
   min-height: 116px;
   padding: 18px;
@@ -573,6 +609,26 @@ button svg {
   border-bottom: 1px solid #dfe4dd;
   text-align: left;
   vertical-align: top;
+}
+
+.table-compact th,
+.table-compact td {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.table-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: #eef2ef;
+  color: #536159;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
 }
 
 .table th {
@@ -633,6 +689,10 @@ button svg {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.actions-tight {
+  gap: 8px;
 }
 
 .muted-copy {

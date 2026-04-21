@@ -11,14 +11,16 @@ export function SchedulesPage() {
 
   return (
     <>
-      <PageHeader title="Lịch đăng" subtitle="Các job hẹn giờ sẽ được Worker Core đánh thức qua BullMQ delayed jobs." />
-      <SectionCard padded={false}>
+      <PageHeader title="Lịch đăng" subtitle="Danh sách bài đã lên lịch và trạng thái xử lý hiện tại." />
+
+      <SectionCard title="Danh sách lịch đăng" description="Mỗi dòng là một lần đăng đã được xếp lịch cho một tài khoản.">
         <DataTable
+          className="table-compact"
           columns={
             <>
-              <th>Nội dung</th>
-              <th>Đích</th>
-              <th>Thời gian</th>
+              <th>Mã bài</th>
+              <th>Tài khoản</th>
+              <th>Thời gian đăng</th>
               <th>Trạng thái</th>
             </>
           }
@@ -26,7 +28,7 @@ export function SchedulesPage() {
             query.data && query.data.schedules.length === 0 ? (
               <tr>
                 <td colSpan={4}>
-                  <EmptyState title="Chưa có lịch đăng" description="Các lịch hẹn đăng sẽ xuất hiện tại đây." />
+                  <EmptyState title="Chưa có lịch đăng" description="Khi anh lên lịch cho bài viết, dữ liệu sẽ hiện ở đây." />
                 </td>
               </tr>
             ) : null
@@ -34,8 +36,10 @@ export function SchedulesPage() {
         >
           {(query.data?.schedules ?? []).map((schedule) => (
             <tr key={schedule.id}>
-              <td>{schedule.content?.code}</td>
-              <td>{schedule.target?.name}</td>
+              <td>
+                <strong>{schedule.content?.code ?? "-"}</strong>
+              </td>
+              <td>{schedule.target?.name ?? <span className="table-subtle">Chưa có</span>}</td>
               <td>{new Date(schedule.scheduledAt).toLocaleString("vi-VN")}</td>
               <td>
                 <StatusBadge status={schedule.status} />
