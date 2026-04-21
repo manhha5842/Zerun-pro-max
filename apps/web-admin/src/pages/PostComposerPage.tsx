@@ -11,6 +11,8 @@ import { Input } from "../components/ui/Input";
 import { Label } from "../components/ui/Label";
 import { Select } from "../components/ui/Select";
 import { Textarea } from "../components/ui/Textarea";
+import { Badge } from "../components/ui/Badge";
+import { getPlatformLabel, isSupportedTargetPlatform } from "../utils/platforms";
 
 type TargetAccount = {
   id: string;
@@ -65,6 +67,78 @@ function isVideoType(file: UploadedFile) {
   return file.mimeType.startsWith("video/");
 }
 
+/**
+ * Platform badge colours — lightweight visual hint.
+ */
+const PLATFORM_BADGE_TONE: Record<string, "good" | "warn" | "neutral" | "danger"> = {
+  facebook: "good",
+  instagram: "warn",
+  threads: "neutral"
+};
+
+/**
+ * Validate media selection for a given (platform, type) combination.
+ * Returns an error string or null if valid.
+ */
+function validateMedia(platform: string, type: string, mediaFiles: UploadedFile[]): string | null {
+  if (platform === "facebook") {
+    if (type === "story" && (mediaFiles.length !== 1 || !mediaFiles.every(isImageType))) {
+      return "Facebook Story cần đúng 1 ảnh.";
+    }
+    if (type === "reel" && (mediaFiles.length !== 1 || !mediaFiles.every(isVideoType))) {
+      return "Facebook Reel cần đúng 1 video.";
+    }
+    return null;
+  }
+  if (platform === "instagram") {
+    if (type === "feed") {
+      if (mediaFiles.length === 0) return null; // text-only unsupported on instagram but backend handles
+      return null; // feed: image or video accepted
+    }
+    if (type === "story") {
+      if (mediaFiles.length !== 1) return "Instagram Story cần đúng 1 media.";
+      return null;
+    }
+    if (type === "reel") {
+      if (mediaFiles.length !== 1 || !mediaFiles.every(isVideoType)) return "Instagram Reel cần đúng 1 video.";
+      return null;
+    }
+  }
+  if (platform === "threads") {
+    // threads: text-only or with media; no story/reel
+    return null;
+  }
+  // generic fallback
+  if (type === "story" && (mediaFiles.length !== 1 || !mediaFiles.every(isImageType))) {
+    return "Story cần đúng 1 ảnh.";
+  }
+  if (type === "reel" && (mediaFiles.length !== 1 || !mediaFiles.every(isVideoType))) {
+    return "Reel cần đúng 1 video.";
+  }
+  return null;
+}
+
+/**
+ * Post types available per-platform.
+ */
+function allowedPostTypes(platform: string): Array<{ value: string; label: string }> {
+  if (platform === "threads") {
+    return [{ value: "feed", label: "Feed" }];
+  }
+  return [
+    { value: "feed", label: "Feed" },
+    { value: "story", label: "Story" },
+    { value: "reel", label: "Reel" }
+  ];
+}
+
+function mediaHint(platform: string, type: string): string {
+  if (platform === "threads") return "Threads: có thể đăng không cần media.";
+  if (type === "story") return "Story: đúng 1 media (ảnh hoặc video tuỳ platform).";
+  if (type === "reel") return "Reel: đúng 1 video.";
+  return "Feed: có thể nhiều media.";
+}
+
 export function PostComposerPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -86,9 +160,10 @@ export function PostComposerPage() {
     queryFn: () => apiGet<AccountResponse>("/accounts")
   });
 
-  const facebookTargets = useMemo<TargetAccount[]>(() => {
+  /** All target accounts that belong to a supported publish platform. */
+  const targetAccounts = useMemo<TargetAccount[]>(() => {
     return (accountsQuery.data?.accounts ?? [])
-      .filter((account) => account.kind === "target" && account.platform === "facebook")
+      .filter((account) => account.kind === "target" && isSupportedTargetPlatform(account.platform))
       .map((account) => ({
         id: account.id,
         name: account.name,
@@ -97,6 +172,25 @@ export function PostComposerPage() {
         health: account.health
       }));
   }, [accountsQuery.data]);
+
+  /** Derive the platform for the current post based on enabled targets.
+   * If targets span multiple platforms the form will still use form.type,
+   * but validation is done per-account platform. */
+  const enabledAccountPlatforms = useMemo(() => {
+    const enabled = Object.entries(targetSchedules)
+      .filter(([, c]) => c.enabled)
+      .map(([id]) => targetAccounts.find((a) => a.id === id)?.platform ?? "");
+    return [...new Set(enabled.filter(Boolean))];
+  }, [targetSchedules, targetAccounts]);
+
+  /** Post type options depend on enabled platforms; show superset but validate per-platform. */
+  const postTypeOptions = useMemo(() => {
+    // If all enabled accounts are Threads, hide story/reel
+    if (enabledAccountPlatforms.length > 0 && enabledAccountPlatforms.every((p) => p === "threads")) {
+      return allowedPostTypes("threads");
+    }
+    return allowedPostTypes("facebook"); // full set
+  }, [enabledAccountPlatforms]);
 
   const uploadMutation = useMutation({
     mutationFn: async ({ file, kind }: { file: File; kind: "post" | "comment" }) => {
@@ -126,18 +220,18 @@ export function PostComposerPage() {
     mutationFn: async () => {
       const selectedTargets = Object.entries(targetSchedules).filter(([, config]) => config.enabled);
       if (!form.content.trim()) throw new Error("Cần nhập nội dung bài đăng.");
-      if (!selectedTargets.length) throw new Error("Cần chọn ít nhất một tài khoản Facebook.");
+      if (!selectedTargets.length) throw new Error("Cần chọn ít nhất một tài khoản.");
 
-      if (form.type === "story") {
-        if (mediaFiles.length !== 1 || !mediaFiles.every(isImageType)) {
-          throw new Error("Story cần đúng 1 ảnh.");
+      // Validate media constraints per-platform
+      for (const [targetId] of selectedTargets) {
+        const account = targetAccounts.find((a) => a.id === targetId);
+        if (!account) continue;
+        // Threads: no story/reel mode
+        if (account.platform === "threads" && form.type !== "feed") {
+          throw new Error(`Tài khoản Threads "${account.name}" không hỗ trợ loại bài "${form.type}". Chỉ hỗ trợ feed.`);
         }
-      }
-
-      if (form.type === "reel") {
-        if (mediaFiles.length !== 1 || !mediaFiles.every(isVideoType)) {
-          throw new Error("Reel cần đúng 1 video.");
-        }
+        const mediaError = validateMedia(account.platform, form.type, mediaFiles);
+        if (mediaError) throw new Error(`[${getPlatformLabel(account.platform)}] ${mediaError}`);
       }
 
       const hasScheduledTarget = selectedTargets.some(([, config]) => config.mode === "schedule");
@@ -146,47 +240,78 @@ export function PostComposerPage() {
         throw new Error("Có tài khoản đang chọn hẹn lịch nhưng chưa nhập thời gian.");
       }
 
-      const postPayload = {
-        type: form.type,
-        caption: form.content.trim(),
-        media: mediaFiles.map((file) => ({
-          localPath: file.localPath,
-          mimeType: file.mimeType
-        })),
-        comments: form.comment.trim() ? [{ text: form.comment.trim(), delayMinutes: 5, media: commentMediaFiles.map((file) => file.localPath) }] : [],
-        targets: selectedTargets.map(([targetAccountId, config]) => ({
-          targetAccountId,
-          scheduleMode: "fixed",
-          fixedTime: config.mode === "schedule" ? config.scheduledAt : undefined
-        }))
-      };
+      // Determine primary platform from enabled accounts (use first if mixed)
+      const primaryAccount = targetAccounts.find((a) => a.id === selectedTargets[0]?.[0]);
+      const primaryPlatform = primaryAccount?.platform ?? "facebook";
 
-      const created = await apiPost<CreatePostResponse>("/facebook/posts", postPayload);
-      const queued = await apiPost<{ scheduledAt: string }>(`/facebook/posts/${created.post.id}/queue`, {
-        mode: hasScheduledTarget ? "schedule" : "now",
-        targets: selectedTargets.map(([targetId, config]) => ({
-          targetId,
-          mode: config.mode,
-          scheduledAt: config.mode === "schedule" ? config.scheduledAt : undefined
-        }))
-      });
+      // For Facebook targets, we create a FB post via the legacy /facebook/posts route.
+      // For Instagram / Threads, we go straight to /contents/manual and let the worker handle publish.
+      const facebookTargets = selectedTargets.filter(([id]) => targetAccounts.find((a) => a.id === id)?.platform === "facebook");
+      const nonFacebookTargets = selectedTargets.filter(([id]) => targetAccounts.find((a) => a.id === id)?.platform !== "facebook");
+
+      let fbPostId: string | undefined;
+      let scheduledAt: string | undefined;
+
+      if (facebookTargets.length > 0) {
+        const postPayload = {
+          type: form.type,
+          caption: form.content.trim(),
+          media: mediaFiles.map((file) => ({
+            localPath: file.localPath,
+            mimeType: file.mimeType
+          })),
+          comments: form.comment.trim()
+            ? [{ text: form.comment.trim(), delayMinutes: 5, media: commentMediaFiles.map((file) => file.localPath) }]
+            : [],
+          targets: facebookTargets.map(([targetAccountId, config]) => ({
+            targetAccountId,
+            scheduleMode: "fixed",
+            fixedTime: config.mode === "schedule" ? config.scheduledAt : undefined
+          }))
+        };
+        const created = await apiPost<CreatePostResponse>("/facebook/posts", postPayload);
+        fbPostId = created.post.id;
+
+        const queued = await apiPost<{ scheduledAt: string }>(`/facebook/posts/${created.post.id}/queue`, {
+          mode: hasScheduledTarget ? "schedule" : "now",
+          targets: facebookTargets.map(([targetId, config]) => ({
+            targetId,
+            mode: config.mode,
+            scheduledAt: config.mode === "schedule" ? config.scheduledAt : undefined
+          }))
+        });
+        scheduledAt = queued.scheduledAt;
+      }
+
+      // Build platform tag for content record (mixed = first platform, or 'multi')
+      const platforms = [...new Set(selectedTargets.map(([id]) => targetAccounts.find((a) => a.id === id)?.platform ?? "unknown"))];
+      const contentPlatform = platforms.length === 1 ? platforms[0]! : primaryPlatform;
+
+      const allTargetIds = selectedTargets.map(([targetId]) => targetId);
 
       const contentCreated = await apiPost<ContentResponse>("/contents/manual", {
         originalText: form.content.trim(),
-        platform: "facebook",
+        platform: contentPlatform,
         type: form.type,
         comment: form.comment.trim() || undefined,
         mediaPaths: mediaFiles.map((file) => file.localPath),
         commentMedia: commentMediaFiles.map((file) => file.localPath),
-        fbPostId: created.post.id,
-        targetIds: selectedTargets.map(([targetId]) => targetId),
-        scheduledAt: queued.scheduledAt,
+        ...(fbPostId ? { fbPostId } : {}),
+        targetIds: nonFacebookTargets.length > 0 ? allTargetIds : allTargetIds,
+        scheduledAt,
         status: hasScheduledTarget ? "scheduled" : "publishing",
         mode: hasScheduledTarget ? "schedule" : "now"
       });
 
+      // For non-Facebook targets, trigger publish directly via the contents publish route
+      if (nonFacebookTargets.length > 0 && !hasScheduledTarget) {
+        await apiPost<{ queued: boolean }>(`/contents/${contentCreated.content.code}/publish`, {
+          targetIds: nonFacebookTargets.map(([id]) => id)
+        });
+      }
+
       return {
-        postId: created.post.id,
+        postId: fbPostId ?? contentCreated.content.code,
         contentCode: contentCreated.content.code,
         mode: hasScheduledTarget ? "schedule" : "now"
       } as const;
@@ -203,11 +328,21 @@ export function PostComposerPage() {
 
   const selectedTargetCount = Object.values(targetSchedules).filter((config) => config.enabled).length;
 
+  // Group targets by platform for display
+  const targetsByPlatform = useMemo(() => {
+    const map: Record<string, TargetAccount[]> = {};
+    for (const account of targetAccounts) {
+      if (!map[account.platform]) map[account.platform] = [];
+      map[account.platform]!.push(account);
+    }
+    return map;
+  }, [targetAccounts]);
+
   return (
     <>
       <PageHeader
         title="Nhập bài đăng"
-        subtitle="Nhập bài viết tay, upload media thật, chọn tài khoản Facebook và lịch riêng cho từng tài khoản."
+        subtitle="Nhập bài viết tay, upload media thật, chọn tài khoản và lịch riêng cho từng tài khoản."
         actions={
           <div className="actions">
             <Link to="/contents">
@@ -250,9 +385,9 @@ export function PostComposerPage() {
                 setForm((current) => ({ ...current, type: event.target.value }));
               }}
             >
-              <option value="feed">Feed</option>
-              <option value="story">Story</option>
-              <option value="reel">Reel</option>
+              {postTypeOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
             </Select>
           </div>
           <div className="field full">
@@ -295,7 +430,9 @@ export function PostComposerPage() {
               ))}
             </div>
             <small className="field-help">
-              {form.type === "story" ? "Story chỉ nhận đúng 1 ảnh." : form.type === "reel" ? "Reel chỉ nhận đúng 1 video." : "Feed có thể có nhiều media."}
+              {enabledAccountPlatforms.length === 1
+                ? mediaHint(enabledAccountPlatforms[0]!, form.type)
+                : mediaHint("facebook", form.type)}
             </small>
           </div>
           <div className="field full">
@@ -342,73 +479,86 @@ export function PostComposerPage() {
       </SectionCard>
 
       <SectionCard title="Tài khoản đăng" description="Mỗi tài khoản có thể đăng ngay hoặc hẹn giờ riêng." style={{ marginTop: 16 }}>
-        {facebookTargets.length === 0 ? (
-          <EmptyState title="Chưa có tài khoản Facebook nào" description="Hãy vào mục Tài khoản đăng bài để tạo account Facebook trước." />
+        {targetAccounts.length === 0 ? (
+          <EmptyState title="Chưa có tài khoản đăng bài nào" description="Hãy vào mục Tài khoản đăng bài để tạo account trước." />
         ) : (
           <div className="target-schedule-list">
-            {facebookTargets.map((account) => {
-              const config = targetSchedules[account.id] ?? { enabled: false, mode: "now", scheduledAt: "" };
-              return (
-                <div key={account.id} className={`target-schedule-card ${config.enabled ? "active" : ""}`}>
-                  <div className="target-schedule-head">
-                    <label className="target-toggle">
-                      <input
-                        type="checkbox"
-                        checked={config.enabled}
-                        onChange={(event) => {
-                          setTargetSchedules((current) => ({
-                            ...current,
-                            [account.id]: {
-                              ...(current[account.id] ?? { mode: "now", scheduledAt: "" }),
-                              enabled: event.target.checked
-                            }
-                          }));
-                        }}
-                      />
-                      <span>{account.name}</span>
-                    </label>
-                    <small>
-                      {account.isActive ? "Đang bật" : "Đang tắt"} • health: {account.health}
-                    </small>
-                  </div>
-
-                  {config.enabled ? (
-                    <div className="target-schedule-controls">
-                      <div className="field">
-                        <Label>Chế độ</Label>
-                        <Select
-                          value={config.mode}
-                          onChange={(event) => {
-                            const mode = event.target.value as "now" | "schedule";
-                            setTargetSchedules((current) => ({
-                              ...current,
-                              [account.id]: { ...config, mode }
-                            }));
-                          }}
-                        >
-                          <option value="now">Đăng ngay</option>
-                          <option value="schedule">Hẹn lịch</option>
-                        </Select>
-                      </div>
-                      <div className="field">
-                        <Label>Thời gian</Label>
-                        <Input
-                          type="datetime-local"
-                          value={config.scheduledAt}
-                          disabled={config.mode !== "schedule"}
-                          onChange={(event) => {
-                            setTargetSchedules((current) => ({
-                              ...current,
-                              [account.id]: { ...config, scheduledAt: event.target.value }
-                            }));
-                          }}
-                        />
-                      </div>
-                    </div>
+            {Object.entries(targetsByPlatform).map(([platform, accounts]) => (
+              <div key={platform} style={{ marginBottom: 16 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <Badge tone={PLATFORM_BADGE_TONE[platform] ?? "neutral"}>{getPlatformLabel(platform)}</Badge>
+                  {platform === "threads" ? (
+                    <small style={{ color: "#68746d" }}>Threads: chỉ hỗ trợ loại bài feed.</small>
                   ) : null}
                 </div>
-              );
-            })}
+                {accounts.map((account) => {
+                  const config = targetSchedules[account.id] ?? { enabled: false, mode: "now", scheduledAt: "" };
+                  return (
+                    <div key={account.id} className={`target-schedule-card ${config.enabled ? "active" : ""}`}>
+                      <div className="target-schedule-head">
+                        <label className="target-toggle">
+                          <input
+                            type="checkbox"
+                            checked={config.enabled}
+                            onChange={(event) => {
+                              setTargetSchedules((current) => ({
+                                ...current,
+                                [account.id]: {
+                                  ...(current[account.id] ?? { mode: "now", scheduledAt: "" }),
+                                  enabled: event.target.checked
+                                }
+                              }));
+                            }}
+                          />
+                          <span>{account.name}</span>
+                          <Badge tone={PLATFORM_BADGE_TONE[account.platform] ?? "neutral"}>
+                            {getPlatformLabel(account.platform)}
+                          </Badge>
+                        </label>
+                        <small>
+                          {account.isActive ? "Đang bật" : "Đang tắt"} • health: {account.health}
+                        </small>
+                      </div>
+
+                      {config.enabled ? (
+                        <div className="target-schedule-controls">
+                          <div className="field">
+                            <Label>Chế độ</Label>
+                            <Select
+                              value={config.mode}
+                              onChange={(event) => {
+                                const mode = event.target.value as "now" | "schedule";
+                                setTargetSchedules((current) => ({
+                                  ...current,
+                                  [account.id]: { ...config, mode }
+                                }));
+                              }}
+                            >
+                              <option value="now">Đăng ngay</option>
+                              <option value="schedule">Hẹn lịch</option>
+                            </Select>
+                          </div>
+                          <div className="field">
+                            <Label>Thời gian</Label>
+                            <Input
+                              type="datetime-local"
+                              value={config.scheduledAt}
+                              disabled={config.mode !== "schedule"}
+                              onChange={(event) => {
+                                setTargetSchedules((current) => ({
+                                  ...current,
+                                  [account.id]: { ...config, scheduledAt: event.target.value }
+                                }));
+                              }}
+                            />
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
           </div>
         )}
 
