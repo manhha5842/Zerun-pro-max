@@ -19,14 +19,14 @@ const navSections = [
     label: "ĐĂNG BÀI",
     items: [
       { to: "/contents/new", label: "Nhập bài đăng", icon: Send },
-      { to: "/contents", label: "Quản lý bài viết", icon: FileText },
+      { to: "/contents", label: "Bài viết", icon: FileText },
       { to: "/schedules", label: "Lịch đăng", icon: CalendarClock },
-      { to: "/accounts", label: "Tài khoản đăng bài", icon: Users }
+      { to: "/accounts", label: "Tài khoản đăng", icon: Users }
     ]
   },
   {
     label: "CRAWL",
-    items: [{ to: "/crawl", label: "Crawl data", icon: Download }]
+    items: [{ to: "/crawl", label: "Nguồn crawl", icon: Download }]
   },
   {
     label: "HỆ THỐNG",
@@ -46,7 +46,7 @@ export function Layout() {
           </div>
           <div>
             <span>Zerun</span>
-            <p className="text-xs text-muted m-0">Admin Console</p>
+            <p className="text-xs text-muted m-0">Quản trị đăng bài</p>
           </div>
         </div>
 
@@ -56,9 +56,10 @@ export function Layout() {
               {section.label ? <div className="nav-section-label">{section.label}</div> : null}
               <div className="nav-list">
                 {section.items.map((item) => {
-                  const active = item.to === "/contents"
-                    ? location.pathname === "/contents" || /^\/contents\/[^/]+(?:\/edit)?$/.test(location.pathname)
-                    : location.pathname === item.to;
+                  const active =
+                    item.to === "/contents"
+                      ? location.pathname === "/contents" || /^\/contents\/[^/]+(?:\/edit)?$/.test(location.pathname)
+                      : location.pathname === item.to;
 
                   return (
                     <NavLink key={item.to + item.label} to={item.to} end className={`nav-item auto-style-nav ${active ? "active" : ""}`}>
@@ -77,7 +78,7 @@ export function Layout() {
             <div className="footer-avatar">Z</div>
             <div>
               <div className="footer-title">Zerun</div>
-              <div className="footer-subtitle">Hệ thống quản lý đăng bài</div>
+              <div className="footer-subtitle">Giao diện quản trị nội bộ</div>
             </div>
           </div>
         </div>

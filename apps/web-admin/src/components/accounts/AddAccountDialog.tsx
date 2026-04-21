@@ -9,7 +9,6 @@ import {
   buildAccountPayload,
   createEmptyDraft,
   FormError,
-  InlineNote,
   type AccountDraft,
   type AccountKind,
   type AccountPlatform,
@@ -45,9 +44,9 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
   const kindChoices = targetOnly ? ACCOUNT_KIND_OPTIONS.filter((option) => option.value === "target") : ACCOUNT_KIND_OPTIONS;
 
   const stepTitle = useMemo(() => {
-    if (!targetOnly && step === 1) return "Bước 1 • Chọn loại tài khoản";
-    if ((targetOnly && step === 2) || (!targetOnly && step === 2)) return "Bước 2 • Chọn nền tảng";
-    return "Bước 3 • Nhập thông tin chi tiết";
+    if (!targetOnly && step === 1) return "Bước 1 · Chọn loại tài khoản";
+    if ((targetOnly && step === 2) || (!targetOnly && step === 2)) return "Bước 2 · Chọn nền tảng";
+    return "Bước 3 · Nhập thông tin";
   }, [step, targetOnly]);
 
   function resetWizard(kind: AccountKind = "target", platform: AccountPlatform = "facebook") {
@@ -75,7 +74,7 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
 
     try {
       await activeMutation.mutateAsync(buildAccountPayload(draft));
-      setSuccessMessage(`Đã tạo tài khoản ${draft.kind === "source" ? "nguồn" : "đích"} cho ${draft.platform}.`);
+      setSuccessMessage(`Đã tạo tài khoản ${draft.kind === "source" ? "nguồn" : "đăng"} cho ${draft.platform}.`);
       setErrors({});
       setDraft(createEmptyDraft(draft.kind, draft.platform));
       setStep(targetOnly ? 2 : 1);
@@ -84,8 +83,6 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
       // handled by mutation.error
     }
   }
-
-  const isSimpleFacebookTarget = draft.kind === "target" && draft.platform === "facebook";
 
   function renderPlatformForm() {
     if (draft.platform === "facebook") return <FacebookAccountForm draft={draft} errors={errors} setDraft={setDraft} />;
@@ -96,7 +93,7 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
   }
 
   return (
-    <Dialog open={open} onClose={closeDialog} title={targetOnly ? "Thêm tài khoản đăng" : "Thêm tài khoản mới"}>
+    <Dialog open={open} onClose={closeDialog} title={targetOnly ? "Thêm tài khoản đăng" : "Thêm tài khoản"}>
       <div className="wizard-shell">
         <div className="wizard-steps">
           {!targetOnly ? (
@@ -105,7 +102,7 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
               <strong>Loại</strong>
             </div>
           ) : null}
-          <div className={`wizard-step ${(targetOnly ? 2 : 2) <= step ? "active" : ""}`}>
+          <div className={`wizard-step ${2 <= step ? "active" : ""}`}>
             <span>{targetOnly ? 1 : 2}</span>
             <strong>Nền tảng</strong>
           </div>
@@ -119,6 +116,7 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
           <div className="wizard-headline">
             <div>
               <h3>{stepTitle}</h3>
+              <p className="muted-copy">Điền đủ thông tin tối thiểu để lưu tài khoản. Phần nâng cao có thể mở thêm khi cần.</p>
             </div>
             <Layers3 aria-hidden size={18} />
           </div>
@@ -162,7 +160,7 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
                   type="button"
                   className={`choice-card ${draft.platform === option.value ? "active" : ""}`}
                   onClick={() => {
-                    setDraft((current) => ({ ...current, kind: "target", platform: option.value }));
+                    setDraft((current) => ({ ...current, kind: targetOnly ? "target" : current.kind, platform: option.value }));
                     setStep(3);
                   }}
                 >
@@ -181,12 +179,12 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
               <div className="form-grid">
                 <div className={draft.platform === "facebook" ? "field full" : "field"}>
                   <Label htmlFor="dialog-name">Tên hiển thị</Label>
-                  <Input id="dialog-name" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Facebook Page bán hàng" />
+                  <Input id="dialog-name" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Ví dụ: Page bán hàng" />
                   <FormError message={errors.name} />
                 </div>
                 {draft.platform !== "facebook" ? (
                   <div className="field">
-                    <Label htmlFor="dialog-handle">Handle / URL</Label>
+                    <Label htmlFor="dialog-handle">Handle hoặc URL</Label>
                     <Input id="dialog-handle" value={draft.handle} onChange={(event) => setDraft((current) => ({ ...current, handle: event.target.value }))} placeholder="@username hoặc URL" />
                     <FormError message={errors.handle} />
                   </div>
@@ -235,10 +233,10 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
           ) : (
             <>
               <Button type="button" variant="ghost" onClick={() => resetWizard(draft.kind, draft.platform)} disabled={isSubmitting}>
-                Reset wizard
+                Làm lại
               </Button>
               <Button type="button" onClick={submit} disabled={isSubmitting}>
-                {isSubmitting ? "Đang tạo..." : "Lưu tài khoản"}
+                {isSubmitting ? "Đang lưu..." : "Lưu tài khoản"}
               </Button>
             </>
           )}

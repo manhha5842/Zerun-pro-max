@@ -1,15 +1,13 @@
+import { PageHeader } from "../components/common/PageHeader";
+import { SectionCard } from "../components/common/SectionCard";
+
 export function ImportPage() {
   return (
     <>
-      <header className="page-head">
-        <div>
-          <h1 className="page-title">Import thủ công</h1>
-          <p className="page-subtitle">Endpoint upload đã sẵn sàng; giao diện upload file sẽ nối ở bước polish sau Web Admin core.</p>
-        </div>
-      </header>
-      <div className="panel panel-pad">
-        <p>Dùng API `POST /api/v1/import/upload` với multipart gồm `files[]` và `caption`.</p>
-      </div>
+      <PageHeader title="Import thủ công" subtitle="Phần import file sẽ được nối vào giao diện sau. Hiện tại có thể dùng API để nhập dữ liệu." />
+      <SectionCard title="API hiện có" description="Dùng endpoint này nếu cần import ngay trước khi UI hoàn thiện.">
+        <p>Dùng API <code>POST /api/v1/import/upload</code> với multipart gồm <code>files[]</code> và <code>caption</code>.</p>
+      </SectionCard>
     </>
   );
 }
