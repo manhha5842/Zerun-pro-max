@@ -204,24 +204,43 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
   private async publishStory(page: any, mediaPath: string): Promise<FbPublishResult> {
     if (!mediaPath) throw new Error("Story requires exactly one image");
 
-    await firstLocator(page, [
-      '[aria-label*="Create story" i]',
-      '[aria-label*="Tạo tin" i]',
-      '[aria-label*="Add to story" i]',
-      '[aria-label*="Thêm vào tin" i]'
-    ]).click({ timeout: 20_000 });
-    await page.waitForTimeout(1_500);
+    let onStoryPage = false;
+    try {
+      await page.goto("https://www.facebook.com/stories/create", { waitUntil: "domcontentloaded", timeout: 20_000 });
+      await dismissCookieDialog(page);
+      onStoryPage = page.url().includes("stories");
+    } catch {
+      onStoryPage = false;
+    }
+
+    if (!onStoryPage) {
+      await page.goto(FACEBOOK_HOME_URL, { waitUntil: "domcontentloaded", timeout: 40_000 });
+      await dismissCookieDialog(page);
+      await clickFirst(page, [
+        '[aria-label*="Create story" i]',
+        '[aria-label*="Tao tin" i]',
+        '[aria-label*="Add to story" i]',
+        '[aria-label*="Them vao tin" i]'
+      ], { timeout: 20_000 });
+      await page.waitForTimeout(1_500);
+    }
 
     const [fileChooser] = await Promise.all([
       page.waitForEvent("filechooser", { timeout: 15_000 }),
-      firstLocator(page, ['[aria-label*="Photo" i]', '[aria-label*="Ảnh" i]', 'input[type="file"]']).click({ timeout: 15_000 })
+      clickFirst(page, [
+        '[aria-label*="Photo" i]',
+        '[aria-label*="Anh" i]',
+        'input[type="file"]'
+      ], { timeout: 15_000 })
     ]);
     await fileChooser.setFiles([mediaPath]);
     await page.waitForTimeout(3_000);
 
-    await firstLocator(page, ['[aria-label*="Share to story" i]', '[aria-label*="Chia sẻ lên tin" i]', 'text=/Share to story|Chia sẻ lên tin/i'])
-      .first()
-      .click({ timeout: 20_000 });
+    await clickFirst(page, [
+      '[aria-label*="Share to story" i]',
+      '[aria-label*="Chia se len tin" i]',
+      'text=/Share to story|Chia se len tin/i'
+    ], { timeout: 20_000 });
     await page.waitForLoadState("networkidle", { timeout: 30_000 });
 
     return { postUrl: page.url(), metadata: { platform: "facebook", type: "story" } };
@@ -230,18 +249,31 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
   private async publishReel(page: any, caption: string, videoPath: string): Promise<FbPublishResult> {
     if (!videoPath) throw new Error("Reel requires exactly one video");
 
-    await this.openComposer(page);
-    await page.waitForTimeout(1_000);
+    let onReelPage = false;
+    try {
+      await page.goto("https://www.facebook.com/reels/create", { waitUntil: "domcontentloaded", timeout: 20_000 });
+      await dismissCookieDialog(page);
+      onReelPage = page.url().includes("reels");
+    } catch {
+      onReelPage = false;
+    }
 
-    const reelTab = firstLocator(page, ['[role="tab"][aria-label*="Reel" i]', '[data-testid*="reel" i]']).first();
-    if (await reelTab.isVisible({ timeout: 5_000 }).catch(() => false)) {
-      await reelTab.click({ timeout: 10_000 });
+    if (!onReelPage) {
+      await page.goto(FACEBOOK_HOME_URL, { waitUntil: "domcontentloaded", timeout: 40_000 });
+      await dismissCookieDialog(page);
+      await this.openComposer(page);
+      await page.waitForTimeout(1_000);
+      await clickFirstVisible(page, ['[role="tab"][aria-label*="Reel" i]'], { timeout: 5_000 });
       await page.waitForTimeout(1_000);
     }
 
     const [fileChooser] = await Promise.all([
       page.waitForEvent("filechooser", { timeout: 15_000 }),
-      firstLocator(page, ['[aria-label*="Reel" i]', '[aria-label*="video" i]', 'input[type="file"]']).click({ timeout: 15_000 })
+      clickFirst(page, [
+        '[aria-label*="Reel" i]',
+        '[aria-label*="video" i]',
+        'input[type="file"]'
+      ], { timeout: 15_000 })
     ]);
     await fileChooser.setFiles([videoPath]);
     await page.waitForTimeout(5_000);
