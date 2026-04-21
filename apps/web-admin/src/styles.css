@@ -786,6 +786,7 @@ button svg {
 .content-list {
   display: flex;
   flex-direction: column;
+  gap: 8px;
 }
 
 .content-row-link {
@@ -808,6 +809,12 @@ button svg {
 
 .content-row-link:first-child .content-row-card {
   border-top: 0;
+}
+
+.content-row-link {
+  display: block;
+  border-radius: 12px;
+  overflow: hidden;
 }
 
 .content-row-link:hover .content-row-card {
@@ -849,14 +856,15 @@ button svg {
   gap: 6px;
   color: #68746d;
   font-size: 12px;
+  line-height: 1.4;
 }
 
 .content-row-text {
   display: -webkit-box;
   overflow: hidden;
   color: #2d3732;
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 13px;
+  line-height: 1.55;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
