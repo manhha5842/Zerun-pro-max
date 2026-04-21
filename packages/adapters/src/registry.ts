@@ -6,6 +6,8 @@ import { InstagramAdapter } from "./platforms/instagram.js";
 import { TelegramAdapter } from "./platforms/telegram.js";
 import { ThreadsAdapter } from "./platforms/threads.js";
 import { XAdapter } from "./platforms/x.js";
+import { ZaloBotAdapter } from "./platforms/zalo-bot.js";
+import { ZaloWebAdapter } from "./platforms/zalo-web.js";
 
 export class AdapterRegistry {
   private readonly sourceAdapters = new Map<Platform, SourceAdapter>();
@@ -43,6 +45,8 @@ export function createRealAdapterRegistry(): AdapterRegistry {
   const threads = new ThreadsAdapter();
   const instagram = new InstagramAdapter();
   const facebook = new FacebookAdapter();
+  const zaloBot = new ZaloBotAdapter();
+  const zaloWeb = new ZaloWebAdapter();
 
   return registry
     .registerSource(telegram)
@@ -54,5 +58,9 @@ export function createRealAdapterRegistry(): AdapterRegistry {
     .registerSource(instagram)
     .registerPublish(instagram)
     .registerSource(facebook)
-    .registerPublish(facebook);
+    .registerPublish(facebook)
+    .registerSource(zaloBot)
+    .registerPublish(zaloBot)
+    .registerSource(zaloWeb)
+    .registerPublish(zaloWeb);
 }

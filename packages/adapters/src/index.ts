@@ -6,3 +6,5 @@ export * from "./platforms/instagram.js";
 export * from "./platforms/telegram.js";
 export * from "./platforms/threads.js";
 export * from "./platforms/x.js";
+export * from "./platforms/zalo-bot.js";
+export * from "./platforms/zalo-web.js";
