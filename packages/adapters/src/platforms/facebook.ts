@@ -208,7 +208,7 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
     try {
       await page.goto("https://www.facebook.com/stories/create", { waitUntil: "domcontentloaded", timeout: 20_000 });
       await dismissCookieDialog(page);
-      onStoryPage = page.url().includes("stories");
+      onStoryPage = page.url().includes("stories/create") || page.url().includes("stories");
     } catch {
       onStoryPage = false;
     }
@@ -216,32 +216,61 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
     if (!onStoryPage) {
       await page.goto(FACEBOOK_HOME_URL, { waitUntil: "domcontentloaded", timeout: 40_000 });
       await dismissCookieDialog(page);
-      await clickFirst(page, [
+
+      const opened = await clickFirstVisible(page, [
         '[aria-label*="Create story" i]',
-        '[aria-label*="Tao tin" i]',
+        '[aria-label*="Tạo tin" i]',
+        '[aria-label*="Create a story" i]',
         '[aria-label*="Add to story" i]',
-        '[aria-label*="Them vao tin" i]'
+        '[aria-label*="Thêm vào tin" i]',
+        'a[href*="stories/create"]',
+        'text=/Create story|Tạo tin|Add to story|Thêm vào tin/i'
       ], { timeout: 20_000 });
-      await page.waitForTimeout(1_500);
+
+      if (!opened) {
+        throw new Error("Không tìm thấy nút tạo story trên Facebook.");
+      }
+
+      await page.waitForTimeout(2_000);
     }
 
-    const [fileChooser] = await Promise.all([
-      page.waitForEvent("filechooser", { timeout: 15_000 }),
-      clickFirst(page, [
-        '[aria-label*="Photo" i]',
-        '[aria-label*="Anh" i]',
-        'input[type="file"]'
-      ], { timeout: 15_000 })
-    ]);
-    await fileChooser.setFiles([mediaPath]);
-    await page.waitForTimeout(3_000);
+    await clickFirstVisible(page, [
+      'text=/^Photo$|^Ảnh$/i',
+      '[aria-label*="Photo" i]',
+      '[aria-label*="Ảnh" i]'
+    ], { timeout: 5_000 }).catch(() => false);
 
-    await clickFirst(page, [
+    const storyInput = page.locator('input[type="file"][accept*="image"], input[type="file"]');
+    if (await storyInput.count()) {
+      await storyInput.first().setInputFiles([mediaPath]);
+    } else {
+      const [fileChooser] = await Promise.all([
+        page.waitForEvent("filechooser", { timeout: 15_000 }),
+        clickFirst(page, [
+          '[aria-label*="Photo" i]',
+          '[aria-label*="Ảnh" i]',
+          '[aria-label*="Upload" i]',
+          'text=/Photo|Ảnh|Upload/i'
+        ], { timeout: 15_000 })
+      ]);
+      await fileChooser.setFiles([mediaPath]);
+    }
+
+    await page.waitForTimeout(4_000);
+
+    const shared = await clickFirstVisible(page, [
       '[aria-label*="Share to story" i]',
-      '[aria-label*="Chia se len tin" i]',
-      'text=/Share to story|Chia se len tin/i'
+      '[aria-label*="Chia sẻ lên tin" i]',
+      '[aria-label*="Share" i]',
+      '[aria-label*="Chia sẻ" i]',
+      'text=/Share to story|Chia sẻ lên tin|Share|Chia sẻ/i'
     ], { timeout: 20_000 });
-    await page.waitForLoadState("networkidle", { timeout: 30_000 });
+
+    if (!shared) {
+      throw new Error("Không tìm thấy nút chia sẻ story.");
+    }
+
+    await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => undefined);
 
     return { postUrl: page.url(), metadata: { platform: "facebook", type: "story" } };
   }
@@ -251,9 +280,9 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
 
     let onReelPage = false;
     try {
-      await page.goto("https://www.facebook.com/reels/create", { waitUntil: "domcontentloaded", timeout: 20_000 });
+      await page.goto("https://www.facebook.com/reels/create/", { waitUntil: "domcontentloaded", timeout: 20_000 });
       await dismissCookieDialog(page);
-      onReelPage = page.url().includes("reels");
+      onReelPage = page.url().includes("/reels/create");
     } catch {
       onReelPage = false;
     }
@@ -261,25 +290,61 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
     if (!onReelPage) {
       await page.goto(FACEBOOK_HOME_URL, { waitUntil: "domcontentloaded", timeout: 40_000 });
       await dismissCookieDialog(page);
-      await this.openComposer(page);
-      await page.waitForTimeout(1_000);
-      await clickFirstVisible(page, ['[role="tab"][aria-label*="Reel" i]'], { timeout: 5_000 });
-      await page.waitForTimeout(1_000);
+
+      const opened = await clickFirstVisible(page, [
+        'div[role="button"]:has-text("Reel")',
+        'div[role="button"]:has-text("Thước phim")',
+        '[aria-label*="Reel" i]',
+        'text=/Reel|Thước phim/i'
+      ], { timeout: 15_000 });
+
+      if (!opened) {
+        await this.openComposer(page);
+        await page.waitForTimeout(1_000);
+        await clickFirstVisible(page, [
+          '[role="tab"][aria-label*="Reel" i]',
+          '[role="tab"][aria-label*="Video" i]',
+          'text=/Reel|Video|Thước phim/i'
+        ], { timeout: 8_000 });
+      }
+
+      await page.waitForTimeout(2_000);
     }
 
-    const [fileChooser] = await Promise.all([
-      page.waitForEvent("filechooser", { timeout: 15_000 }),
-      clickFirst(page, [
-        '[aria-label*="Reel" i]',
-        '[aria-label*="video" i]',
-        'input[type="file"]'
-      ], { timeout: 15_000 })
-    ]);
-    await fileChooser.setFiles([videoPath]);
+    const reelInput = page.locator('div[aria-label="Reels"][role="form"] input[type="file"], input[type="file"][accept*="video"], input[type="file"]');
+    if (await reelInput.count()) {
+      await reelInput.first().setInputFiles([videoPath]);
+    } else {
+      const [fileChooser] = await Promise.all([
+        page.waitForEvent("filechooser", { timeout: 15_000 }),
+        clickFirst(page, [
+          '[aria-label*="Upload" i]',
+          '[aria-label*="Video" i]',
+          '[aria-label*="Reel" i]',
+          'text=/Upload|Video|Reel|Thước phim/i'
+        ], { timeout: 15_000 })
+      ]);
+      await fileChooser.setFiles([videoPath]);
+    }
+
     await page.waitForTimeout(5_000);
+
+    await clickFirstVisible(page, [
+      '[aria-label="Next"]',
+      '[aria-label="Tiếp"]',
+      'text=/^Next$|^Tiếp$/i'
+    ], { timeout: 5_000 }).catch(() => false);
+    await page.waitForTimeout(1_000);
+    await clickFirstVisible(page, [
+      '[aria-label="Next"]',
+      '[aria-label="Tiếp"]',
+      'text=/^Next$|^Tiếp$/i'
+    ], { timeout: 5_000 }).catch(() => false);
 
     if (caption) {
       const textbox = firstLocator(page, [
+        'div[role="dialog"] form[method="POST"] [contenteditable="true"]',
+        'div[aria-label="Reels"][role="form"] [contenteditable="true"]',
         '[role="dialog"] [role="textbox"]',
         '[contenteditable="true"][role="textbox"]',
         '[data-lexical-editor="true"]'
@@ -290,7 +355,7 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
     }
 
     await this.submitPost(page);
-    await page.waitForLoadState("networkidle", { timeout: 60_000 });
+    await page.waitForLoadState("networkidle", { timeout: 60_000 }).catch(() => undefined);
 
     return { postUrl: page.url(), metadata: { platform: "facebook", type: "reel" } };
   }
