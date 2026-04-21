@@ -100,6 +100,13 @@ export class InstagramAdapter implements SourceAdapter, PublishAdapter {
     try {
       const page = await context.newPage();
       await page.goto("https://www.instagram.com/", { waitUntil: "domcontentloaded", timeout: 40_000 });
+      const authState = await inspectInstagramAuth(page);
+      if (authState.kind === "checkpoint") {
+        throw new AdapterCheckpointError("Instagram checkpoint detected", authState.metadata);
+      }
+      if (authState.kind === "auth") {
+        throw new AdapterAuthError("Instagram session expired or not authenticated", authState.metadata);
+      }
       return await this.doPublishStory(page, mediaPath);
     } catch (error) {
       await captureScreenshot(context, "storage/screenshots", `ig-story-error-${Date.now()}`).catch(() => undefined);
@@ -113,17 +120,20 @@ export class InstagramAdapter implements SourceAdapter, PublishAdapter {
   private async publishFeed(page: any, caption: string, mediaPaths: string[]): Promise<PublishResult> {
     await clickFirst(page, [
       '[aria-label*="Create" i]',
+      '[aria-label*="New post" i]',
       '[aria-label*="Tao" i]',
       'svg[aria-label*="New post" i]',
       'a[href="/#create"]',
-      'text=/Create|Tạo/i'
+      'a[href*="/create/select/"]',
+      'text=/Create|Tạo|New post/i'
     ], { timeout: 15_000 });
 
     await clickFirstVisible(page, [
       'text=/^Post$/i',
       '[aria-label*="Post" i]',
-      'span:has-text("Post")'
-    ], { timeout: 5_000 });
+      'span:has-text("Post")',
+      'div[role="button"]:has-text("Post")'
+    ], { timeout: 5_000 }).catch(() => false);
 
     await page.waitForTimeout(1_000);
 
@@ -160,7 +170,7 @@ export class InstagramAdapter implements SourceAdapter, PublishAdapter {
     await page.waitForTimeout(1_000);
 
     if (caption) {
-      const textbox = page.locator('[aria-label*="Write a caption" i], [contenteditable="true"][role="textbox"]').first();
+      const textbox = page.locator('[aria-label*="Write a caption" i], textarea[aria-label*="caption" i], [contenteditable="true"][role="textbox"], textarea').first();
       await textbox.click({ timeout: 10_000 });
       await textbox.fill(caption);
       await page.waitForTimeout(500);
@@ -170,7 +180,8 @@ export class InstagramAdapter implements SourceAdapter, PublishAdapter {
       'button:has-text("Share")',
       '[aria-label*="Share" i]',
       'text=/^Share$/i',
-      'div[role="button"]:has-text("Share")'
+      'div[role="button"]:has-text("Share")',
+      'button[type="submit"]'
     ], { timeout: 20_000 });
 
     await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => undefined);
@@ -180,21 +191,16 @@ export class InstagramAdapter implements SourceAdapter, PublishAdapter {
   private async doPublishStory(page: any, mediaPath: string): Promise<PublishResult> {
     if (!mediaPath) throw new Error("Story requires exactly one media file");
 
-    try {
-      await page.goto("https://www.instagram.com/stories/create/", { waitUntil: "domcontentloaded", timeout: 20_000 });
-    } catch {
-      // fallback to clicking from home
-    }
+    await page.goto("https://www.instagram.com/", { waitUntil: "domcontentloaded", timeout: 40_000 });
+    await clickFirst(page, [
+      '[aria-label*="story" i]',
+      '[aria-label*="Your Story" i]',
+      'canvas[aria-label*="story" i]',
+      'header canvas',
+      'text=/Your Story|Tin của bạn|Story của bạn/i'
+    ], { timeout: 15_000 });
 
-    if (!page.url().includes("stories")) {
-      await clickFirst(page, [
-        '[aria-label*="story" i]',
-        '[aria-label*="Your Story" i]',
-        'text=/Your Story/i'
-      ], { timeout: 15_000 });
-    }
-
-    const fileInput = page.locator('input[type="file"]');
+    const fileInput = page.locator('input[type="file"][accept*="image"], input[type="file"][accept*="video"], input[type="file"]');
     if (await fileInput.count() > 0) {
       await fileInput.first().setInputFiles([mediaPath]);
     } else {
@@ -202,21 +208,37 @@ export class InstagramAdapter implements SourceAdapter, PublishAdapter {
         page.waitForEvent("filechooser", { timeout: 15_000 }),
         clickFirst(page, [
           '[aria-label*="Upload" i]',
-          'button:has-text("Add")'
+          '[aria-label*="Add to story" i]',
+          '[aria-label*="Your story" i]',
+          'button:has-text("Add")',
+          'text=/Upload|Add to story|Your story/i'
         ], { timeout: 15_000 })
       ]);
       await fileChooser.setFiles([mediaPath]);
     }
 
-    await page.waitForTimeout(3_000);
+    await page.waitForTimeout(4_000);
+
+    await clickFirstVisible(page, [
+      'button:has-text("Next")',
+      '[aria-label*="Next" i]',
+      'text=/^Next$|^Tiếp$/i'
+    ], { timeout: 6_000 }).catch(() => false);
+
+    await page.waitForTimeout(1_000);
 
     await clickFirst(page, [
-      'text=/Add to story|Your story/i',
+      'text=/Add to story|Your story|Chia sẻ lên tin|Tin của bạn|Share to story/i',
+      '[aria-label*="Add to story" i]',
+      '[aria-label*="Your story" i]',
       '[aria-label*="Share" i]',
-      'button:has-text("Share")'
+      'button:has-text("Share")',
+      'button:has-text("Your story")',
+      'div[role="button"]:has-text("Your story")'
     ], { timeout: 20_000 });
 
     await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => undefined);
+    await page.waitForTimeout(2_000);
     return { url: page.url(), metadata: { platform: "instagram", type: "story" } };
   }
 
@@ -225,18 +247,21 @@ export class InstagramAdapter implements SourceAdapter, PublishAdapter {
 
     await clickFirst(page, [
       '[aria-label*="Create" i]',
-      '[aria-label*="Tao" i]'
+      '[aria-label*="New post" i]',
+      '[aria-label*="Tao" i]',
+      'text=/Create|New post|Tạo/i'
     ], { timeout: 15_000 });
 
     await clickFirstVisible(page, [
       '[aria-label*="Reel" i]',
       'text=/^Reel$/i',
-      'span:has-text("Reel")'
-    ], { timeout: 8_000 });
+      'span:has-text("Reel")',
+      'svg[aria-label="Reel"]'
+    ], { timeout: 8_000 }).catch(() => false);
 
     await page.waitForTimeout(1_000);
 
-    const fileInput = page.locator('input[type="file"]');
+    const fileInput = page.locator('input[type="file"][accept*="video"], input[type="file"]');
     if (await fileInput.count() > 0) {
       await fileInput.first().setInputFiles([videoPath]);
     } else {
@@ -253,25 +278,50 @@ export class InstagramAdapter implements SourceAdapter, PublishAdapter {
 
     await page.waitForTimeout(5_000);
 
-    await clickFirstVisible(page, [
-      'button:has-text("Next")',
-      '[aria-label*="Next" i]',
-      'text=/^Next$/i'
-    ], { timeout: 10_000 });
-    await page.waitForTimeout(1_000);
+    for (let step = 0; step < 3; step += 1) {
+      const shareVisible = await hasVisible(page, [
+        'button:has-text("Share")',
+        '[aria-label*="Share" i]',
+        'text=/^Share$/i',
+        'button[type="submit"]'
+      ], 3_000);
+      if (shareVisible) break;
+
+      const nextClicked = await clickFirstVisible(page, [
+        'button:has-text("Next")',
+        'button:has-text("Continue")',
+        '[aria-label*="Next" i]',
+        '[aria-label*="Continue" i]',
+        'text=/^Next$|^Continue$/i'
+      ], { timeout: 6_000 }).catch(() => false);
+
+      if (!nextClicked) break;
+      await page.waitForTimeout(1_500);
+    }
 
     if (caption) {
-      const textbox = page.locator('[aria-label*="Write a caption" i], [contenteditable="true"][role="textbox"]').first();
+      const textbox = page.locator('[aria-label*="Write a caption" i], textarea[aria-label*="caption" i], [contenteditable="true"][role="textbox"], textarea').first();
       await textbox.click({ timeout: 10_000 });
       await textbox.fill(caption);
       await page.waitForTimeout(500);
     }
 
-    await clickFirst(page, [
-      'button:has-text("Share")',
-      '[aria-label*="Share" i]',
-      'text=/^Share$/i'
-    ], { timeout: 20_000 });
+    let shared = false;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      shared = await clickFirstVisible(page, [
+        'button:has-text("Share")',
+        '[aria-label*="Share" i]',
+        'text=/^Share$/i',
+        'div[role="button"]:has-text("Share")',
+        'button[type="submit"]'
+      ], { timeout: 8_000 }).catch(() => false);
+      if (shared) break;
+      await page.waitForTimeout(1_000);
+    }
+
+    if (!shared) {
+      throw new Error("Could not find the Share button for Instagram reel.");
+    }
 
     await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => undefined);
     return { url: page.url(), metadata: { platform: "instagram", type: "reel" } };
@@ -365,6 +415,18 @@ async function clickFirstVisible(page: any, selectors: string[], options: { time
         await loc.click({ timeout: options.timeout ?? 3_000 });
         return true;
       }
+    } catch {
+      // try next
+    }
+  }
+  return false;
+}
+
+async function hasVisible(page: any, selectors: string[], timeout = 3_000): Promise<boolean> {
+  for (const selector of selectors) {
+    try {
+      const visible = await page.locator(selector).first().isVisible({ timeout }).catch(() => false);
+      if (visible) return true;
     } catch {
       // try next
     }

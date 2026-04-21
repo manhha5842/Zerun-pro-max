@@ -47,19 +47,33 @@ Ghi lại từng thay đổi liên quan tới platform automation, kèm nguồn 
   - `packages/adapters/src/platforms/instagram.ts`
 - **Summary:**
   - Thêm auth check trước khi publish story.
-  - Thêm fallback từ home vào `Your Story / Tin của bạn`.
+  - Dùng fallback từ home vào `Your Story / Tin của bạn`.
   - Thêm upload fallback và bước `Next / Tiếp` trước khi `Add to story / Share to story`.
-  - Có thử direct route `https://www.instagram.com/stories/create/`, nhưng hiện chưa có bằng chứng automation đủ mạnh để coi là nguồn xác nhận.
+  - Đã bỏ direct route `https://www.instagram.com/stories/create/` theo yêu cầu vì không có bằng chứng đủ mạnh.
 - **Sources:**
   - GitHub reference cho story/share patterns:
     - `https://github.com/Akbar120/Ai-Assistant-Project/blob/b9fd9ad29e3bff977c0bd1e3c2e97cbbab7f8ad5/src/lib/automation.ts`
     - `https://github.com/RhythrosaLabs/otto-mate-2/blob/458bc1d8a6ac02a00eb317a8a9b57a0b4d972ea4/src/lib/social-media-browser.ts`
-  - GitHub search result có literal URL nhưng không phải bằng chứng automation đủ mạnh:
-    - `https://github.com/aqua-019/djpepewtf/blob/a3b7d8678acca4fc41d4e7d74c8e3345be126ee7/src/lib/shareUtils.js`
-    - `https://github.com/future-fwp/feature-testing/blob/5be7c68ff852d80908f71e215c17c51f3f731818/src/hooks/useShareToInstagram.tsx`
   - Note:
-    - direct route `/stories/create/` hiện phải xem là **hypothesis/pattern inference**, chưa có official doc và chưa runtime-verified end-to-end.
-- **Confidence:** `hypothesis` + `github-reference`
+    - flow story hiện chỉ bám các pattern từ home/story entry có tham chiếu GitHub; không dùng direct route `/stories/create/` nữa.
+- **Confidence:** `github-reference`
+
+### Instagram - reel publish hardening
+- **Files:**
+  - `packages/adapters/src/platforms/instagram.ts`
+- **Summary:**
+  - Harden flow reel theo hướng upload video -> Next/Continue loop -> caption -> Share.
+  - Mở rộng create menu, reel entry, video input, caption input, và share submit fallback.
+- **Sources:**
+  - GitHub reference:
+    - `https://github.com/cagatayalptekin/video-poster/blob/e968419608aff9169231a22b1317e788ffd535fc/src/services/publishers/instagram-playwright.publisher.ts`
+    - `https://github.com/nmthangdn2000/social-tool/blob/5079d9b7c33b2d0014dacfe8d86ad3eacaee9507/src/commands/post-reels-instagram/post-reels-instagram.command.ts`
+    - `https://github.com/angelcgar/social-bot/blob/076e8af879ba3595ffbe50604b6dc9e8c41b8b92/src/networks/instagram.ts`
+    - `https://github.com/shariqsk/allinonesocials/blob/102f9a29c5fe3b8777752c71a98b72edc8169a49/electron/services/platforms/instagram-adapter.ts`
+    - `https://github.com/sojeong94/hol-si-wep/blob/dbaf501119e42ca6a3fc0809d8cd672a26cafed2/server/automation/publishers/instagram.ts`
+  - Status:
+    - chưa runtime-verified end-to-end trên máy hiện tại
+- **Confidence:** `github-reference`
 
 ### Threads - post publish fallback expansion
 - **Files:**
