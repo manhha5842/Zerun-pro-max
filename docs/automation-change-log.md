@@ -6,6 +6,54 @@ Ghi lại từng thay đổi liên quan tới platform automation, kèm nguồn 
 
 ---
 
+## 2026-04-21 (session 2)
+
+### API - Instagram/Threads session health-check endpoints
+- **Files:**
+  - `apps/api/src/app.ts`
+- **Summary:**
+  - Generalized `inspectPersistedFacebookAccountHealth` → `inspectPersistedBrowserAccountHealth(app, account, platform)`.
+  - Added `GET /accounts/:id/instagram-session`, `POST /accounts/:id/instagram-session/check`.
+  - Added `GET /accounts/:id/threads-session`, `POST /accounts/:id/threads-session/check`.
+  - `GET /accounts` now includes `sessionState` for Instagram and Threads accounts (not just Facebook).
+  - Uses `testConnection()` from Instagram/Threads adapters (Playwright-based, confidence: `github-reference`).
+- **Sources:**
+  - Internal refactor; uses existing `InstagramAdapter.testConnection` and `ThreadsAdapter.testConnection` (already present).
+- **Confidence:** `github-reference` (same Playwright session-check pattern as Facebook)
+
+### Web Admin - AccountsPage session check for Instagram/Threads
+- **Files:**
+  - `apps/web-admin/src/pages/AccountsPage.tsx`
+- **Summary:**
+  - Merged `checkFacebookSession` + `checkInstagramSession` + `checkThreadsSession` into one generic `checkBrowserSession` mutation.
+  - IG/Threads accounts now show "Kiểm tra session" button instead of italic hint text.
+- **Sources:**
+  - Internal; no new selectors or automation logic.
+- **Confidence:** `n/a` (UI only)
+
+### Web Admin - PostComposerPage IG story validation fix
+- **Files:**
+  - `apps/web-admin/src/pages/PostComposerPage.tsx`
+- **Summary:**
+  - Instagram Story now requires exactly 1 image (was: 1 media of any type).
+  - Media hint text corrected per-platform.
+- **Sources:**
+  - Internal; matches platform constraint documented earlier.
+- **Confidence:** `n/a` (validation rule, not selector)
+
+### API - Upload validation
+- **Files:**
+  - `apps/api/src/app.ts`
+- **Summary:**
+  - `POST /uploads/manual` now validates MIME type and file size after save.
+  - Rejects non-image/video files; image max 10MB; video max 500MB.
+  - Invalid files deleted immediately after rejection.
+- **Sources:**
+  - Internal constraint logic; no platform selectors involved.
+- **Confidence:** `n/a`
+
+---
+
 ## 2026-04-21
 
 ### Adapters - shared Playwright helpers extracted

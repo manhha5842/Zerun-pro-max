@@ -181,11 +181,13 @@ export function AccountsPage() {
     onError: (error: Error) => setFeedback({ type: "error", message: error.message })
   });
 
-  const checkFacebookSession = useMutation({
-    mutationFn: (accountId: string) => apiPost<{ health: BrowserLoginSession["health"] }>(`/accounts/${accountId}/facebook-session/check`),
-    onSuccess: () => {
+  const checkBrowserSession = useMutation({
+    mutationFn: ({ accountId, platform }: { accountId: string; platform: BrowserLoginPlatform }) =>
+      apiPost<{ health: BrowserLoginSession["health"] }>(`/accounts/${accountId}/${platform}-session/check`),
+    onSuccess: (_data, variables) => {
       void queryClient.invalidateQueries({ queryKey: ["accounts"] });
-      setFeedback({ type: "success", message: "Đã kiểm tra session Facebook." });
+      const label = variables.platform === "facebook" ? "Facebook" : variables.platform === "instagram" ? "Instagram" : "Threads";
+      setFeedback({ type: "success", message: `Đã kiểm tra session ${label}.` });
     },
     onError: (error: Error) => setFeedback({ type: "error", message: error.message })
   });
@@ -382,20 +384,14 @@ export function AccountsPage() {
                           >
                             {persistedSession?.authPath ? "Mở lại browser session" : startBrowserLogin.isPending ? "Đang mở..." : "Mở trình duyệt đăng nhập"}
                           </Button>
-                          {account.platform === "facebook" ? (
-                            <Button
-                              variant="ghost"
-                              icon={<Search aria-hidden />}
-                              onClick={() => checkFacebookSession.mutate(account.id)}
-                              disabled={checkFacebookSession.isPending || startBrowserLogin.isPending}
-                            >
-                              {checkFacebookSession.isPending ? "Đang kiểm tra..." : "Kiểm tra session"}
-                            </Button>
-                          ) : (
-                            <span className="table-subtle" style={{ fontSize: 12, color: "#68746d", fontStyle: "italic" }}>
-                              Chưa có health-check riêng
-                            </span>
-                          )}
+                          <Button
+                            variant="ghost"
+                            icon={<Search aria-hidden />}
+                            onClick={() => checkBrowserSession.mutate({ accountId: account.id, platform: account.platform as BrowserLoginPlatform })}
+                            disabled={checkBrowserSession.isPending || startBrowserLogin.isPending}
+                          >
+                            {checkBrowserSession.isPending ? "Đang kiểm tra..." : "Kiểm tra session"}
+                          </Button>
                         </>
                       ) : null}
                       <Button variant="secondary" icon={<ShieldCheck aria-hidden />} onClick={() => test.mutate(account)} disabled={test.isPending || remove.isPending}>

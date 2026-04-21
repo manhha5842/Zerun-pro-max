@@ -92,11 +92,10 @@ function validateMedia(platform: string, type: string, mediaFiles: UploadedFile[
   }
   if (platform === "instagram") {
     if (type === "feed") {
-      if (mediaFiles.length === 0) return null; // text-only unsupported on instagram but backend handles
-      return null; // feed: image or video accepted
+      return null;
     }
     if (type === "story") {
-      if (mediaFiles.length !== 1) return "Instagram Story cần đúng 1 media.";
+      if (mediaFiles.length !== 1 || !mediaFiles.every(isImageType)) return "Instagram Story cần đúng 1 ảnh.";
       return null;
     }
     if (type === "reel") {
@@ -134,7 +133,8 @@ function allowedPostTypes(platform: string): Array<{ value: string; label: strin
 
 function mediaHint(platform: string, type: string): string {
   if (platform === "threads") return "Threads: có thể đăng không cần media.";
-  if (type === "story") return "Story: đúng 1 media (ảnh hoặc video tuỳ platform).";
+  if (platform === "facebook" && type === "story") return "Facebook Story: đúng 1 ảnh.";
+  if (platform === "instagram" && type === "story") return "Instagram Story: đúng 1 ảnh.";
   if (type === "reel") return "Reel: đúng 1 video.";
   return "Feed: có thể nhiều media.";
 }

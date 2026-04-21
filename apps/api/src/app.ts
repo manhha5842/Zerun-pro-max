@@ -613,11 +613,22 @@ async function createSchedule(request: FastifyRequest, app: FastifyInstance) {
   return ok({ schedules });
 }
 
-async function inspectPersistedFacebookAccountHealth(app: FastifyInstance, account: AnyBody) {
+type BrowserPlatform = "facebook" | "instagram" | "threads";
+
+const PLATFORM_SESSION_ROOTS: Record<BrowserPlatform, string> = {
+  facebook: config.FACEBOOK_SESSION_ROOT,
+  instagram: config.INSTAGRAM_SESSION_ROOT,
+  threads: config.THREADS_SESSION_ROOT
+};
+
+async function inspectPersistedBrowserAccountHealth(app: FastifyInstance, account: AnyBody, platform: BrowserPlatform) {
   const credentials = (account.credentials ?? {}) as Record<string, unknown>;
-  const authPath = typeof credentials.authPath === "string" ? credentials.authPath : path.resolve(config.FACEBOOK_SESSION_ROOT, `${account.id}`, "auth.json");
+  const sessionRoot = PLATFORM_SESSION_ROOTS[platform];
+  const authPath = typeof credentials.authPath === "string" ? credentials.authPath : path.resolve(sessionRoot, `${account.id}`, "auth.json");
   const sessionDir = typeof credentials.sessionDir === "string" ? credentials.sessionDir : undefined;
   const hasSessionFile = existsSync(authPath);
+
+  const platformLabel = platform === "facebook" ? "Facebook" : platform === "instagram" ? "Instagram" : "Threads";
 
   if (!hasSessionFile) {
     return {
@@ -627,13 +638,13 @@ async function inspectPersistedFacebookAccountHealth(app: FastifyInstance, accou
       sessionDir,
       hasSessionFile: false,
       checkedAt: new Date().toISOString(),
-      message: "Chưa có file session Facebook."
+      message: `Chưa có file session ${platformLabel}.`
     };
   }
 
   const adapterAccount = {
     id: String(account.id),
-    platform: "facebook" as const,
+    platform: platform as Platform,
     name: String(account.name),
     handle: account.handle ? String(account.handle) : null,
     credentials,
@@ -641,7 +652,7 @@ async function inspectPersistedFacebookAccountHealth(app: FastifyInstance, accou
   };
 
   try {
-    const health = await app.workerCore.registry.getPublish("facebook").testConnection(adapterAccount);
+    const health = await app.workerCore.registry.getPublish(platform).testConnection(adapterAccount);
     return {
       status: health.status,
       authState: health.status === "healthy" ? "authenticated" : health.status === "checkpoint" ? "checkpoint" : "login_required",
@@ -665,12 +676,17 @@ async function inspectPersistedFacebookAccountHealth(app: FastifyInstance, accou
   }
 }
 
+/** @deprecated use inspectPersistedBrowserAccountHealth(app, account, "facebook") */
+function inspectPersistedFacebookAccountHealth(app: FastifyInstance, account: AnyBody) {
+  return inspectPersistedBrowserAccountHealth(app, account, "facebook");
+}
+
 function registerAccountRoutes(app: FastifyInstance) {
   app.get("/accounts", async () => {
     const [sources, targets, persistedSessions] = await Promise.all([
       prisma.sourceAccount.findMany(),
       prisma.targetAccount.findMany(),
-      prisma.platformSession.findMany({ where: { platform: "facebook", accountKind: "target" } })
+      prisma.platformSession.findMany({ where: { platform: { in: ["facebook", "instagram", "threads"] }, accountKind: "target" } })
     ]);
     const persistedByAccountId = new Map(persistedSessions.map((session) => [session.accountId, session]));
     return ok({
@@ -679,7 +695,7 @@ function registerAccountRoutes(app: FastifyInstance) {
         ...targets.map((account) => ({
           ...account,
           kind: "target",
-          sessionState: account.platform === "facebook" ? persistedByAccountId.get(account.id)?.data ?? null : null
+          sessionState: ["facebook", "instagram", "threads"].includes(account.platform) ? persistedByAccountId.get(account.id)?.data ?? null : null
         }))
       ]
     });
@@ -728,6 +744,84 @@ function registerAccountRoutes(app: FastifyInstance) {
     const health = await inspectPersistedFacebookAccountHealth(app, account);
     await persistPlatformAccountSessionState("facebook", id, {
       ...(((await getPersistedPlatformAccountSessionState("facebook", id))?.data as Record<string, unknown> | null) ?? {}),
+      accountId: id,
+      status: health.status,
+      authState: health.authState,
+      authDetected: health.authState === "authenticated",
+      browserOpen: false,
+      authPath: health.authPath,
+      sessionDir: health.sessionDir,
+      lastCheckedAt: health.checkedAt,
+      lastError: health.status === "failed" ? health.message : undefined,
+      health
+    });
+    return ok({ health });
+  });
+  app.get("/accounts/:id/instagram-session", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const account = await prisma.targetAccount.findUnique({ where: { id } });
+    if (!account || account.platform !== "instagram") {
+      return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy tài khoản Instagram."));
+    }
+
+    const activeSession = Array.from(browserLoginSessions.values()).find((session) => session.accountId === id && session.platform === "instagram");
+    if (activeSession) {
+      return ok({ session: await buildBrowserLoginPayload(activeSession) });
+    }
+
+    const persisted = await getPersistedPlatformAccountSessionState("instagram", id);
+    const health = await inspectPersistedBrowserAccountHealth(app, account, "instagram");
+    return ok({ session: persisted?.data ?? null, health });
+  });
+  app.post("/accounts/:id/instagram-session/check", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const account = await prisma.targetAccount.findUnique({ where: { id } });
+    if (!account || account.platform !== "instagram") {
+      return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy tài khoản Instagram."));
+    }
+
+    const health = await inspectPersistedBrowserAccountHealth(app, account, "instagram");
+    await persistPlatformAccountSessionState("instagram", id, {
+      ...(((await getPersistedPlatformAccountSessionState("instagram", id))?.data as Record<string, unknown> | null) ?? {}),
+      accountId: id,
+      status: health.status,
+      authState: health.authState,
+      authDetected: health.authState === "authenticated",
+      browserOpen: false,
+      authPath: health.authPath,
+      sessionDir: health.sessionDir,
+      lastCheckedAt: health.checkedAt,
+      lastError: health.status === "failed" ? health.message : undefined,
+      health
+    });
+    return ok({ health });
+  });
+  app.get("/accounts/:id/threads-session", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const account = await prisma.targetAccount.findUnique({ where: { id } });
+    if (!account || account.platform !== "threads") {
+      return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy tài khoản Threads."));
+    }
+
+    const activeSession = Array.from(browserLoginSessions.values()).find((session) => session.accountId === id && session.platform === "threads");
+    if (activeSession) {
+      return ok({ session: await buildBrowserLoginPayload(activeSession) });
+    }
+
+    const persisted = await getPersistedPlatformAccountSessionState("threads", id);
+    const health = await inspectPersistedBrowserAccountHealth(app, account, "threads");
+    return ok({ session: persisted?.data ?? null, health });
+  });
+  app.post("/accounts/:id/threads-session/check", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const account = await prisma.targetAccount.findUnique({ where: { id } });
+    if (!account || account.platform !== "threads") {
+      return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy tài khoản Threads."));
+    }
+
+    const health = await inspectPersistedBrowserAccountHealth(app, account, "threads");
+    await persistPlatformAccountSessionState("threads", id, {
+      ...(((await getPersistedPlatformAccountSessionState("threads", id))?.data as Record<string, unknown> | null) ?? {}),
       accountId: id,
       status: health.status,
       authState: health.authState,
