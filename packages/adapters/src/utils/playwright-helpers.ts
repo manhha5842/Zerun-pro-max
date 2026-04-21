@@ -1,11 +1,10 @@
 /**
- * Shared Playwright helper utilities for all platform adapters.
- * These are reusable automation primitives for selector-based interaction.
- * Not platform-specific; safe to import in any adapter.
+ * Shared Playwright helpers for browser automation adapters.
+ * Used by: facebook, instagram, threads, x, zalo-web adapters.
  */
 
 /**
- * Try clicking each selector in order; throws if none succeed.
+ * Click the first matching selector. Throws if none succeeds.
  */
 export async function clickFirst(page: any, selectors: string[], options: { timeout?: number } = {}): Promise<void> {
   let lastError: unknown;
@@ -21,8 +20,7 @@ export async function clickFirst(page: any, selectors: string[], options: { time
 }
 
 /**
- * Click the first selector that is currently visible.
- * Returns true if clicked, false otherwise.
+ * Click the first visible matching selector. Returns true if clicked, false if none visible.
  */
 export async function clickFirstVisible(page: any, selectors: string[], options: { timeout?: number } = {}): Promise<boolean> {
   for (const selector of selectors) {
@@ -41,7 +39,7 @@ export async function clickFirstVisible(page: any, selectors: string[], options:
 }
 
 /**
- * Check whether any selector is visible.
+ * Check if any of the given selectors is visible. Returns true if found.
  */
 export async function hasVisible(page: any, selectors: string[], timeout = 3_000): Promise<boolean> {
   for (const selector of selectors) {
@@ -53,4 +51,19 @@ export async function hasVisible(page: any, selectors: string[], timeout = 3_000
     }
   }
   return false;
+}
+
+/**
+ * Capture a screenshot from the first page in a context.
+ */
+export async function captureScreenshot(context: any, dir: string, name: string): Promise<string> {
+  const { mkdirSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  mkdirSync(dir, { recursive: true });
+  const filePath = join(dir, `${name}.png`);
+  const pages = context.pages();
+  if (pages.length > 0) {
+    await pages[0].screenshot({ path: filePath, fullPage: false });
+  }
+  return filePath;
 }

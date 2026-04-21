@@ -426,27 +426,34 @@ function registerContentRoutes(app: FastifyInstance) {
     const content = await prisma.content.findUnique({ where: { code } });
     if (!content) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy nội dung."));
 
-    // Priority: body.targetIds > content.scheduledTargets > active Facebook targets
+    // Resolve target IDs: body.targetIds > content.scheduledTargets > active targets matching content.platform
+    // Routing by platform:
+    //   facebook  → publishNow (routes to facebook adapter via publish queue)
+    //   instagram → publishNow (routes to instagram adapter via publish queue)
+    //   threads   → publishNow (routes to threads adapter via publish queue)
+    //   default   → publishNow (routes to whichever adapter matches the target)
+    // Note: fb-post queue is only for the FbCampaign/FbPostTarget system and requires a different data model.
     let targetIds: string[] = [];
     if (Array.isArray(body.targetIds) && body.targetIds.length > 0) {
       targetIds = body.targetIds.map(String);
     } else if (Array.isArray(content.scheduledTargets) && (content.scheduledTargets as unknown[]).length > 0) {
       targetIds = (content.scheduledTargets as unknown[]).map(String);
     } else {
-      // Fallback: lấy tất cả Facebook target accounts đang active
-      const fbTargets = await prisma.targetAccount.findMany({
-        where: { platform: "facebook", isActive: true, health: { not: "paused" } },
+      // Fallback: find active targets matching content.platform
+      const contentPlatform = content.platform && content.platform !== "manual" ? content.platform : "facebook";
+      const platformTargets = await prisma.targetAccount.findMany({
+        where: { platform: contentPlatform, isActive: true, health: { not: "paused" } },
         select: { id: true }
       });
-      targetIds = fbTargets.map((target) => target.id);
+      targetIds = platformTargets.map((target) => target.id);
     }
 
     if (targetIds.length === 0) {
-      return reply.code(400).send(fail("TARGET_REQUIRED", "Không tìm được tài khoản đich để đăng. Hãy chọn target hoặc tạo tài khoản Facebook."));
+      return reply.code(400).send(fail("TARGET_REQUIRED", `Không tìm được tài khoản đích để đăng (platform: ${content.platform}). Hãy chọn target hoặc tạo tài khoản phù hợp.`));
     }
 
     await Promise.all(targetIds.map((targetId) => app.workerCore.publishNow(content.id, targetId, "admin")));
-    return ok({ queued: true, targetCount: targetIds.length });
+    return ok({ queued: true, targetCount: targetIds.length, platform: content.platform });
   });
   app.post("/contents/:code/schedule", async (request, reply) => {
     const { code } = request.params as { code: string };
@@ -481,6 +488,26 @@ async function updateContentStatus(request: FastifyRequest, status: string) {
     data: { status, metadata: body.reason ? { reason: body.reason } : undefined }
   });
   return ok({ content });
+}
+
+const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+const ALLOWED_VIDEO_TYPES = new Set(["video/mp4", "video/quicktime", "video/x-msvideo", "video/webm"]);
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB
+const MAX_VIDEO_BYTES = 500 * 1024 * 1024; // 500 MB
+
+function validateUploadedFile(mimetype: string, bytesRead: number): string | null {
+  const isImage = ALLOWED_IMAGE_TYPES.has(mimetype);
+  const isVideo = ALLOWED_VIDEO_TYPES.has(mimetype);
+  if (!isImage && !isVideo) {
+    return `Loại file không hỗ trợ: ${mimetype}. Chỉ chấp nhận jpg, png, gif, webp, mp4, mov.`;
+  }
+  if (isImage && bytesRead > MAX_IMAGE_BYTES) {
+    return `Ảnh quá lớn (tối đa 10 MB, hiện tại ${(bytesRead / 1_048_576).toFixed(1)} MB).`;
+  }
+  if (isVideo && bytesRead > MAX_VIDEO_BYTES) {
+    return `Video quá lớn (tối đa 500 MB, hiện tại ${(bytesRead / 1_048_576).toFixed(1)} MB).`;
+  }
+  return null;
 }
 
 async function saveUploadedFile(part: Awaited<ReturnType<FastifyRequest["file"]>>) {
@@ -1118,6 +1145,13 @@ function registerFacebookRoutes(app: FastifyInstance) {
     if (!part) return reply.code(400).send(fail("FILE_REQUIRED", "Cần chọn file để upload."));
     const saved = await saveUploadedFile(part);
     if (!saved) return reply.code(500).send(fail("UPLOAD_FAILED", "Không thể lưu file upload."));
+
+    const validationError = validateUploadedFile(saved.mimeType, saved.fileSize);
+    if (validationError) {
+      rmSync(saved.localPath, { force: true });
+      return reply.code(400).send(fail("UPLOAD_INVALID", validationError));
+    }
+
     return ok({ file: saved });
   });
 
