@@ -1,0 +1,17 @@
+{
+  "name": "@zerun/adapters",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@zerun/core": "0.1.0",
+    "@zerun/shared": "0.1.0",
+    "agent-twitter-client": "^0.0.18",
+    "instagram-private-api": "^1.46.1",
+    "playwright": "^1.57.0",
+    "telegram": "^2.26.22"
+  }
+}

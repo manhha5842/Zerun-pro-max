@@ -1,0 +1,8 @@
+tunnel: <TUNNEL_ID>
+credentials-file: ~/.cloudflared/<TUNNEL_ID>.json
+ingress:
+  - hostname: admin.zerun.local
+    service: http://localhost:3000
+  - hostname: api.zerun.local
+    service: http://localhost:3000
+  - service: http_status:404

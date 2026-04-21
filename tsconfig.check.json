@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "packages/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "apps/mobile/**",
+    "**/dist/**",
+    "**/build/**"
+  ]
+}

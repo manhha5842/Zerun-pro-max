@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build outputs
+dist/
+build/
+out/
+coverage/
+**/dist/
+**/build/
+**/out/
+**/coverage/
+
+# Tooling caches
+.vite/
+**/.vite/
+.cache/
+**/.cache/
+.turbo/
+**/.turbo/
+.parcel-cache/
+**/.parcel-cache/
+
+# TypeScript / bundler artifacts
+*.tsbuildinfo
+vite.svg
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# Runtime uploads / generated media
+apps/api/storage/screenshots/*
+apps/api/storage/sessions/*
+
+# Misc
+*.tgz
+*.seed

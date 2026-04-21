@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "baseUrl": ".",
+    "paths": {
+      "@zerun/shared": ["packages/shared/src/index.ts"],
+      "@zerun/core": ["packages/core/src/index.ts"],
+      "@zerun/db": ["packages/db/src/index.ts"],
+      "@zerun/adapters": ["packages/adapters/src/index.ts"],
+      "@zerun/worker-core": ["packages/worker-core/src/index.ts"]
+    }
+  }
+}

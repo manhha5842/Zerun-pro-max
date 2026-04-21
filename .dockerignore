@@ -1,0 +1,9 @@
+node_modules
+npm-debug.log
+apps/web-admin/dist
+apps/**/node_modules
+packages/**/node_modules
+.git
+.env
+storage
+coverage
