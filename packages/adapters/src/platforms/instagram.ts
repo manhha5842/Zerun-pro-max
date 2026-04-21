@@ -1,4 +1,6 @@
-import { AdapterAuthError, ConfigurationError, RetryableNetworkError, type Platform } from "@zerun/shared";
+import { mkdirSync } from "node:fs";
+import path from "node:path";
+import { AdapterAuthError, AdapterCheckpointError, RetryableNetworkError, type Platform } from "@zerun/shared";
 import type { AdapterAccount, AdapterHealth, CrawlInput, CrawlResult, PublishAdapter, PublishInput, PublishResult, SourceAdapter } from "../contracts.js";
 import { readString } from "../utils/credentials.js";
 
@@ -6,9 +8,24 @@ export class InstagramAdapter implements SourceAdapter, PublishAdapter {
   readonly platform: Platform = "instagram";
 
   async testConnection(account: AdapterAccount): Promise<AdapterHealth> {
-    const ig = await this.login(account);
-    const currentUser = await ig.account.currentUser();
-    return currentUser ? { status: "healthy", message: "Instagram login hợp lệ", metadata: { username: currentUser.username } } : { status: "failed", message: "Không đọc được user Instagram" };
+    const { browser, context } = await this.openContext(account);
+    try {
+      const page = await context.newPage();
+      await page.goto("https://www.instagram.com/", { waitUntil: "domcontentloaded", timeout: 30_000 });
+      const state = await inspectInstagramAuth(page);
+      if (state.kind === "checkpoint") {
+        return { status: "checkpoint", message: "Instagram checkpoint or account review detected", metadata: state.metadata };
+      }
+      if (state.kind === "auth") {
+        return { status: "failed", message: "Instagram session expired or not authenticated", metadata: state.metadata };
+      }
+      return { status: "healthy", message: "Instagram session is valid", metadata: state.metadata };
+    } catch (error) {
+      return { status: "degraded", message: normalizeInstagramError(error).message };
+    } finally {
+      await context.close();
+      await browser.close();
+    }
   }
 
   async crawl(input: CrawlInput): Promise<CrawlResult> {
@@ -38,27 +55,226 @@ export class InstagramAdapter implements SourceAdapter, PublishAdapter {
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
-    if (input.media.length === 0 || !input.media[0]?.localPath) {
-      throw new ConfigurationError("Instagram publish thật cần ít nhất một ảnh localPath");
-    }
-
-    const fs = await import("node:fs/promises");
-    const ig = await this.login(input.account);
-    const file = await fs.readFile(input.media[0].localPath);
+    const mediaPaths = input.media.map((m) => m.localPath ?? m.url ?? "").filter(Boolean);
+    const requestedType = resolveInstagramPublishType(input);
+    const isVideo = input.media[0]?.type === "video";
+    const { browser, context } = await this.openContext(input.account);
 
     try {
-      const result = await ig.publish.photo({
-        file,
-        caption: input.text
-      });
-      return {
-        externalId: result?.media?.id,
-        url: result?.media?.code ? `https://www.instagram.com/p/${result.media.code}/` : undefined,
-        metadata: { media: result?.media }
-      };
+      const page = await context.newPage();
+      await page.goto("https://www.instagram.com/", { waitUntil: "domcontentloaded", timeout: 40_000 });
+
+      const authState = await inspectInstagramAuth(page);
+      if (authState.kind === "checkpoint") {
+        throw new AdapterCheckpointError("Instagram checkpoint detected", authState.metadata);
+      }
+      if (authState.kind === "auth") {
+        throw new AdapterAuthError("Instagram session expired or not authenticated", authState.metadata);
+      }
+
+      if (requestedType === "story") {
+        if (mediaPaths.length !== 1) throw new Error("Instagram story requires exactly one media file");
+        return await this.doPublishStory(page, mediaPaths[0]);
+      }
+
+      if (requestedType === "reel") {
+        if (!mediaPaths[0]) throw new Error("Instagram reel requires one video file");
+        return await this.publishReel(page, input.text, mediaPaths[0]);
+      }
+
+      if (isVideo && mediaPaths.length === 1) {
+        return await this.publishReel(page, input.text, mediaPaths[0]);
+      }
+      return await this.publishFeed(page, input.text, mediaPaths);
     } catch (error) {
+      await captureScreenshot(context, "storage/screenshots", `ig-error-${Date.now()}`).catch(() => undefined);
       throw normalizeInstagramError(error);
+    } finally {
+      await context.close();
+      await browser.close();
     }
+  }
+
+  async publishStory(account: AdapterAccount, mediaPath: string): Promise<PublishResult> {
+    const { browser, context } = await this.openContext(account);
+    try {
+      const page = await context.newPage();
+      await page.goto("https://www.instagram.com/", { waitUntil: "domcontentloaded", timeout: 40_000 });
+      return await this.doPublishStory(page, mediaPath);
+    } catch (error) {
+      await captureScreenshot(context, "storage/screenshots", `ig-story-error-${Date.now()}`).catch(() => undefined);
+      throw normalizeInstagramError(error);
+    } finally {
+      await context.close();
+      await browser.close();
+    }
+  }
+
+  private async publishFeed(page: any, caption: string, mediaPaths: string[]): Promise<PublishResult> {
+    await clickFirst(page, [
+      '[aria-label*="Create" i]',
+      '[aria-label*="Tao" i]',
+      'svg[aria-label*="New post" i]',
+      'a[href="/#create"]',
+      'text=/Create|Tạo/i'
+    ], { timeout: 15_000 });
+
+    await clickFirstVisible(page, [
+      'text=/^Post$/i',
+      '[aria-label*="Post" i]',
+      'span:has-text("Post")'
+    ], { timeout: 5_000 });
+
+    await page.waitForTimeout(1_000);
+
+    if (mediaPaths.length > 0) {
+      const fileInput = page.locator('input[type="file"]');
+      if (await fileInput.count() > 0) {
+        await fileInput.first().setInputFiles(mediaPaths);
+      } else {
+        const [fileChooser] = await Promise.all([
+          page.waitForEvent("filechooser", { timeout: 15_000 }),
+          clickFirst(page, [
+            'text=/Select from computer/i',
+            'button:has-text("Select")',
+            '[aria-label*="Select" i]'
+          ], { timeout: 15_000 })
+        ]);
+        await fileChooser.setFiles(mediaPaths);
+      }
+      await page.waitForTimeout(3_000);
+    }
+
+    await clickFirstVisible(page, [
+      'button:has-text("Next")',
+      '[aria-label*="Next" i]',
+      'text=/^Next$/i'
+    ], { timeout: 10_000 });
+    await page.waitForTimeout(1_000);
+
+    await clickFirstVisible(page, [
+      'button:has-text("Next")',
+      '[aria-label*="Next" i]',
+      'text=/^Next$/i'
+    ], { timeout: 5_000 });
+    await page.waitForTimeout(1_000);
+
+    if (caption) {
+      const textbox = page.locator('[aria-label*="Write a caption" i], [contenteditable="true"][role="textbox"]').first();
+      await textbox.click({ timeout: 10_000 });
+      await textbox.fill(caption);
+      await page.waitForTimeout(500);
+    }
+
+    await clickFirst(page, [
+      'button:has-text("Share")',
+      '[aria-label*="Share" i]',
+      'text=/^Share$/i',
+      'div[role="button"]:has-text("Share")'
+    ], { timeout: 20_000 });
+
+    await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => undefined);
+    return { url: page.url(), metadata: { platform: "instagram", type: "feed" } };
+  }
+
+  private async doPublishStory(page: any, mediaPath: string): Promise<PublishResult> {
+    if (!mediaPath) throw new Error("Story requires exactly one media file");
+
+    try {
+      await page.goto("https://www.instagram.com/stories/create/", { waitUntil: "domcontentloaded", timeout: 20_000 });
+    } catch {
+      // fallback to clicking from home
+    }
+
+    if (!page.url().includes("stories")) {
+      await clickFirst(page, [
+        '[aria-label*="story" i]',
+        '[aria-label*="Your Story" i]',
+        'text=/Your Story/i'
+      ], { timeout: 15_000 });
+    }
+
+    const fileInput = page.locator('input[type="file"]');
+    if (await fileInput.count() > 0) {
+      await fileInput.first().setInputFiles([mediaPath]);
+    } else {
+      const [fileChooser] = await Promise.all([
+        page.waitForEvent("filechooser", { timeout: 15_000 }),
+        clickFirst(page, [
+          '[aria-label*="Upload" i]',
+          'button:has-text("Add")'
+        ], { timeout: 15_000 })
+      ]);
+      await fileChooser.setFiles([mediaPath]);
+    }
+
+    await page.waitForTimeout(3_000);
+
+    await clickFirst(page, [
+      'text=/Add to story|Your story/i',
+      '[aria-label*="Share" i]',
+      'button:has-text("Share")'
+    ], { timeout: 20_000 });
+
+    await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => undefined);
+    return { url: page.url(), metadata: { platform: "instagram", type: "story" } };
+  }
+
+  private async publishReel(page: any, caption: string, videoPath: string): Promise<PublishResult> {
+    if (!videoPath) throw new Error("Reel requires exactly one video");
+
+    await clickFirst(page, [
+      '[aria-label*="Create" i]',
+      '[aria-label*="Tao" i]'
+    ], { timeout: 15_000 });
+
+    await clickFirstVisible(page, [
+      '[aria-label*="Reel" i]',
+      'text=/^Reel$/i',
+      'span:has-text("Reel")'
+    ], { timeout: 8_000 });
+
+    await page.waitForTimeout(1_000);
+
+    const fileInput = page.locator('input[type="file"]');
+    if (await fileInput.count() > 0) {
+      await fileInput.first().setInputFiles([videoPath]);
+    } else {
+      const [fileChooser] = await Promise.all([
+        page.waitForEvent("filechooser", { timeout: 15_000 }),
+        clickFirst(page, [
+          'text=/Select from computer/i',
+          '[aria-label*="Select" i]',
+          'button:has-text("Select")'
+        ], { timeout: 15_000 })
+      ]);
+      await fileChooser.setFiles([videoPath]);
+    }
+
+    await page.waitForTimeout(5_000);
+
+    await clickFirstVisible(page, [
+      'button:has-text("Next")',
+      '[aria-label*="Next" i]',
+      'text=/^Next$/i'
+    ], { timeout: 10_000 });
+    await page.waitForTimeout(1_000);
+
+    if (caption) {
+      const textbox = page.locator('[aria-label*="Write a caption" i], [contenteditable="true"][role="textbox"]').first();
+      await textbox.click({ timeout: 10_000 });
+      await textbox.fill(caption);
+      await page.waitForTimeout(500);
+    }
+
+    await clickFirst(page, [
+      'button:has-text("Share")',
+      '[aria-label*="Share" i]',
+      'text=/^Share$/i'
+    ], { timeout: 20_000 });
+
+    await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => undefined);
+    return { url: page.url(), metadata: { platform: "instagram", type: "reel" } };
   }
 
   private async login(account: AdapterAccount): Promise<any> {
@@ -70,6 +286,90 @@ export class InstagramAdapter implements SourceAdapter, PublishAdapter {
     await ig.account.login(username, password);
     return ig;
   }
+
+  private async openContext(account: AdapterAccount): Promise<{ browser: any; context: any }> {
+    const sessionDir = readString(account.credentials, "sessionDir", `storage/sessions/instagram/${account.id}`);
+    const { chromium } = await import("playwright");
+    const context = await chromium.launchPersistentContext(sessionDir, {
+      headless: (account.config as Record<string, unknown>)?.headless === true,
+      viewport: { width: 1366, height: 900 },
+      args: ["--no-sandbox"]
+    });
+    return { browser: { close: () => Promise.resolve() }, context };
+  }
+}
+
+async function inspectInstagramAuth(page: any): Promise<{ kind: "ok" | "auth" | "checkpoint"; metadata: Record<string, unknown> }> {
+  const state = await page.evaluate(() => {
+    const bodyText = document.body?.innerText?.toLowerCase() ?? "";
+    const hasLoginForm = !!document.querySelector('input[name="username"], input[name="password"]');
+    const checkpointPhrases = ["checkpoint", "review recent login", "suspended", "confirm your identity", "unusual login"];
+    const authPhrases = ["log in", "create new account", "sign up"];
+    return {
+      hasLoginForm,
+      hasCheckpoint: checkpointPhrases.some((p) => bodyText.includes(p)),
+      hasAuthWall: hasLoginForm || authPhrases.some((p) => bodyText.includes(p)),
+      url: window.location.href
+    };
+  });
+
+  const metadata = { url: state.url };
+
+  if (state.hasCheckpoint) {
+    return { kind: "checkpoint", metadata };
+  }
+  if (state.hasAuthWall) {
+    return { kind: "auth", metadata };
+  }
+  return { kind: "ok", metadata };
+}
+
+async function captureScreenshot(context: any, dir: string, name: string): Promise<string> {
+  mkdirSync(dir, { recursive: true });
+  const filePath = path.join(dir, `${name}.png`);
+  const pages = context.pages();
+  if (pages.length > 0) {
+    await pages[0].screenshot({ path: filePath, fullPage: false });
+  }
+  return filePath;
+}
+
+async function clickFirst(page: any, selectors: string[], options: { timeout?: number } = {}): Promise<void> {
+  let lastError: unknown;
+  for (const selector of selectors) {
+    try {
+      await page.locator(selector).first().click({ timeout: options.timeout ?? 8_000 });
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(`Could not click any selector: ${selectors.join(" | ")}`);
+}
+
+function resolveInstagramPublishType(input: PublishInput): "feed" | "story" | "reel" {
+  const metadataType = String(input.media[0]?.metadata?.postType ?? input.media[0]?.metadata?.type ?? "").toLowerCase();
+  const configType = String((input.account.config as Record<string, unknown>)?.publishType ?? "").toLowerCase();
+  const combined = metadataType || configType;
+  if (combined === "story") return "story";
+  if (combined === "reel") return "reel";
+  return "feed";
+}
+
+async function clickFirstVisible(page: any, selectors: string[], options: { timeout?: number } = {}): Promise<boolean> {
+  for (const selector of selectors) {
+    try {
+      const loc = page.locator(selector).first();
+      const visible = await loc.isVisible({ timeout: options.timeout ?? 3_000 }).catch(() => false);
+      if (visible) {
+        await loc.click({ timeout: options.timeout ?? 3_000 });
+        return true;
+      }
+    } catch {
+      // try next
+    }
+  }
+  return false;
 }
 
 function collectInstagramMedia(item: any) {
@@ -85,7 +385,8 @@ function collectInstagramMedia(item: any) {
 
 function normalizeInstagramError(error: unknown): Error {
   const message = error instanceof Error ? error.message : String(error);
-  if (/login|challenge|checkpoint|password|two_factor/i.test(message)) return new AdapterAuthError(message);
-  if (/rate|timeout|ECONN|network/i.test(message)) return new RetryableNetworkError(message);
+  if (/checkpoint|challenge|suspended|confirm your identity/i.test(message)) return new AdapterCheckpointError(message);
+  if (/login|password|session expired|not authenticated/i.test(message)) return new AdapterAuthError(message);
+  if (/timeout|net::|ECONN|Target closed/i.test(message)) return new RetryableNetworkError(message);
   return error instanceof Error ? error : new Error(message);
 }
