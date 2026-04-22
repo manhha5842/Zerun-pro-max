@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import { apiGet } from "../api/client";
@@ -155,8 +155,8 @@ export function HistoryPage() {
             </thead>
             <tbody>
               {attempts.map((a) => (
-                <>
-                  <tr key={a.id} style={{ cursor: "pointer" }} onClick={() => toggleExpand(a.id)}>
+                <Fragment key={a.id}>
+                  <tr style={{ cursor: "pointer" }} onClick={() => toggleExpand(a.id)}>
                     <td style={{ color: "#9ca3af", paddingRight: 4 }}>
                       {expanded.has(a.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                     </td>
@@ -186,7 +186,7 @@ export function HistoryPage() {
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               ))}
             </tbody>
           </table>
