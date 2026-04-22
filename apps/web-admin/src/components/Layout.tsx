@@ -1,6 +1,5 @@
 import {
   Activity,
-  AlertTriangle,
   CalendarClock,
   Download,
   FileText,
@@ -22,9 +21,8 @@ const navSections = [
     label: "ĐĂNG BÀI",
     items: [
       { to: "/contents/new", label: "Nhập bài đăng", icon: Send },
-      { to: "/contents", label: "Bài viết", icon: FileText },
+      { to: "/contents", label: "Quản lý bài viết", icon: FileText },
       { to: "/history", label: "Lịch sử đăng", icon: History },
-      { to: "/failed", label: "Bài lỗi", icon: AlertTriangle },
       { to: "/pending-comments", label: "Comment chờ", icon: MessageSquare },
       { to: "/schedules", label: "Lịch đăng", icon: CalendarClock },
       { to: "/accounts", label: "Tài khoản đăng", icon: Users }

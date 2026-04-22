@@ -35,6 +35,14 @@ const statusLabel: Record<string, string> = {
   processing: "Đang xử lý"
 };
 
+const quickTabs = [
+  { value: "all", label: "Tất cả" },
+  { value: "ready_to_publish", label: "Sẵn sàng" },
+  { value: "scheduled", label: "Đã lên lịch" },
+  { value: "failed", label: "Lỗi" },
+  { value: "published", label: "Đã đăng" }
+] as const;
+
 export function ContentsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [keyword, setKeyword] = useState("");
@@ -84,7 +92,7 @@ export function ContentsPage() {
     <>
       <PageHeader
         title="Quản lý bài viết"
-        subtitle="Kho noi dung da tao. Loc theo trang thai, mo chi tiet de sua, dang lai hoac hen lai bai loi."
+        subtitle="Kho nội dung đã tạo. Lọc theo trạng thái, mở chi tiết để sửa, đăng lại hoặc hẹn lại bài lỗi."
         actions={
           <div className="actions">
             <Link to="/contents/new">
@@ -98,32 +106,40 @@ export function ContentsPage() {
       />
 
       <SectionCard
-        title="Danh sach bai viet"
-        description={`${filteredContents.length} bai`}
+        title="Quản lý bài viết"
+        description={`${filteredContents.length} bài`}
         actions={
           <div className="contents-toolbar" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <div className="contents-search">
               <Search aria-hidden size={15} />
-              <Input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="Tim theo ma, nguon, noi dung..." />
+              <Input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="Tìm theo mã, nguồn, nội dung..." />
             </div>
-            <select
-              value={statusFilter}
-              onChange={(event) => setSearchParams(event.target.value === "all" ? {} : { status: event.target.value })}
-              style={{ minWidth: 170, height: 40, padding: "0 12px", borderRadius: 10, border: "1px solid var(--color-border)", background: "#fff" }}
-            >
-              <option value="all">Tat ca trang thai</option>
-              <option value="draft">Nhap / nhap tay</option>
-              <option value="ready_to_publish">San sang dang</option>
-              <option value="scheduled">Da len lich</option>
-              <option value="publishing">Dang dang</option>
-              <option value="published">Da dang</option>
-              <option value="failed">Loi</option>
-            </select>
           </div>
         }
       >
+        <div className="contents-tabs" style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+          {quickTabs.map((tab) => {
+            const active = statusFilter === tab.value;
+            return (
+              <button
+                key={tab.value}
+                type="button"
+                className={`muted-chip ${active ? "active" : ""}`}
+                onClick={() => setSearchParams(tab.value === "all" ? {} : { status: tab.value })}
+                style={{
+                  cursor: "pointer",
+                  borderColor: active ? "var(--color-primary)" : undefined,
+                  background: active ? "var(--color-primary-soft)" : undefined,
+                  color: active ? "var(--color-primary)" : undefined
+                }}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
         {filteredContents.length === 0 ? (
-          <EmptyState title="Chưa có bài viết" description={keyword ? "Không tìm thấy bài nào khớp từ khóa." : "Bài crawl/import hoặc nhập tay sẽ xuất hiện tại đây."} />
+          <EmptyState title="Chưa có bài viết" description={keyword ? "Không tìm thấy bài nào khớp từ khóa." : "Bài crawl, import hoặc nhập tay sẽ xuất hiện tại đây."} />
         ) : (
           <div className="content-list">
             {filteredContents.map((content) => (
@@ -142,7 +158,7 @@ export function ContentsPage() {
                       <StatusBadge status={content.status} />
                     </div>
 
-                    <div className="content-row-text">{content.originalText?.trim() || "Khong co noi dung"}</div>
+                    <div className="content-row-text">{content.originalText?.trim() || "Không có nội dung"}</div>
                   </div>
                 </Link>
 
@@ -153,20 +169,20 @@ export function ContentsPage() {
                       <span>{content.platform}</span>
                     </div>
                   </div>
-                  <div className="content-row-action">{statusLabel[content.status] ?? content.status} · Xem chi tiet</div>
+                  <div className="content-row-action">{statusLabel[content.status] ?? content.status} · Xem chi tiết</div>
 
                   {content.status === "failed" ? (
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        <Button size="sm" disabled={busyCode === content.code} onClick={() => retryFailed(content)}>Dang lai ngay</Button>
+                        <Button size="sm" disabled={busyCode === content.code} onClick={() => retryFailed(content)}>Đăng lại ngay</Button>
                         <Link to={`/contents/${content.code}`}>
-                          <Button size="sm" variant="secondary">Mo chi tiet</Button>
+                          <Button size="sm" variant="secondary">Mở chi tiết</Button>
                         </Link>
                       </div>
                       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                         <Input type="datetime-local" value={rescheduleMap[content.code] ?? ""} onChange={(event) => setRescheduleMap((prev) => ({ ...prev, [content.code]: event.target.value }))} />
                         <Button size="sm" variant="secondary" disabled={busyCode === content.code || !rescheduleMap[content.code]} onClick={() => rescheduleFailed(content)}>
-                          Hen gio lai
+                          Hẹn giờ lại
                         </Button>
                       </div>
                     </div>
