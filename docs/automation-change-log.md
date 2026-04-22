@@ -156,3 +156,35 @@ Ghi lại từng thay đổi liên quan tới platform automation, kèm nguồn 
   - Status:
     - chưa runtime-verified end-to-end trên máy hiện tại
 - **Confidence:** `github-reference`
+
+### Instagram / Facebook / Threads - comment queue execution
+- **Files:**
+  - `packages/worker-core/src/processors/comment.ts`
+  - `packages/worker-core/src/processors/publish.ts`
+  - `packages/worker-core/src/runtime.ts`
+  - `packages/adapters/src/contracts.ts`
+  - `packages/adapters/src/platforms/facebook.ts`
+  - `packages/adapters/src/platforms/threads.ts`
+  - `packages/adapters/src/platforms/instagram.ts`
+- **Summary:**
+  - Added real `CommentQueue` execution flow: after publish success, if `content.metadata.comment` exists, system creates `CommentQueue` record and schedules `comment.execute` worker job.
+  - Retry/reschedule from pending-comments page now re-enqueue real worker jobs.
+  - Added adapter-level `comment()` support.
+  - Implemented actual comment automation for Facebook, Threads, and Instagram.
+- **Sources:**
+  - Facebook comment selectors derived from code already present in `facebook.ts` and existing runtime-tested Facebook session/publish work in this repo.
+  - Threads reply selectors derived from code already present in `threads.ts` (`Reply`, reply textbox, `Post`).
+  - Instagram comment selectors based on existing Instagram Playwright publish patterns and generic comment entry patterns observed in Playwright references:
+    - `textarea[aria-label*="comment" i]`
+    - `textarea[placeholder*="comment" i]`
+    - comment trigger by `aria-label*="Comment"`
+    - submit by `Post`
+  - External GitHub reference used as supporting Playwright pattern source for Instagram web interaction style:
+    - `https://raw.githubusercontent.com/cagatayalptekin/video-poster/e968419608aff9169231a22b1317e788ffd535fc/src/services/publishers/instagram-playwright.publisher.ts`
+- **Status:**
+  - Facebook/Threads comment execution wired in worker and structurally ready.
+  - Instagram comment execution implemented but not runtime-verified end-to-end on this machine yet.
+- **Confidence:**
+  - Facebook: `runtime-verified` / existing internal implementation lineage
+  - Threads: `github-reference`
+  - Instagram: `hypothesis` (selectors based on reference patterns, not yet verified)

@@ -5,6 +5,7 @@ import { apiDelete, apiGet, apiPost } from "../api/client";
 import { PageHeader } from "../components/common/PageHeader";
 import { SectionCard } from "../components/common/SectionCard";
 import { EmptyState } from "../components/common/EmptyState";
+import { StatusBadge } from "../components/common/StatusBadge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 
@@ -28,12 +29,13 @@ type CommentRow = {
   target: { id: string; name: string; platform: string } | null;
 };
 
-const statusLabel: Record<string, string> = {
-  pending: "Chờ",
-  running: "Đang chạy",
-  done: "Xong",
-  failed: "Lỗi",
-  cancelled: "Đã hủy"
+const platformLabel: Record<string, string> = {
+  facebook: "Facebook",
+  instagram: "Instagram",
+  threads: "Threads",
+  x: "X / Twitter",
+  "zalo-bot": "Zalo Bot",
+  "zalo-web": "Zalo Web"
 };
 
 export function PendingCommentsPage() {
@@ -73,7 +75,7 @@ export function PendingCommentsPage() {
   }
 
   async function cancel(id: string) {
-    if (!confirm("Hủy comment này?")) return;
+    if (!confirm("Huy comment nay?")) return;
     try {
       setBusyId(id);
       await apiDelete(`/pending-comments/${id}`);
@@ -86,73 +88,72 @@ export function PendingCommentsPage() {
   return (
     <>
       <PageHeader
-        title="Comment chờ xử lý"
-        subtitle="Quản lý comment hẹn giờ, xử lý lại comment lỗi."
-        actions={<Button variant="secondary" icon={<RefreshCw size={14} />} onClick={() => q.refetch()}>Làm mới</Button>}
+        title="Comment cho xu ly"
+        subtitle="Quan ly comment hen gio, xu ly lai comment loi."
+        actions={<Button variant="secondary" size="sm" icon={<RefreshCw size={13} />} onClick={() => q.refetch()}>Lam moi</Button>}
       />
 
-      <SectionCard title="Bộ lọc" description="">
+      <SectionCard title="Bo loc" description="">
         <div style={{ display: "flex", gap: 10 }}>
           <div>
-            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "#6b7280" }}>Trạng thái</label>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--color-text-muted)" }}>Trang thai</label>
             <select
-              style={{ fontSize: 13, padding: "5px 8px", border: "1px solid var(--border, #e5e7eb)", borderRadius: 6 }}
+              style={{ fontSize: 13, padding: "5px 8px", border: "1px solid var(--color-border)", borderRadius: 6, background: "#fff" }}
               value={statusFilter}
-              onChange={(e) => {
-                setStatusFilter(e.target.value);
-                setPage(1);
-              }}
+              onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
             >
-              <option value="all">Pending + lỗi</option>
-              <option value="pending">Chờ</option>
-              <option value="failed">Lỗi</option>
+              <option value="all">Pending + Loi</option>
+              <option value="pending">Cho</option>
+              <option value="failed">Loi</option>
               <option value="done">Xong</option>
-              <option value="cancelled">Đã hủy</option>
+              <option value="cancelled">Da huy</option>
             </select>
           </div>
         </div>
       </SectionCard>
 
-      <SectionCard title="Comment chờ" description={pagination ? `${pagination.total} mục` : ""}>
+      <SectionCard title="Comment cho" description={pagination ? `${pagination.total} muc` : ""}>
         {q.isLoading ? (
-          <div className="text-muted" style={{ padding: 16 }}>Đang tải…</div>
+          <div className="text-muted" style={{ padding: 16 }}>Dang tai...</div>
         ) : comments.length === 0 ? (
-          <EmptyState title="Không có comment nào" description="Comment hẹn giờ hoặc chưa gửi sẽ xuất hiện ở đây." />
+          <EmptyState title="Khong co comment nao" description="Comment hen gio hoac chua gui se xuat hien o day." />
         ) : (
-          <table className="table table-compact" style={{ width: "100%" }}>
+          <table className="table table-compact">
             <thead>
               <tr>
-                <th>Giờ hẹn</th>
-                <th>Bài viết</th>
-                <th>Tài khoản</th>
-                <th>Nội dung</th>
-                <th>Trạng thái</th>
-                <th>Thao tác</th>
+                <th>Gio hen</th>
+                <th>Bai viet</th>
+                <th>Tai khoan</th>
+                <th>Noi dung</th>
+                <th>Trang thai</th>
+                <th>Thao tac</th>
               </tr>
             </thead>
             <tbody>
               {comments.map((c) => (
                 <tr key={c.id}>
-                  <td style={{ fontSize: 12 }}>{new Date(c.scheduledAt).toLocaleString("vi-VN")}</td>
-                  <td style={{ fontFamily: "monospace", fontSize: 12 }}>{c.content?.code ?? "—"}</td>
-                  <td style={{ fontSize: 12 }}>{c.target?.name ?? "—"}</td>
-                  <td style={{ maxWidth: 200, fontSize: 13 }}>
-                    {c.commentText.slice(0, 80)}
-                    {c.commentText.length > 80 ? "…" : ""}
+                  <td style={{ fontSize: 12, whiteSpace: "nowrap" }}>{new Date(c.scheduledAt).toLocaleString("vi-VN")}</td>
+                  <td><code className="code-inline">{c.content?.code ?? "-"}</code></td>
+                  <td>
+                    <div style={{ fontSize: 13 }}>{c.target?.name ?? "-"}</div>
+                    {c.target?.platform && <div><span className="table-tag">{platformLabel[c.target.platform] ?? c.target.platform}</span></div>}
+                  </td>
+                  <td style={{ maxWidth: 200, fontSize: 13 }}>{c.commentText.length > 80 ? `${c.commentText.slice(0, 80)}...` : c.commentText}</td>
+                  <td>
+                    <div className="stack-tight" style={{ gap: 4 }}>
+                      <StatusBadge status={c.status} />
+                      {c.error && <div style={{ fontSize: 11, color: "var(--color-danger)" }}>{c.error.slice(0, 60)}...</div>}
+                    </div>
                   </td>
                   <td>
-                    <span style={{ fontSize: 12, color: c.status === "failed" ? "#dc2626" : "#374151" }}>{statusLabel[c.status] ?? c.status}</span>
-                    {c.error && <div style={{ fontSize: 11, color: "#dc2626" }}>{c.error.slice(0, 60)}…</div>}
-                  </td>
-                  <td>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 220 }}>
+                    <div className="stack-tight" style={{ minWidth: 220 }}>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        <Button disabled={busyId === c.id} onClick={() => retry(c.id)}>Đăng lại</Button>
-                        <Button variant="secondary" icon={<Trash2 size={13} />} disabled={busyId === c.id} onClick={() => cancel(c.id)}>Hủy</Button>
+                        <Button size="sm" disabled={busyId === c.id} onClick={() => retry(c.id)}>Dang lai</Button>
+                        <Button size="sm" variant="danger" icon={<Trash2 size={12} />} disabled={busyId === c.id} onClick={() => cancel(c.id)}>Huy</Button>
                       </div>
                       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                         <Input type="datetime-local" value={rescheduleMap[c.id] ?? ""} onChange={(e) => setRescheduleMap((prev) => ({ ...prev, [c.id]: e.target.value }))} />
-                        <Button variant="secondary" disabled={busyId === c.id || !rescheduleMap[c.id]} onClick={() => reschedule(c.id)}>Hẹn lại</Button>
+                        <Button size="sm" variant="secondary" disabled={busyId === c.id || !rescheduleMap[c.id]} onClick={() => reschedule(c.id)}>Hen lai</Button>
                       </div>
                     </div>
                   </td>
@@ -163,10 +164,10 @@ export function PendingCommentsPage() {
         )}
 
         {pagination && pagination.totalPages > 1 && (
-          <div className="actions" style={{ marginTop: 12 }}>
-            <Button variant="secondary" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Trang trước</Button>
+          <div className="actions" style={{ marginTop: 14 }}>
+            <Button variant="secondary" size="sm" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Trang truoc</Button>
             <span className="text-muted" style={{ fontSize: 13 }}>Trang {page} / {pagination.totalPages}</span>
-            <Button variant="secondary" disabled={page >= pagination.totalPages} onClick={() => setPage((p) => p + 1)}>Trang sau</Button>
+            <Button variant="secondary" size="sm" disabled={page >= pagination.totalPages} onClick={() => setPage((p) => p + 1)}>Trang sau</Button>
           </div>
         )}
       </SectionCard>

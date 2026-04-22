@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { AdapterAuthError, AdapterCheckpointError, RetryableNetworkError, type Platform } from "@zerun/shared";
-import type { AdapterAccount, AdapterHealth, CrawlInput, CrawlResult, PublishAdapter, PublishInput, PublishResult, SourceAdapter } from "../contracts.js";
+import type { AdapterAccount, AdapterHealth, CommentInput, CommentResult, CrawlInput, CrawlResult, PublishAdapter, PublishInput, PublishResult, SourceAdapter } from "../contracts.js";
 import { readString } from "../utils/credentials.js";
 import { clickFirst, clickFirstVisible, hasVisible } from "../utils/playwright-helpers.js";
 
@@ -89,6 +89,57 @@ export class InstagramAdapter implements SourceAdapter, PublishAdapter {
       return await this.publishFeed(page, input.text, mediaPaths);
     } catch (error) {
       await captureScreenshot(context, "storage/screenshots", `ig-error-${Date.now()}`).catch(() => undefined);
+      throw normalizeInstagramError(error);
+    } finally {
+      await context.close();
+      await browser.close();
+    }
+  }
+
+  async comment(input: CommentInput): Promise<CommentResult> {
+    const { browser, context } = await this.openContext(input.account);
+    try {
+      const page = await context.newPage();
+      await page.goto(input.postUrl, { waitUntil: "domcontentloaded", timeout: 40_000 });
+
+      const authState = await inspectInstagramAuth(page);
+      if (authState.kind === "checkpoint") {
+        throw new AdapterCheckpointError("Instagram checkpoint detected", authState.metadata);
+      }
+      if (authState.kind === "auth") {
+        throw new AdapterAuthError("Instagram session expired or not authenticated", authState.metadata);
+      }
+
+      await page.waitForTimeout(1_500);
+
+      await clickFirstVisible(page, [
+        '[aria-label*="Comment" i]',
+        '[aria-label*="Bình luận" i]',
+        'svg[aria-label*="Comment" i]',
+        'button:has(svg[aria-label*="Comment" i])',
+        'a[href*="/comments/"]'
+      ], { timeout: 8_000 }).catch(() => false);
+
+      const textbox = page.locator('textarea[aria-label*="comment" i], textarea[placeholder*="comment" i], textarea, [contenteditable="true"][role="textbox"]').first();
+      await textbox.click({ timeout: 12_000 });
+      await textbox.fill(input.text);
+      await page.waitForTimeout(400);
+
+      const posted = await clickFirstVisible(page, [
+        'button:has-text("Post")',
+        'button:has-text("Đăng")',
+        'div[role="button"]:has-text("Post")',
+        'text=/^Post$|^Đăng$/i'
+      ], { timeout: 8_000 }).catch(() => false);
+
+      if (!posted) {
+        await page.keyboard.press("Enter").catch(() => undefined);
+      }
+
+      await page.waitForTimeout(1_500);
+      return { url: input.postUrl, metadata: { platform: this.platform, type: "comment" } };
+    } catch (error) {
+      await captureScreenshot(context, "storage/screenshots", `ig-comment-error-${Date.now()}`).catch(() => undefined);
       throw normalizeInstagramError(error);
     } finally {
       await context.close();

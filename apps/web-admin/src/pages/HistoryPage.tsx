@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Clock, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import { apiGet } from "../api/client";
 import { PageHeader } from "../components/common/PageHeader";
 import { SectionCard } from "../components/common/SectionCard";
 import { EmptyState } from "../components/common/EmptyState";
+import { StatusBadge } from "../components/common/StatusBadge";
 import { Button } from "../components/ui/Button";
-import type { ApiResult } from "../api/client";
 
 type AttemptRow = {
   id: string;
@@ -16,30 +16,18 @@ type AttemptRow = {
   status: string;
   resultUrl: string | null;
   error: string | null;
-  startedAt: string | null;
-  completedAt: string | null;
   createdAt: string;
-  content: {
-    id: string;
-    code: string;
-    originalText: string;
-    draftText: string | null;
-    finalText: string | null;
-    metadata: Record<string, unknown> | null;
-  } | null;
+  content: { id: string; code: string; originalText: string } | null;
   target: { id: string; name: string; platform: string } | null;
 };
 
 type CommentEntry = {
   id: string;
   commentText: string;
-  commentMedia: unknown[];
   status: string;
   scheduledAt: string | null;
   resultUrl: string | null;
   error: string | null;
-  createdAt: string;
-  updatedAt: string;
 };
 
 const platformLabel: Record<string, string> = {
@@ -52,24 +40,8 @@ const platformLabel: Record<string, string> = {
   telegram: "Telegram"
 };
 
-const statusConfig: Record<string, { label: string; color: string }> = {
-  success: { label: "Thành công", color: "#16a34a" },
-  failed: { label: "Lỗi", color: "#dc2626" },
-  running: { label: "Đang chạy", color: "#d97706" },
-  pending: { label: "Chờ", color: "#6b7280" }
-};
-
 function truncate(text: string, max = 80): string {
-  return text.length <= max ? text : text.slice(0, max).trimEnd() + "…";
-}
-
-function RelativeTime({ iso }: { iso: string }) {
-  const d = new Date(iso);
-  return (
-    <time dateTime={iso} title={d.toLocaleString("vi-VN")}>
-      {d.toLocaleString("vi-VN")}
-    </time>
-  );
+  return text.length <= max ? text : `${text.slice(0, max).trimEnd()}...`;
 }
 
 function CommentList({ attemptId }: { attemptId: string }) {
@@ -78,40 +50,32 @@ function CommentList({ attemptId }: { attemptId: string }) {
     queryFn: () => apiGet(`/history/${attemptId}/comments`)
   });
 
-  if (q.isLoading) return <div className="text-muted" style={{ fontSize: 13, padding: "6px 0" }}>Đang tải…</div>;
-  if (q.isError) return <div className="text-muted" style={{ fontSize: 13, padding: "6px 0" }}>Không tải được comment.</div>;
+  if (q.isLoading) return <div className="text-muted" style={{ fontSize: 13, padding: "6px 0" }}>Dang tai...</div>;
+  if (q.isError) return <div className="text-muted" style={{ fontSize: 13, padding: "6px 0" }}>Khong tai duoc comment.</div>;
 
   const comments = q.data?.comments ?? [];
-  if (comments.length === 0) return <div className="text-muted" style={{ fontSize: 13, padding: "6px 0" }}>Không có comment nào.</div>;
+  if (comments.length === 0) return <div className="text-muted" style={{ fontSize: 13, padding: "4px 0" }}>Khong co comment.</div>;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+    <div className="stack-tight" style={{ gap: 6 }}>
       {comments.map((c, idx) => (
-        <div key={c.id ?? idx} style={{ background: "var(--surface-raised, #f8f9fa)", borderRadius: 6, padding: "8px 12px", fontSize: 13 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-            <StatusDot status={c.status} />
-            <span className="text-muted" style={{ fontSize: 12 }}>
-              {c.scheduledAt ? <RelativeTime iso={c.scheduledAt} /> : "—"}
-            </span>
-            {c.resultUrl && (
-              <a href={c.resultUrl} target="_blank" rel="noreferrer" className="text-muted" style={{ fontSize: 12 }}>xem</a>
-            )}
+        <div key={c.id ?? idx} className="simple-row" style={{ padding: "8px 12px" }}>
+          <div className="simple-row-main">
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <StatusBadge status={c.status} />
+              <span className="text-muted" style={{ fontSize: 12 }}>
+                {c.scheduledAt ? new Date(c.scheduledAt).toLocaleString("vi-VN") : "-"}
+              </span>
+              {c.resultUrl && (
+                <a href={c.resultUrl} target="_blank" rel="noreferrer" className="text-muted" style={{ fontSize: 12 }}>xem</a>
+              )}
+            </div>
+            <div style={{ fontSize: 13, marginTop: 4 }}>{c.commentText}</div>
+            {c.error && <div style={{ color: "var(--color-danger)", fontSize: 12, marginTop: 2 }}>Loi: {c.error}</div>}
           </div>
-          <div>{c.commentText}</div>
-          {c.error && <div style={{ color: "#dc2626", fontSize: 12, marginTop: 4 }}>Lỗi: {c.error}</div>}
         </div>
       ))}
     </div>
-  );
-}
-
-function StatusDot({ status }: { status: string }) {
-  const cfg = statusConfig[status];
-  return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 500, color: cfg?.color ?? "#6b7280" }}>
-      {status === "success" ? <CheckCircle2 size={13} /> : status === "failed" ? <AlertCircle size={13} /> : <Clock size={13} />}
-      {cfg?.label ?? status}
-    </span>
   );
 }
 
@@ -141,30 +105,26 @@ export function HistoryPage() {
   return (
     <>
       <PageHeader
-        title="Lịch sử đăng bài"
-        subtitle="Xem toàn bộ lần đăng bài và comment kèm theo."
-        actions={
-          <div className="actions">
-            <Button variant="secondary" icon={<RefreshCw size={14} />} onClick={() => q.refetch()}>Làm mới</Button>
-          </div>
-        }
+        title="Lich su dang bai"
+        subtitle="Xem toan bo lan dang va comment kem theo."
+        actions={<Button variant="secondary" size="sm" icon={<RefreshCw size={13} />} onClick={() => q.refetch()}>Lam moi</Button>}
       />
 
-      <SectionCard title="Bộ lọc" description="">
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <div>
-            <label className="form-label">Trạng thái</label>
+      <SectionCard title="Bo loc" description="">
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div className="field">
+            <label className="form-label">Trang thai</label>
             <select className="form-select" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}>
-              <option value="all">Tất cả</option>
-              <option value="success">Thành công</option>
-              <option value="failed">Lỗi</option>
-              <option value="running">Đang chạy</option>
+              <option value="all">Tat ca</option>
+              <option value="success">Thanh cong</option>
+              <option value="failed">Loi</option>
+              <option value="running">Dang chay</option>
             </select>
           </div>
-          <div>
-            <label className="form-label">Nền tảng</label>
+          <div className="field">
+            <label className="form-label">Nen tang</label>
             <select className="form-select" value={platformFilter} onChange={(e) => { setPlatformFilter(e.target.value); setPage(1); }}>
-              <option value="all">Tất cả</option>
+              <option value="all">Tat ca</option>
               <option value="facebook">Facebook</option>
               <option value="instagram">Instagram</option>
               <option value="threads">Threads</option>
@@ -175,54 +135,53 @@ export function HistoryPage() {
         </div>
       </SectionCard>
 
-      <SectionCard
-        title="Lịch sử"
-        description={pagination ? `${pagination.total} lần đăng` : ""}
-      >
+      <SectionCard title="Lich su" description={pagination ? `${pagination.total} lan dang` : ""}>
         {q.isLoading ? (
-          <div className="text-muted" style={{ padding: 16 }}>Đang tải…</div>
+          <div className="text-muted" style={{ padding: 16 }}>Dang tai...</div>
         ) : attempts.length === 0 ? (
-          <EmptyState title="Chưa có lịch sử" description="Các lần đăng bài sẽ hiện tại đây sau khi hệ thống chạy." />
+          <EmptyState title="Chua co lich su" description="Cac lan dang bai se hien tai day sau khi he thong chay." />
         ) : (
-          <table className="table table-compact" style={{ width: "100%" }}>
+          <table className="table table-compact">
             <thead>
               <tr>
-                <th style={{ width: 32 }} />
-                <th>Thời gian</th>
-                <th>Mã bài</th>
-                <th>Tài khoản</th>
-                <th>Nền tảng</th>
-                <th>Trạng thái</th>
-                <th>Link / Lỗi</th>
+                <th style={{ width: 28 }} />
+                <th>Thoi gian</th>
+                <th>Ma bai</th>
+                <th>Tai khoan</th>
+                <th>Nen tang</th>
+                <th>Trang thai</th>
+                <th>Link / Loi</th>
               </tr>
             </thead>
             <tbody>
               {attempts.map((a) => (
                 <>
                   <tr key={a.id} style={{ cursor: "pointer" }} onClick={() => toggleExpand(a.id)}>
-                    <td style={{ textAlign: "center", color: "#9ca3af" }}>
+                    <td style={{ color: "#9ca3af", paddingRight: 4 }}>
                       {expanded.has(a.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                     </td>
-                    <td><RelativeTime iso={a.createdAt} /></td>
-                    <td style={{ fontFamily: "monospace", fontSize: 12 }}>{a.content?.code ?? "—"}</td>
-                    <td>{a.target?.name ?? "—"}</td>
-                    <td>{platformLabel[a.target?.platform ?? ""] ?? (a.target?.platform ?? "—")}</td>
-                    <td><StatusDot status={a.status} /></td>
-                    <td style={{ maxWidth: 220 }}>
+                    <td style={{ fontSize: 12, whiteSpace: "nowrap" }}>{new Date(a.createdAt).toLocaleString("vi-VN")}</td>
+                    <td><code className="code-inline">{a.content?.code ?? "-"}</code></td>
+                    <td style={{ fontSize: 13 }}>{a.target?.name ?? "-"}</td>
+                    <td>
+                      {a.target?.platform ? <span className="table-tag">{platformLabel[a.target.platform] ?? a.target.platform}</span> : <span className="text-muted">-</span>}
+                    </td>
+                    <td><StatusBadge status={a.status} /></td>
+                    <td style={{ maxWidth: 220, fontSize: 12 }}>
                       {a.resultUrl ? (
-                        <a href={a.resultUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>Xem bài</a>
+                        <a href={a.resultUrl} target="_blank" rel="noreferrer">Xem bai</a>
                       ) : a.error ? (
-                        <span style={{ color: "#dc2626", fontSize: 12 }}>{truncate(a.error, 60)}</span>
+                        <span style={{ color: "var(--color-danger)" }}>{truncate(a.error, 60)}</span>
                       ) : (
-                        <span className="text-muted" style={{ fontSize: 12 }}>—</span>
+                        <span className="text-muted">-</span>
                       )}
                     </td>
                   </tr>
                   {expanded.has(a.id) && (
-                    <tr key={`${a.id}-expand`}>
+                    <tr key={`${a.id}-comments`}>
                       <td />
-                      <td colSpan={6} style={{ background: "var(--surface, #f9fafb)", padding: "8px 12px" }}>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>Comment</div>
+                      <td colSpan={6} style={{ background: "var(--color-bg, #f9fafb)", padding: "10px 14px" }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--color-text-soft)", marginBottom: 8 }}>Comment</div>
                         <CommentList attemptId={a.id} />
                       </td>
                     </tr>
@@ -234,10 +193,10 @@ export function HistoryPage() {
         )}
 
         {pagination && pagination.totalPages > 1 && (
-          <div className="actions" style={{ marginTop: 12 }}>
-            <Button variant="secondary" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Trang trước</Button>
+          <div className="actions" style={{ marginTop: 14 }}>
+            <Button variant="secondary" size="sm" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Trang truoc</Button>
             <span className="text-muted" style={{ fontSize: 13 }}>Trang {page} / {pagination.totalPages}</span>
-            <Button variant="secondary" disabled={page >= pagination.totalPages} onClick={() => setPage((p) => p + 1)}>Trang sau</Button>
+            <Button variant="secondary" size="sm" disabled={page >= pagination.totalPages} onClick={() => setPage((p) => p + 1)}>Trang sau</Button>
           </div>
         )}
       </SectionCard>
