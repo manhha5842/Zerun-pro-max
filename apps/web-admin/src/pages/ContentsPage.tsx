@@ -22,6 +22,17 @@ type Content = {
   source?: { name: string } | null;
 };
 
+const statusLabel: Record<string, string> = {
+  ready_to_publish: "Sẵn sàng",
+  scheduled: "Đã lên lịch",
+  published: "Đã đăng",
+  publishing: "Đang đăng",
+  failed: "Lỗi",
+  draft: "Nháp",
+  discovered: "Mới tạo",
+  processing: "Đang xử lý"
+};
+
 type ContentsData = { contents: Content[] };
 
 const platformLabel: Record<string, string> = {
@@ -166,12 +177,13 @@ export function ContentsPage() {
           <table className="table table-compact">
             <thead>
               <tr>
-                <th style={{ width: 140 }}>Mã bài</th>
+                <th style={{ width: 130 }}>Mã bài</th>
                 <th>Nội dung</th>
-                <th style={{ width: 100 }}>Nền tảng</th>
-                <th style={{ width: 100 }}>Trạng thái</th>
-                <th style={{ width: 140 }}>Ngày tạo</th>
-                <th style={{ width: 160 }}>Thao tác</th>
+                <th style={{ width: 140 }}>Nguồn</th>
+                <th style={{ width: 110 }}>Nền tảng</th>
+                <th style={{ width: 120 }}>Trạng thái</th>
+                <th style={{ width: 150 }}>Ngày tạo</th>
+                <th style={{ width: 190 }}>Thao tác</th>
               </tr>
             </thead>
             <tbody>
@@ -185,17 +197,26 @@ export function ContentsPage() {
                     }}
                   >
                     <td>
-                      <code style={{ fontSize: 12 }}>{content.code}</code>
-                    </td>
-                    <td style={{ maxWidth: 360 }}>
-                      <span style={{ fontSize: 13, color: "#17201b" }}>
-                        {truncate(content.originalText?.trim(), 80)}
-                      </span>
-                      {content.source?.name ? (
-                        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
-                          {content.source.name}
+                      <Link to={`/contents/${content.code}`} style={{ color: "inherit", textDecoration: "none" }}>
+                        <div style={{ display: "grid", gap: 4 }}>
+                          <code style={{ fontSize: 12, fontWeight: 700 }}>{content.code}</code>
+                          <span className="table-subtle">Mở chi tiết</span>
                         </div>
-                      ) : null}
+                      </Link>
+                    </td>
+                    <td style={{ maxWidth: 420 }}>
+                      <Link to={`/contents/${content.code}`} style={{ color: "inherit", textDecoration: "none", display: "block" }}>
+                        <div style={{ display: "grid", gap: 4 }}>
+                          <span style={{ fontSize: 13, color: "#17201b", lineHeight: 1.45 }}>
+                            {truncate(content.originalText?.trim(), 120)}
+                          </span>
+                        </div>
+                      </Link>
+                    </td>
+                    <td>
+                      <span style={{ fontSize: 12, color: content.source?.name ? "#17201b" : "#68746d" }}>
+                        {content.source?.name ?? "—"}
+                      </span>
                     </td>
                     <td>
                       <span className="table-tag">
@@ -203,16 +224,19 @@ export function ContentsPage() {
                       </span>
                     </td>
                     <td>
-                      <StatusBadge status={content.status} />
+                      <div style={{ display: "grid", gap: 4 }}>
+                        <StatusBadge status={content.status} />
+                        <span className="table-subtle">{statusLabel[content.status] ?? content.status}</span>
+                      </div>
                     </td>
                     <td style={{ fontSize: 12, whiteSpace: "nowrap", color: "#68746d" }}>
                       {new Date(content.createdAt).toLocaleString("vi-VN")}
                     </td>
                     <td>
-                      <div className="actions" style={{ gap: 6, flexWrap: "nowrap" }}>
+                      <div className="actions" style={{ gap: 6 }}>
                         <Link to={`/contents/${content.code}`}>
                           <Button size="sm" variant="secondary" icon={<ExternalLink size={12} aria-hidden />}>
-                            Chi tiết
+                            Xem chi tiết
                           </Button>
                         </Link>
                         {content.status === "failed" && (
@@ -220,9 +244,7 @@ export function ContentsPage() {
                             size="sm"
                             disabled={busyCode === content.code}
                             onClick={() => {
-                              setExpandedCode(
-                                expandedCode === content.code ? null : content.code
-                              );
+                              setExpandedCode(expandedCode === content.code ? null : content.code);
                             }}
                           >
                             Đăng lại
