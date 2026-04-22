@@ -85,17 +85,14 @@ export function ContentDetailPage() {
   const [saveResult, setSaveResult] = useState<{ success: boolean; message: string } | null>(null);
   const [publishResult, setPublishResult] = useState<{ success: boolean; message: string } | null>(null);
 
-  if (detail.isLoading) return <p style={{ padding: 24 }}>Đang tải...</p>;
-  if (!content) return <p style={{ padding: 24 }}>Không tìm thấy nội dung.</p>;
-
-  const effectiveDraftText = draftText ?? content.draftText ?? content.originalText ?? "";
+  const effectiveDraftText = draftText ?? content?.draftText ?? content?.originalText ?? "";
   const effectivePostType = postType ?? metadata.type ?? "feed";
   const effectiveComment = comment ?? metadata.comment ?? "";
   const effectiveMediaPaths = mediaPaths ?? metadata.mediaPaths ?? [];
-  const defaultTargetId = content.scheduledTargets?.[0] ?? relevantTargets[0]?.id ?? "";
+  const defaultTargetId = content?.scheduledTargets?.[0] ?? relevantTargets[0]?.id ?? "";
   const effectiveTargetId = selectedTargetId ?? defaultTargetId;
-  const platformLabel = getPlatformLabel(content.platform);
-  const postTypeOptions = postTypesForPlatform(content.platform);
+  const platformLabel = getPlatformLabel(content?.platform ?? "facebook");
+  const postTypeOptions = postTypesForPlatform(content?.platform ?? "facebook");
 
   const saveMutation = useMutation({
     mutationFn: () => apiPut(`/contents/${code}/edit`, {
@@ -134,6 +131,9 @@ export function ContentDetailPage() {
     next.splice(index, 1);
     setMediaPaths(next);
   }
+
+  if (detail.isLoading) return <p style={{ padding: 24 }}>Đang tải...</p>;
+  if (!content) return <p style={{ padding: 24 }}>Không tìm thấy nội dung.</p>;
 
   function attemptPlatformLabel(attempt: ContentDetail["publishAttempts"][number]): string | null {
     if (attempt.target?.platform) return getPlatformLabel(attempt.target.platform);
