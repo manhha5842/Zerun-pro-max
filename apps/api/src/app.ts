@@ -517,7 +517,16 @@ function registerContentRoutes(app: FastifyInstance) {
       prisma.content.count({ where }),
       prisma.content.findMany({
         where,
-        include: { links: true, media: true, source: true },
+        include: {
+          links: true,
+          media: true,
+          source: true,
+          publishAttempts: {
+            orderBy: { createdAt: "desc" },
+            take: 5,
+            select: { targetId: true }
+          }
+        },
         orderBy: { createdAt: "desc" },
         skip: (page - 1) * limit,
         take: limit

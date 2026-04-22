@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FileText, RefreshCw, Search } from "lucide-react";
-import { Link } from "react-router-dom";
-import { apiGet } from "../api/client";
+import { Link, useSearchParams } from "react-router-dom";
+import { apiGet, apiPost } from "../api/client";
 import { EmptyState } from "../components/common/EmptyState";
 import { PageHeader } from "../components/common/PageHeader";
 import { SectionCard } from "../components/common/SectionCard";
@@ -18,6 +18,8 @@ type ContentsData = {
     status: string;
     originalText: string;
     createdAt: string;
+    scheduledTargets?: string[] | null;
+    publishAttempts?: Array<{ targetId: string }>;
     source?: { name: string } | null;
   }>;
 };
@@ -34,8 +36,16 @@ const statusLabel: Record<string, string> = {
 };
 
 export function ContentsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [keyword, setKeyword] = useState("");
-  const query = useQuery({ queryKey: ["contents"], queryFn: () => apiGet<ContentsData>("/contents?limit=50") });
+  const [busyCode, setBusyCode] = useState<string | null>(null);
+  const [rescheduleMap, setRescheduleMap] = useState<Record<string, string>>({});
+  const statusFilter = searchParams.get("status") ?? "all";
+
+  const query = useQuery({
+    queryKey: ["contents", statusFilter],
+    queryFn: () => apiGet<ContentsData>(`/contents?limit=50${statusFilter !== "all" ? `&status=${statusFilter}` : ""}`)
+  });
 
   const filteredContents = useMemo(() => {
     const normalizedKeyword = keyword.trim().toLowerCase();
@@ -47,11 +57,34 @@ export function ContentsPage() {
     });
   }, [keyword, query.data?.contents]);
 
+  async function retryFailed(content: ContentsData["contents"][number]) {
+    const targetIds = Array.isArray(content.scheduledTargets) && content.scheduledTargets.length > 0 ? content.scheduledTargets : [...new Set((content.publishAttempts ?? []).map((attempt) => attempt.targetId))];
+    try {
+      setBusyCode(content.code);
+      await apiPost(`/failed/${content.code}/retry`, { targetIds });
+      await query.refetch();
+    } finally {
+      setBusyCode(null);
+    }
+  }
+
+  async function rescheduleFailed(content: ContentsData["contents"][number]) {
+    const scheduledAt = rescheduleMap[content.code];
+    if (!scheduledAt) return;
+    try {
+      setBusyCode(content.code);
+      await apiPost(`/failed/${content.code}/reschedule`, { scheduledAt });
+      await query.refetch();
+    } finally {
+      setBusyCode(null);
+    }
+  }
+
   return (
     <>
       <PageHeader
         title="Quản lý bài viết"
-        subtitle="Xem nhanh bài đã tạo, tìm theo mã hoặc nội dung, rồi mở chi tiết để sửa hoặc đăng lại."
+        subtitle="Kho noi dung da tao. Loc theo trang thai, mo chi tiet de sua, dang lai hoac hen lai bai loi."
         actions={
           <div className="actions">
             <Link to="/contents/new">
@@ -65,14 +98,27 @@ export function ContentsPage() {
       />
 
       <SectionCard
-        title="Danh sách bài viết"
-        description={`${filteredContents.length} bài`}
+        title="Danh sach bai viet"
+        description={`${filteredContents.length} bai`}
         actions={
-          <div className="contents-toolbar">
+          <div className="contents-toolbar" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <div className="contents-search">
               <Search aria-hidden size={15} />
-              <Input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="Tìm theo mã, nguồn, nội dung..." />
+              <Input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="Tim theo ma, nguon, noi dung..." />
             </div>
+            <select
+              value={statusFilter}
+              onChange={(event) => setSearchParams(event.target.value === "all" ? {} : { status: event.target.value })}
+              style={{ minWidth: 170, height: 40, padding: "0 12px", borderRadius: 10, border: "1px solid var(--color-border)", background: "#fff" }}
+            >
+              <option value="all">Tat ca trang thai</option>
+              <option value="draft">Nhap / nhap tay</option>
+              <option value="ready_to_publish">San sang dang</option>
+              <option value="scheduled">Da len lich</option>
+              <option value="publishing">Dang dang</option>
+              <option value="published">Da dang</option>
+              <option value="failed">Loi</option>
+            </select>
           </div>
         }
       >
@@ -81,8 +127,8 @@ export function ContentsPage() {
         ) : (
           <div className="content-list">
             {filteredContents.map((content) => (
-              <Link key={content.id} to={`/contents/${content.code}`} className="content-row-link">
-                <article className="content-row-card content-row-card-clean">
+              <article key={content.id} className="content-row-card content-row-card-clean" style={{ display: "grid", gap: 12 }}>
+                <Link to={`/contents/${content.code}`} className="content-row-link" style={{ color: "inherit" }}>
                   <div className="content-row-main">
                     <div className="content-row-head">
                       <div className="content-row-title-wrap">
@@ -96,20 +142,37 @@ export function ContentsPage() {
                       <StatusBadge status={content.status} />
                     </div>
 
-                    <div className="content-row-text">{content.originalText?.trim() || "Không có nội dung"}</div>
+                    <div className="content-row-text">{content.originalText?.trim() || "Khong co noi dung"}</div>
                   </div>
+                </Link>
 
-                  <div className="content-row-side">
-                    <div className="content-row-side-top">
-                      <div className="content-row-platform">
-                        <FileText aria-hidden size={15} />
-                        <span>{content.platform}</span>
+                <div className="content-row-side" style={{ alignItems: "stretch", gap: 10 }}>
+                  <div className="content-row-side-top">
+                    <div className="content-row-platform">
+                      <FileText aria-hidden size={15} />
+                      <span>{content.platform}</span>
+                    </div>
+                  </div>
+                  <div className="content-row-action">{statusLabel[content.status] ?? content.status} · Xem chi tiet</div>
+
+                  {content.status === "failed" ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <Button size="sm" disabled={busyCode === content.code} onClick={() => retryFailed(content)}>Dang lai ngay</Button>
+                        <Link to={`/contents/${content.code}`}>
+                          <Button size="sm" variant="secondary">Mo chi tiet</Button>
+                        </Link>
+                      </div>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        <Input type="datetime-local" value={rescheduleMap[content.code] ?? ""} onChange={(event) => setRescheduleMap((prev) => ({ ...prev, [content.code]: event.target.value }))} />
+                        <Button size="sm" variant="secondary" disabled={busyCode === content.code || !rescheduleMap[content.code]} onClick={() => rescheduleFailed(content)}>
+                          Hen gio lai
+                        </Button>
                       </div>
                     </div>
-                    <div className="content-row-action">{statusLabel[content.status] ?? content.status} · Xem chi tiết</div>
-                  </div>
-                </article>
-              </Link>
+                  ) : null}
+                </div>
+              </article>
             ))}
           </div>
         )}

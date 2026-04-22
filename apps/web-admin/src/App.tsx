@@ -5,7 +5,6 @@ import { CrawlDataPage } from "./pages/CrawlDataPage";
 import { ContentsPage } from "./pages/ContentsPage";
 import { ContentDetailPage } from "./pages/ContentDetailPage";
 import { DashboardPage } from "./pages/DashboardPage";
-import { FailedPage } from "./pages/FailedPage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { ImportPage } from "./pages/ImportPage";
 import { PendingCommentsPage } from "./pages/PendingCommentsPage";
@@ -27,7 +26,7 @@ export function App() {
         <Route path="/import" element={<ImportPage />} />
         <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/history" element={<HistoryPage />} />
-        <Route path="/failed" element={<FailedPage />} />
+        <Route path="/failed" element={<Navigate to="/contents?status=failed" replace />} />
         <Route path="/pending-comments" element={<PendingCommentsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/login" element={<Navigate to="/dashboard" replace />} />
