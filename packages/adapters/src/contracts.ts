@@ -65,10 +65,23 @@ export interface SourceAdapter {
   crawl(input: CrawlInput): Promise<CrawlResult>;
 }
 
+export type CommentInput = {
+  account: AdapterAccount;
+  postUrl: string;
+  text: string;
+  media?: RawMedia[];
+};
+
+export type CommentResult = {
+  url?: string;
+  metadata?: Record<string, unknown>;
+};
+
 export interface PublishAdapter {
   platform: Platform;
   testConnection(account: AdapterAccount): Promise<AdapterHealth>;
   publish(input: PublishInput): Promise<PublishResult>;
+  comment?(input: CommentInput): Promise<CommentResult>;
 }
 
 export type ConvertLinkInput = {

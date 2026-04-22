@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { AdapterAuthError, AdapterCheckpointError, RetryableNetworkError, type Platform } from "@zerun/shared";
-import type { AdapterAccount, AdapterHealth, CrawlInput, CrawlResult, PublishAdapter, PublishInput, PublishResult, SourceAdapter } from "../contracts.js";
+import type { AdapterAccount, AdapterHealth, CommentInput, CommentResult, CrawlInput, CrawlResult, PublishAdapter, PublishInput, PublishResult, SourceAdapter } from "../contracts.js";
 import { readString } from "../utils/credentials.js";
 
 export class ThreadsAdapter implements SourceAdapter, PublishAdapter {
@@ -177,6 +177,20 @@ export class ThreadsAdapter implements SourceAdapter, PublishAdapter {
       return { url: successState.url, metadata: { platform: this.platform, mediaCount: mediaPaths.length } };
     } catch (error) {
       await captureScreenshot(context, "storage/screenshots", `threads-error-${Date.now()}`).catch(() => undefined);
+      throw normalizeThreadsError(error);
+    } finally {
+      await context.close();
+    }
+  }
+
+  async comment(input: CommentInput): Promise<CommentResult> {
+    const context = await this.openContext(input.account);
+    try {
+      const page = await context.newPage();
+      await this.publishComment(page, input.postUrl, input.text);
+      return { url: input.postUrl, metadata: { platform: this.platform } };
+    } catch (error) {
+      await captureScreenshot(context, "storage/screenshots", `threads-comment-error-${Date.now()}`).catch(() => undefined);
       throw normalizeThreadsError(error);
     } finally {
       await context.close();

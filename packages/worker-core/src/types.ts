@@ -8,7 +8,8 @@ export const QueueName = {
   Schedule: "schedule",
   PlatformHealth: "platform-health",
   Maintenance: "maintenance",
-  FbPost: "fb-post"
+  FbPost: "fb-post",
+  Comment: "comment-execute"
 } as const;
 
 export const JobName = {
@@ -17,7 +18,8 @@ export const JobName = {
   PublishExecute: "publish.execute",
   ScheduleRelease: "schedule.release",
   PlatformHealthCheck: "platform.health.check",
-  FbPostExecute: "fb.post.execute"
+  FbPostExecute: "fb.post.execute",
+  CommentExecute: "comment.execute"
 } as const;
 
 export const sourceCrawlJobSchema = z.object({
@@ -65,9 +67,15 @@ export const fbPostJobSchema = z.object({
   commentText: z.string().optional()
 });
 
+export const commentExecuteJobSchema = z.object({
+  version: z.literal(1),
+  commentQueueId: z.string().min(1)
+});
+
 export type SourceCrawlJob = z.infer<typeof sourceCrawlJobSchema>;
 export type ContentProcessJob = z.infer<typeof contentProcessJobSchema>;
 export type PublishExecuteJob = z.infer<typeof publishExecuteJobSchema>;
 export type ScheduleReleaseJob = z.infer<typeof scheduleReleaseJobSchema>;
 export type PlatformHealthJob = z.infer<typeof platformHealthJobSchema>;
 export type FbPostJob = z.infer<typeof fbPostJobSchema>;
+export type CommentExecuteJob = z.infer<typeof commentExecuteJobSchema>;

@@ -96,6 +96,28 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
       createdAt: new Date().toISOString()
     });
 
+    // Auto-enqueue first comment if defined in content metadata
+    const metadata = (content.metadata ?? {}) as Record<string, unknown>;
+    const commentText = typeof metadata.comment === "string" ? metadata.comment.trim() : "";
+    if (commentText && result.url) {
+      const commentMedia = Array.isArray(metadata.commentMedia) ? metadata.commentMedia : [];
+      const commentDelayMs = typeof metadata.commentDelayMinutes === "number" ? metadata.commentDelayMinutes * 60 * 1000 : 60_000;
+      const scheduledAt = new Date(Date.now() + commentDelayMs);
+
+      const cq = await context.prisma.commentQueue.create({
+        data: {
+          contentId: content.id,
+          targetId: target.id,
+          commentText,
+          commentMedia,
+          scheduledAt,
+          status: "pending"
+        }
+      });
+
+      await context.enqueueComment({ version: 1, commentQueueId: cq.id }, commentDelayMs);
+    }
+
     try {
       const tgSetting = await context.prisma.systemSetting.findUnique({ where: { key: "telegram_notify" } });
       const tg = (tgSetting?.value ?? {}) as Record<string, unknown>;

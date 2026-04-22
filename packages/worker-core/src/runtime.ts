@@ -9,9 +9,11 @@ import { processPublish } from "./processors/publish.js";
 import { processScheduleRelease } from "./processors/schedule.js";
 import { processPlatformHealth } from "./processors/platform-health.js";
 import { processFbPost } from "./processors/fb-post.js";
+import { processComment } from "./processors/comment.js";
 import {
   JobName,
   QueueName,
+  type CommentExecuteJob,
   type ContentProcessJob,
   type FbPostJob,
   type PlatformHealthJob,
@@ -67,6 +69,11 @@ export async function createWorkerCore(options: WorkerCoreOptions = {}) {
       queues[QueueName.FbPost].add(JobName.FbPostExecute, job, {
         ...stableJob(job),
         delay: Math.max(0, delay ?? 0)
+      }),
+    enqueueComment: (job: CommentExecuteJob, delay?: number) =>
+      queues[QueueName.Comment].add(JobName.CommentExecute, job, {
+        ...stableJob(job),
+        delay: Math.max(0, delay ?? 0)
       })
   };
 
@@ -78,7 +85,8 @@ export async function createWorkerCore(options: WorkerCoreOptions = {}) {
       new Worker(QueueName.Schedule, (job) => processScheduleRelease(job.data, context), { connection, concurrency: 2 }),
       new Worker(QueueName.PlatformHealth, (job) => processPlatformHealth(job.data, context), { connection, concurrency: 3 }),
       // Sequential: concurrency 1 to protect Facebook accounts
-      new Worker(QueueName.FbPost, (job) => processFbPost(job.data, context), { connection, concurrency: 1 })
+      new Worker(QueueName.FbPost, (job) => processFbPost(job.data, context), { connection, concurrency: 1 }),
+      new Worker(QueueName.Comment, (job) => processComment(job.data, context), { connection, concurrency: 1 })
     );
     workers.forEach((worker) => {
       worker.on("failed", (job, error) => logger.error("Worker job failed", { queue: worker.name, jobId: job?.id, error: error.message }));
@@ -124,6 +132,12 @@ export async function createWorkerCore(options: WorkerCoreOptions = {}) {
         JobName.FbPostExecute,
         { version: 1, kind: "post", fbPostTargetId } satisfies FbPostJob,
         { ...defaultJobOptions, jobId: `fb_post_${sanitizeJobIdToken(fbPostTargetId)}`, delay: Math.max(0, scheduledAt.getTime() - Date.now()) }
+      ),
+    scheduleComment: (commentQueueId: string, scheduledAt: Date) =>
+      queues[QueueName.Comment].add(
+        JobName.CommentExecute,
+        { version: 1, commentQueueId } satisfies CommentExecuteJob,
+        { ...defaultJobOptions, jobId: `comment_${sanitizeJobIdToken(commentQueueId)}`, delay: Math.max(0, scheduledAt.getTime() - Date.now()) }
       )
   };
 }
@@ -137,7 +151,8 @@ function createQueues(connection: IORedis) {
     [QueueName.Schedule]: new Queue(QueueName.Schedule, { connection, defaultJobOptions }),
     [QueueName.PlatformHealth]: new Queue(QueueName.PlatformHealth, { connection, defaultJobOptions }),
     [QueueName.Maintenance]: new Queue(QueueName.Maintenance, { connection, defaultJobOptions }),
-    [QueueName.FbPost]: new Queue(QueueName.FbPost, { connection, defaultJobOptions })
+    [QueueName.FbPost]: new Queue(QueueName.FbPost, { connection, defaultJobOptions }),
+    [QueueName.Comment]: new Queue(QueueName.Comment, { connection, defaultJobOptions })
   };
 }
 

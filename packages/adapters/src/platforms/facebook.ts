@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { AdapterAuthError, AdapterCheckpointError, RetryableNetworkError, type Platform } from "@zerun/shared";
-import type { AdapterAccount, AdapterHealth, CrawlInput, CrawlResult, PublishAdapter, PublishInput, PublishResult, SourceAdapter } from "../contracts.js";
+import type { AdapterAccount, AdapterHealth, CommentInput, CommentResult, CrawlInput, CrawlResult, PublishAdapter, PublishInput, PublishResult, SourceAdapter } from "../contracts.js";
 import { readString } from "../utils/credentials.js";
 
 export type FbPostType = "feed" | "story" | "reel";
@@ -164,6 +164,16 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
       await context.close();
       await browser.close();
     }
+  }
+
+  async comment(input: CommentInput): Promise<CommentResult> {
+    await this.addComment({
+      account: input.account,
+      postUrl: input.postUrl,
+      text: input.text,
+      screenshotName: `fb-comment-${Date.now()}`
+    });
+    return { url: input.postUrl, metadata: { platform: this.platform } };
   }
 
   private async publishFeed(page: any, caption: string, mediaPaths: string[]): Promise<FbPublishResult> {

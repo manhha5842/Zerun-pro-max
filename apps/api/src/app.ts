@@ -425,7 +425,9 @@ function registerCommentQueueRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
     const comment = await prisma.commentQueue.findUnique({ where: { id } });
     if (!comment) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy comment."));
-    await prisma.commentQueue.update({ where: { id }, data: { status: "pending", scheduledAt: new Date(), error: null, updatedAt: new Date() } });
+    const scheduledAt = new Date();
+    await prisma.commentQueue.update({ where: { id }, data: { status: "pending", scheduledAt, error: null, updatedAt: new Date() } });
+    await app.workerCore.scheduleComment(id, scheduledAt);
     return ok({ queued: true });
   });
 
@@ -437,6 +439,7 @@ function registerCommentQueueRoutes(app: FastifyInstance) {
     const comment = await prisma.commentQueue.findUnique({ where: { id } });
     if (!comment) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy comment."));
     await prisma.commentQueue.update({ where: { id }, data: { status: "pending", scheduledAt, error: null } });
+    await app.workerCore.scheduleComment(id, scheduledAt);
     return ok({ rescheduled: true });
   });
 
