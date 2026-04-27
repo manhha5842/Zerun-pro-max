@@ -39,6 +39,20 @@ export const designSystem = {
     lg: "12px",
     pill: "999px"
   },
+  iconography: {
+    provider: "vuesax-inspired",
+    defaultStyle: "linear",
+    styles: ["linear", "outline", "bold", "twotone", "bulk", "broken"],
+    sizes: {
+      sm: "16px",
+      md: "20px",
+      lg: "24px"
+    },
+    strokeWidth: {
+      linear: 1.9,
+      broken: 1.7
+    }
+  },
   colors: {
     bg: "#f6f7f9",
     bgMuted: "#f2f4f3",

@@ -1,40 +1,60 @@
-import {
-  Activity,
-  CalendarClock,
-  Download,
-  FileText,
-  Gauge,
-  History,
-  MessageSquare,
-  Send,
-  Settings,
-  Users
-} from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { Icon, type ZerunIconName } from "./ui/Icon";
 
-const navSections = [
+type NavSection = {
+  label: string;
+  items: Array<{
+    to: string;
+    label: string;
+    icon: ZerunIconName;
+    match?: RegExp;
+  }>;
+};
+
+const navSections: NavSection[] = [
   {
-    label: "",
-    items: [{ to: "/dashboard", label: "Tổng quan", icon: Gauge }]
+    label: "Tổng quan",
+    items: [{ to: "/dashboard", label: "Dashboard", icon: "dashboard" }]
   },
   {
-    label: "ĐĂNG BÀI",
+    label: "Đăng bài",
     items: [
-      { to: "/contents/new", label: "Nhập bài đăng", icon: Send },
-      { to: "/contents", label: "Quản lý bài viết", icon: FileText },
-      { to: "/history", label: "Lịch sử đăng", icon: History },
-      { to: "/pending-comments", label: "Comment chờ", icon: MessageSquare },
-      { to: "/schedules", label: "Lịch đăng", icon: CalendarClock },
-      { to: "/accounts", label: "Tài khoản đăng", icon: Users }
+      { to: "/contents/new", label: "Tạo bài đăng", icon: "compose" },
+      { to: "/contents", label: "Quản lý bài đăng", icon: "calendar", match: /^\/contents$/ },
+      { to: "/history", label: "Lịch sử", icon: "history" },
+      { to: "/contents/archive", label: "Kho lưu trữ", icon: "archive" },
+      { to: "/contents/trash", label: "Thùng rác", icon: "trash" }
     ]
   },
   {
-    label: "CRAWL",
-    items: [{ to: "/crawl", label: "Nguồn crawl", icon: Download }]
+    label: "Chuyển đổi tự động",
+    items: [
+      { to: "/auto-conversion/rules", label: "Cấu hình chuyển đổi tự động", icon: "automation", match: /^\/auto-conversion\/rules/ },
+      { to: "/auto-conversion/history", label: "Lịch sử chuyển đổi tự động", icon: "history", match: /^\/auto-conversion\/history/ }
+    ]
   },
   {
-    label: "HỆ THỐNG",
-    items: [{ to: "/settings", label: "Cài đặt", icon: Settings }]
+    label: "Crawl dữ liệu",
+    items: [
+      { to: "/crawl", label: "Crawl dữ liệu", icon: "crawl" },
+      { to: "/crawl/history", label: "Lịch sử crawl", icon: "history" },
+      { to: "/crawl/results", label: "Kết quả crawl", icon: "content" }
+    ]
+  },
+  {
+    label: "Công cụ",
+    items: [{ to: "/tools/convert-link", label: "Convert link affiliate", icon: "tool" }]
+  },
+  {
+    label: "Tài khoản",
+    items: [{ to: "/accounts", label: "Tài khoản đăng", icon: "account" }]
+  },
+  {
+    label: "Hệ thống",
+    items: [
+      { to: "/settings", label: "Cài đặt", icon: "settings" },
+      { to: "/worker-jobs", label: "Worker jobs / Logs", icon: "activity" }
+    ]
   }
 ];
 
@@ -46,7 +66,7 @@ export function Layout() {
       <aside className="sidebar auto-style-sidebar">
         <div className="brand auto-style-brand">
           <div className="brand-mark">
-            <Activity aria-hidden />
+            <Icon name="activity" size={18} tone="primary" />
           </div>
           <div>
             <span>Zerun</span>
@@ -55,19 +75,15 @@ export function Layout() {
         </div>
 
         <nav className="nav-sections" aria-label="Điều hướng chính">
-          {navSections.map((section, index) => (
-            <div key={`${section.label}-${index}`} className="nav-section-block">
-              {section.label ? <div className="nav-section-label">{section.label}</div> : null}
+          {navSections.map((section) => (
+            <div key={section.label} className="nav-section-block">
+              <div className="nav-section-label">{section.label}</div>
               <div className="nav-list">
                 {section.items.map((item) => {
-                  const active =
-                    item.to === "/contents"
-                      ? location.pathname === "/contents" || /^\/contents\/[^/]+(?:\/edit)?$/.test(location.pathname)
-                      : location.pathname === item.to;
-
+                  const active = item.match ? item.match.test(location.pathname) : location.pathname === item.to;
                   return (
-                    <NavLink key={item.to + item.label} to={item.to} end className={`nav-item auto-style-nav ${active ? "active" : ""}`}>
-                      <item.icon aria-hidden />
+                    <NavLink key={item.to} to={item.to} end className={`nav-item auto-style-nav ${active ? "active" : ""}`}>
+                      <Icon name={item.icon} size={18} tone={active ? "primary" : "muted"} />
                       <span>{item.label}</span>
                     </NavLink>
                   );

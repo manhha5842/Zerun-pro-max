@@ -27,6 +27,21 @@
 - lg: 12
 - pill: 999
 
+### Iconography
+- Direction: Vuesax-inspired icon language from the referenced Figma UI kit
+- Default set: linear
+- Supported styles for future rollout:
+  - linear
+  - outline
+  - bold
+  - twotone
+  - bulk
+  - broken
+- Shared sizes:
+  - sm: 16
+  - md: 20
+  - lg: 24
+
 ### Color tokens
 - bg: #f6f7f9
 - bgMuted: #f2f4f3
@@ -41,6 +56,7 @@
 
 ## Component rules
 - Buttons, inputs, select, textarea, dialog, badges must consume shared tokens.
+- Shared icons should go through `src/components/ui/Icon.tsx` instead of importing mixed icon sets directly into app navigation.
 - Page-level CSS should prefer semantic utility classes/tokens over raw hex duplication.
 - New pages should start from page-head/panel/form-grid/layout primitives, not one-off spacing rules.
 

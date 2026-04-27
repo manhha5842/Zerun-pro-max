@@ -205,7 +205,7 @@ export function ContentDetailPage() {
             </div>
 
             <div className="field compact-field">
-              <Label>Platform</Label>
+              <Label>Nền tảng</Label>
               <div className="selection-summary"><span>{platformLabel}</span></div>
             </div>
 

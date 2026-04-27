@@ -75,7 +75,7 @@ export function PendingCommentsPage() {
   }
 
   async function cancel(id: string) {
-    if (!confirm("Huy comment nay?")) return;
+    if (!confirm("Hủy comment này?")) return;
     try {
       setBusyId(id);
       await apiDelete(`/pending-comments/${id}`);
@@ -88,45 +88,45 @@ export function PendingCommentsPage() {
   return (
     <>
       <PageHeader
-        title="Comment cho xu ly"
-        subtitle="Quan ly comment hen gio, xu ly lai comment loi."
-        actions={<Button variant="secondary" size="sm" icon={<RefreshCw size={13} />} onClick={() => q.refetch()}>Lam moi</Button>}
+        title="Comment chờ xử lý"
+        subtitle="Quản lý comment hẹn giờ, xử lý lại comment lỗi."
+        actions={<Button variant="secondary" size="sm" icon={<RefreshCw size={13} />} onClick={() => q.refetch()}>Làm mới</Button>}
       />
 
-      <SectionCard title="Bo loc" description="">
+      <SectionCard title="Bộ lọc" description="">
         <div style={{ display: "flex", gap: 10 }}>
           <div>
-            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--color-text-muted)" }}>Trang thai</label>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--color-text-muted)" }}>Trạng thái</label>
             <select
               style={{ fontSize: 13, padding: "5px 8px", border: "1px solid var(--color-border)", borderRadius: 6, background: "#fff" }}
               value={statusFilter}
               onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
             >
-              <option value="all">Pending + Loi</option>
-              <option value="pending">Cho</option>
-              <option value="failed">Loi</option>
+              <option value="all">Chờ + Lỗi</option>
+              <option value="pending">Chờ</option>
+              <option value="failed">Lỗi</option>
               <option value="done">Xong</option>
-              <option value="cancelled">Da huy</option>
+              <option value="cancelled">Đã hủy</option>
             </select>
           </div>
         </div>
       </SectionCard>
 
-      <SectionCard title="Comment cho" description={pagination ? `${pagination.total} muc` : ""}>
+      <SectionCard title="Comment chờ" description={pagination ? `${pagination.total} mục` : ""}>
         {q.isLoading ? (
-          <div className="text-muted" style={{ padding: 16 }}>Dang tai...</div>
+          <div className="text-muted" style={{ padding: 16 }}>Đang tải...</div>
         ) : comments.length === 0 ? (
-          <EmptyState title="Khong co comment nao" description="Comment hen gio hoac chua gui se xuat hien o day." />
+          <EmptyState title="Không có comment nào" description="Comment hẹn giờ hoặc chưa gửi sẽ xuất hiện ở đây." />
         ) : (
           <table className="table table-compact">
             <thead>
               <tr>
-                <th>Gio hen</th>
-                <th>Bai viet</th>
-                <th>Tai khoan</th>
-                <th>Noi dung</th>
-                <th>Trang thai</th>
-                <th>Thao tac</th>
+                <th>Giờ hẹn</th>
+                <th>Bài viết</th>
+                <th>Tài khoản</th>
+                <th>Nội dung</th>
+                <th>Trạng thái</th>
+                <th>Thao tác</th>
               </tr>
             </thead>
             <tbody>
@@ -148,12 +148,12 @@ export function PendingCommentsPage() {
                   <td>
                     <div className="stack-tight" style={{ minWidth: 220 }}>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        <Button size="sm" disabled={busyId === c.id} onClick={() => retry(c.id)}>Dang lai</Button>
-                        <Button size="sm" variant="danger" icon={<Trash2 size={12} />} disabled={busyId === c.id} onClick={() => cancel(c.id)}>Huy</Button>
+                        <Button size="sm" disabled={busyId === c.id} onClick={() => retry(c.id)}>Đăng lại</Button>
+                        <Button size="sm" variant="danger" icon={<Trash2 size={12} />} disabled={busyId === c.id} onClick={() => cancel(c.id)}>Hủy</Button>
                       </div>
                       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                         <Input type="datetime-local" value={rescheduleMap[c.id] ?? ""} onChange={(e) => setRescheduleMap((prev) => ({ ...prev, [c.id]: e.target.value }))} />
-                        <Button size="sm" variant="secondary" disabled={busyId === c.id || !rescheduleMap[c.id]} onClick={() => reschedule(c.id)}>Hen lai</Button>
+                        <Button size="sm" variant="secondary" disabled={busyId === c.id || !rescheduleMap[c.id]} onClick={() => reschedule(c.id)}>Hẹn lại</Button>
                       </div>
                     </div>
                   </td>
@@ -165,7 +165,7 @@ export function PendingCommentsPage() {
 
         {pagination && pagination.totalPages > 1 && (
           <div className="actions" style={{ marginTop: 14 }}>
-            <Button variant="secondary" size="sm" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Trang truoc</Button>
+            <Button variant="secondary" size="sm" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Trang trước</Button>
             <span className="text-muted" style={{ fontSize: 13 }}>Trang {page} / {pagination.totalPages}</span>
             <Button variant="secondary" size="sm" disabled={page >= pagination.totalPages} onClick={() => setPage((p) => p + 1)}>Trang sau</Button>
           </div>

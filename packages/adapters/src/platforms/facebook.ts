@@ -24,6 +24,7 @@ export type FbCommentInput = {
   account: AdapterAccount;
   postUrl: string;
   text: string;
+  mediaPaths?: string[];
   screenshotDir?: string;
   screenshotName?: string;
 };
@@ -95,9 +96,10 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
+    const postType = resolveFacebookPublishType(input);
     const result = await this.publishFb({
       account: input.account,
-      type: "feed",
+      type: postType,
       caption: input.text,
       mediaPaths: input.media.map((m) => m.localPath ?? m.url ?? "").filter(Boolean)
     });
@@ -136,6 +138,7 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
     const { browser, context } = await this.openContext(input.account);
     const screenshotDir = input.screenshotDir ?? "storage/screenshots";
     const screenshotName = input.screenshotName ?? `fb-comment-error-${Date.now()}`;
+    const mediaPaths = input.mediaPaths ?? [];
 
     try {
       const page = await context.newPage();
@@ -155,6 +158,27 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
       await page.waitForTimeout(300);
       await commentBox.fill(input.text);
       await page.waitForTimeout(300);
+
+      if (mediaPaths.length > 0) {
+        const fileInput = page.locator('input[type="file"][accept*="image"], input[type="file"][accept*="video"], input[type="file"]').last();
+        if (await fileInput.count()) {
+          await fileInput.setInputFiles(mediaPaths);
+        } else {
+          const [fileChooser] = await Promise.all([
+            page.waitForEvent("filechooser", { timeout: 10_000 }),
+            clickFirst(page, [
+              '[aria-label*="Attach a photo" i]',
+              '[aria-label*="Photo" i]',
+              '[aria-label*="Ảnh" i]',
+              '[aria-label*="Bình luận bằng ảnh" i]',
+              'text=/Photo|Ảnh|Attach/i'
+            ], { timeout: 10_000 })
+          ]);
+          await fileChooser.setFiles(mediaPaths);
+        }
+        await page.waitForTimeout(2_000);
+      }
+
       await commentBox.press("Enter");
       await page.waitForTimeout(2_000);
     } catch (error) {
@@ -171,6 +195,7 @@ export class FacebookAdapter implements SourceAdapter, PublishAdapter {
       account: input.account,
       postUrl: input.postUrl,
       text: input.text,
+      mediaPaths: input.media?.map((m) => m.localPath ?? m.url ?? "").filter(Boolean),
       screenshotName: `fb-comment-${Date.now()}`
     });
     return { url: input.postUrl, metadata: { platform: this.platform } };
@@ -558,4 +583,13 @@ function normalizeFacebookError(error: unknown): Error {
     return new RetryableNetworkError(message);
   }
   return error instanceof Error ? error : new Error(message);
+}
+
+function resolveFacebookPublishType(input: PublishInput): FbPostType {
+  const metadataType = String(input.media[0]?.metadata?.postType ?? input.media[0]?.metadata?.type ?? "").toLowerCase();
+  const configType = String((input.account.config as Record<string, unknown>)?.publishType ?? "").toLowerCase();
+  const combined = metadataType || configType;
+  if (combined === "story") return "story";
+  if (combined === "reel") return "reel";
+  return "feed";
 }

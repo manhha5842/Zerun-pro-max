@@ -1,7 +1,7 @@
 import path from "node:path";
-import { createWriteStream, existsSync, mkdirSync, rmSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { pipeline } from "node:stream/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import fastifyStatic from "@fastify/static";
 import fastifyCookie from "@fastify/cookie";
@@ -10,8 +10,9 @@ import fastifyJwt from "@fastify/jwt";
 import fastifyMultipart from "@fastify/multipart";
 import fastifyWebsocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
-import { Prisma } from "@prisma/client";
+import { Prisma, type CrawlResult } from "@prisma/client";
 import { compare, hash } from "bcryptjs";
+import * as XLSX from "xlsx";
 import { detectLinks } from "@zerun/core";
 import type { BrowserContext } from "playwright";
 import { prisma } from "@zerun/db";
@@ -42,6 +43,27 @@ type BrowserLoginSession = {
 };
 
 const browserLoginSessions = new Map<string, BrowserLoginSession>();
+
+type ConvertLinkBatch = {
+  id: string;
+  text: string;
+  rows: Record<string, unknown>[];
+  links: Array<{
+    originalUrl: string;
+    network: string;
+    action: "convert" | "saved_for_review";
+    reason?: string;
+  }>;
+  subIds: string[];
+  results: Array<{
+    originalUrl: string;
+    convertedUrl?: string;
+    failureReason?: string;
+  }>;
+  createdAt: string;
+};
+
+const convertLinkBatches = new Map<string, ConvertLinkBatch>();
 
 async function persistPlatformAccountSessionState(platform: BrowserLoginPlatform, accountId: string, payload: Record<string, unknown>) {
   return prisma.platformSession.upsert({
@@ -236,10 +258,13 @@ async function registerProtectedRoutes(app: FastifyInstance) {
   });
 
   registerContentRoutes(app);
+  registerAutoConversionRoutes(app);
+  registerCrawlRoutes(app);
   registerSourceRoutes(app);
   registerTargetRoutes(app);
   registerRoutingRoutes(app);
   registerLinkRoutes(app);
+  registerConvertLinkToolRoutes(app);
   registerScheduleRoutes(app);
   registerAccountRoutes(app);
   registerAiRoutes(app);
@@ -249,6 +274,8 @@ async function registerProtectedRoutes(app: FastifyInstance) {
   registerHistoryRoutes(app);
   registerFailedRoutes(app);
   registerCommentQueueRoutes(app);
+  registerWorkerJobRoutes(app);
+  registerExtendedSettingsRoutes(app);
   registerTelegramSettingsRoutes(app);
 }
 
@@ -258,23 +285,66 @@ function registerHistoryRoutes(app: FastifyInstance) {
     const page = Math.max(Number(query.page ?? 1), 1);
     const limit = Math.min(Math.max(Number(query.limit ?? 20), 1), 100);
     const where: Prisma.PublishAttemptWhereInput = {};
+    const successStatuses = ["published", "success"];
+    const requestedStatus = String(query.status ?? "all");
 
-    if (query.status && String(query.status) !== "all") {
-      where.status = String(query.status);
+    if (requestedStatus !== "all" && successStatuses.includes(requestedStatus)) {
+      where.status = requestedStatus;
+    } else {
+      where.status = { in: successStatuses };
     }
     if (query.platform && String(query.platform) !== "all") {
       where.target = { is: { platform: String(query.platform) as Platform } };
     }
+    const keyword = String(query.keyword ?? query.search ?? "").trim();
+    if (keyword) {
+      const contains = { contains: keyword, mode: "insensitive" as const };
+      where.OR = [
+        { status: contains },
+        { error: contains },
+        { resultUrl: contains },
+        { content: { is: { code: contains } } },
+        { content: { is: { originalText: contains } } },
+        { content: { is: { draftText: contains } } },
+        { content: { is: { finalText: contains } } },
+        { target: { is: { name: contains } } },
+        { target: { is: { platform: contains } } }
+      ];
+    }
+
+    const sortOrder = String(query.sortOrder ?? "desc") === "asc" ? "asc" : "desc";
+    const sortBy = String(query.sortBy ?? "createdAt");
+    const orderBy: Prisma.PublishAttemptOrderByWithRelationInput =
+      sortBy === "status" ? { status: sortOrder } :
+      sortBy === "account" ? { target: { name: sortOrder } } :
+      sortBy === "platform" ? { target: { platform: sortOrder } } :
+      sortBy === "code" ? { content: { code: sortOrder } } :
+      { createdAt: sortOrder };
 
     const [total, attempts] = await Promise.all([
       prisma.publishAttempt.count({ where }),
       prisma.publishAttempt.findMany({
         where,
         include: {
-          content: { select: { id: true, code: true, originalText: true, draftText: true, finalText: true, metadata: true } },
+          content: {
+            include: {
+              links: true,
+              media: true,
+              source: true,
+              commentQueues: {
+                orderBy: { createdAt: "desc" },
+                include: { target: { select: { id: true, name: true, platform: true } } }
+              },
+              publishAttempts: {
+                orderBy: { createdAt: "desc" },
+                take: 5,
+                include: { target: { select: { id: true, name: true, platform: true } } }
+              }
+            }
+          },
           target: { select: { id: true, name: true, platform: true } }
         },
-        orderBy: { createdAt: "desc" },
+        orderBy,
         skip: (page - 1) * limit,
         take: limit
       })
@@ -346,7 +416,10 @@ function registerFailedRoutes(app: FastifyInstance) {
   app.post("/failed/:code/retry", async (request, reply) => {
     const { code } = request.params as { code: string };
     const body = request.body as AnyBody;
-    const content = await prisma.content.findUnique({ where: { code } });
+    const content = await prisma.content.findUnique({
+      where: { code },
+      select: { id: true, status: true, platform: true, scheduledAt: true, scheduledTargets: true }
+    });
     if (!content) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy nội dung."));
 
     let targetIds: string[] = [];
@@ -374,7 +447,7 @@ function registerFailedRoutes(app: FastifyInstance) {
 
     const scheduledAt = body.scheduledAt ? new Date(String(body.scheduledAt)) : null;
     if (!scheduledAt || Number.isNaN(scheduledAt.getTime())) {
-      return reply.code(400).send(fail("BAD_REQUEST", "Cần cung cấp scheduledAt hợp lệ."));
+      return reply.code(400).send(fail("BAD_REQUEST", "Cần cung cấp thời gian hẹn hợp lệ."));
     }
 
     const targetIds = Array.isArray(content.scheduledTargets) ? (content.scheduledTargets as unknown[]).map(String) : [];
@@ -435,7 +508,7 @@ function registerCommentQueueRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
     const body = request.body as AnyBody;
     const scheduledAt = body.scheduledAt ? new Date(String(body.scheduledAt)) : null;
-    if (!scheduledAt || Number.isNaN(scheduledAt.getTime())) return reply.code(400).send(fail("BAD_REQUEST", "Cần cung cấp scheduledAt."));
+    if (!scheduledAt || Number.isNaN(scheduledAt.getTime())) return reply.code(400).send(fail("BAD_REQUEST", "Cần cung cấp thời gian hẹn hợp lệ."));
     const comment = await prisma.commentQueue.findUnique({ where: { id } });
     if (!comment) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy comment."));
     await prisma.commentQueue.update({ where: { id }, data: { status: "pending", scheduledAt, error: null } });
@@ -449,6 +522,88 @@ function registerCommentQueueRoutes(app: FastifyInstance) {
     if (!comment) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy comment."));
     await prisma.commentQueue.update({ where: { id }, data: { status: "cancelled" } });
     return ok({ cancelled: true });
+  });
+}
+
+function registerWorkerJobRoutes(app: FastifyInstance) {
+  app.get("/worker-jobs", async (request) => {
+    const query = request.query as AnyBody;
+    const page = Math.max(Number(query.page ?? 1), 1);
+    const limit = Math.min(Math.max(Number(query.limit ?? 20), 1), 100);
+    const where: Prisma.WorkerJobLogWhereInput = {};
+    if (query.queueName && String(query.queueName) !== "all") where.queueName = String(query.queueName);
+    if (query.status && String(query.status) !== "all") where.status = String(query.status);
+    if (query.jobName && String(query.jobName) !== "all") where.jobName = String(query.jobName);
+
+    const [total, jobs, grouped] = await Promise.all([
+      prisma.workerJobLog.count({ where }),
+      prisma.workerJobLog.findMany({ where, orderBy: { createdAt: "desc" }, skip: (page - 1) * limit, take: limit }),
+      prisma.workerJobLog.groupBy({ by: ["queueName", "status"], _count: { _all: true } })
+    ]);
+
+    return ok({ jobs, summary: grouped }, buildPagination(page, limit, total));
+  });
+
+  app.post("/worker-jobs/:id/retry-log", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const current = await prisma.workerJobLog.findUnique({ where: { id } });
+    if (!current) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy worker job."));
+    const job = await prisma.workerJobLog.create({
+      data: {
+        queueName: current.queueName,
+        jobName: current.jobName,
+        jobId: current.jobId,
+        status: "queued",
+        payload: current.payload ?? undefined
+      }
+    });
+    return ok({ queued: true, job });
+  });
+}
+
+function registerSettingSection(app: FastifyInstance, route: string, key: string, defaults: Record<string, unknown>) {
+  app.get(route, async () => {
+    const setting = await prisma.systemSetting.findUnique({ where: { key } });
+    return ok(setting?.value ?? defaults);
+  });
+
+  app.put(route, async (request) => {
+    const body = request.body as AnyBody;
+    const value = { ...defaults, ...body };
+    await prisma.systemSetting.upsert({
+      where: { key },
+      create: { key, value },
+      update: { value }
+    });
+    return ok({ saved: true, value });
+  });
+}
+
+function registerExtendedSettingsRoutes(app: FastifyInstance) {
+  registerSettingSection(app, "/settings/ai", "ai_settings", {
+    provider: "",
+    apiKey: "",
+    model: "",
+    rewritePrompt: "Viết lại nội dung tự nhiên bằng tiếng Việt có dấu, giữ ý chính và bỏ link không hợp lệ nếu cần.",
+    removeInvalidLinkPrompt: "Xóa hoặc viết lại đoạn chứa link không hỗ trợ, không làm mất ý chính."
+  });
+  registerSettingSection(app, "/settings/cloudinary", "cloudinary_settings", {
+    keys: [],
+    enabled: false
+  });
+  registerSettingSection(app, "/settings/affiliate", "affiliate_settings", {
+    networks: ["shopee", "lazada"],
+    shopeeRule: { enabled: true },
+    lazadaRule: { enabled: true },
+    unknownLinkAction: "saved_for_review"
+  });
+
+  app.post("/settings/ai/test", async (request) => {
+    const body = request.body as AnyBody;
+    return ok({
+      output: `Ví dụ tiếng Việt có dấu: ${String(body.text ?? "Nội dung được viết lại sẽ giữ nguyên ý chính.")}`,
+      provider: body.provider ?? "manual"
+    });
   });
 }
 
@@ -470,6 +625,216 @@ function registerTelegramSettingsRoutes(app: FastifyInstance) {
   });
 }
 
+function buildContentWhere(input: AnyBody): Prisma.ContentWhereInput {
+  const where: Prisma.ContentWhereInput = {};
+  const status = input.status ? String(input.status) : "";
+
+  if (status && status !== "all") {
+    where.status = status;
+  }
+
+  if (status !== "trashed" && !input.includeTrash) {
+    where.deletedAt = null;
+  }
+
+  if (input.platform && String(input.platform) !== "all") {
+    where.platform = String(input.platform);
+  }
+
+  if (input.dateFrom || input.dateTo) {
+    where.createdAt = {
+      ...(input.dateFrom ? { gte: new Date(String(input.dateFrom)) } : {}),
+      ...(input.dateTo ? { lte: new Date(String(input.dateTo)) } : {})
+    };
+  }
+
+  const keyword = String(input.keyword ?? input.search ?? "").trim();
+  if (keyword) {
+    const contains = { contains: keyword, mode: "insensitive" as const };
+    where.OR = [
+      { code: contains },
+      { platform: contains },
+      { status: contains },
+      { originalText: contains },
+      { draftText: contains },
+      { finalText: contains },
+      { savedReason: contains },
+      { lastError: contains }
+    ];
+  }
+
+  return where;
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.map(String).map((value) => value.trim()).filter(Boolean))];
+}
+
+function parseDateInput(value: unknown): Date | null {
+  if (value === undefined || value === null || String(value).trim() === "") return null;
+  const date = new Date(String(value));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function inferMediaType(mediaPath: string) {
+  const normalized = mediaPath.split("?")[0].toLowerCase();
+  if (/\.(mp4|mov|avi|webm|mkv)$/.test(normalized)) return "video";
+  if (/\.(jpg|jpeg|png|gif|webp|avif)$/.test(normalized)) return "image";
+  return "document";
+}
+
+function inferMimeType(mediaPath: string) {
+  const normalized = mediaPath.split("?")[0].toLowerCase();
+  if (normalized.endsWith(".jpg") || normalized.endsWith(".jpeg")) return "image/jpeg";
+  if (normalized.endsWith(".png")) return "image/png";
+  if (normalized.endsWith(".gif")) return "image/gif";
+  if (normalized.endsWith(".webp")) return "image/webp";
+  if (normalized.endsWith(".mp4")) return "video/mp4";
+  if (normalized.endsWith(".mov")) return "video/quicktime";
+  if (normalized.endsWith(".webm")) return "video/webm";
+  return undefined;
+}
+
+function normalizePathList(value: unknown) {
+  if (Array.isArray(value)) return uniqueStrings(value.map(String));
+  if (typeof value === "string") return parseJsonArray(value);
+  return [];
+}
+
+function mediaAssetCreatesFromPaths(mediaPaths: string[], source: string, postType?: string) {
+  return mediaPaths.map((mediaPath, index) => {
+    const isRemote = /^https?:\/\//i.test(mediaPath);
+    return {
+      type: inferMediaType(mediaPath),
+      mimeType: inferMimeType(mediaPath),
+      ...(isRemote ? { sourceUrl: mediaPath } : { localPath: mediaPath }),
+      metadata: { source, sortOrder: index, ...(postType ? { postType } : {}) }
+    };
+  });
+}
+
+async function syncContentMediaFromPaths(contentId: string, mediaPaths: string[], source: string, postType?: string) {
+  await prisma.mediaAsset.deleteMany({ where: { contentId } });
+  if (mediaPaths.length === 0) return;
+  await prisma.mediaAsset.createMany({
+    data: mediaAssetCreatesFromPaths(mediaPaths, source, postType).map((media) => ({
+      contentId,
+      ...media,
+      metadata: media.metadata as Prisma.InputJsonValue
+    }))
+  });
+}
+
+async function removeScheduleQueueJobs(app: FastifyInstance, scheduleId: string) {
+  const queue = app.workerCore.queues.schedule;
+  const jobs = await queue.getJobs(["delayed", "waiting", "paused"], 0, -1).catch(() => []);
+  await Promise.all(
+    jobs
+      .filter((job) => job.name === "schedule.release" && (job.data as AnyBody | undefined)?.scheduleId === scheduleId)
+      .map((job) => job.remove().catch(() => undefined))
+  );
+}
+
+async function syncContentScheduleSummary(contentId: string) {
+  const schedules = await prisma.schedule.findMany({
+    where: { contentId, status: "scheduled" },
+    orderBy: { scheduledAt: "asc" }
+  });
+
+  if (schedules.length === 0) {
+    await prisma.content.updateMany({
+      where: { id: contentId, status: "scheduled" },
+      data: { status: "ready_to_publish", scheduledAt: null, scheduledTargets: [] as Prisma.InputJsonValue }
+    });
+    return;
+  }
+
+  await prisma.content.update({
+    where: { id: contentId },
+    data: {
+      status: "scheduled",
+      scheduledAt: schedules[0].scheduledAt,
+      scheduledTargets: uniqueStrings(schedules.map((schedule) => schedule.targetId)) as Prisma.InputJsonValue
+    }
+  });
+}
+
+async function scheduleContentForTargets(app: FastifyInstance, contentId: string, targetIds: string[], scheduledAt: Date) {
+  const schedules = await Promise.all(
+    uniqueStrings(targetIds).map((targetId) =>
+      prisma.schedule.upsert({
+        where: {
+          contentId_targetId_scheduledAt: {
+            contentId,
+            targetId,
+            scheduledAt
+          }
+        },
+        create: { contentId, targetId, scheduledAt },
+        update: { status: "scheduled" }
+      })
+    )
+  );
+
+  await syncContentScheduleSummary(contentId);
+  await Promise.all(
+    schedules.map(async (schedule) => {
+      await removeScheduleQueueJobs(app, schedule.id);
+      await app.workerCore.scheduleRelease(schedule.id, schedule.scheduledAt);
+    })
+  );
+  return schedules;
+}
+
+async function replaceContentSchedules(app: FastifyInstance, contentId: string, targetIds: string[], scheduledAt: Date) {
+  const existing = await prisma.schedule.findMany({ where: { contentId, status: "scheduled" } });
+  await Promise.all(existing.map((schedule) => removeScheduleQueueJobs(app, schedule.id)));
+  await prisma.schedule.deleteMany({ where: { contentId, status: "scheduled" } });
+  return scheduleContentForTargets(app, contentId, targetIds, scheduledAt);
+}
+
+async function resolvePublishTargetIds(content: { id: string; platform: string; scheduledTargets: unknown }) {
+  const scheduledTargets = Array.isArray(content.scheduledTargets)
+    ? uniqueStrings((content.scheduledTargets as unknown[]).map(String))
+    : [];
+  if (scheduledTargets.length > 0) return scheduledTargets;
+
+  const previousAttempts = await prisma.publishAttempt.findMany({
+    where: { contentId: content.id },
+    select: { targetId: true },
+    distinct: ["targetId"]
+  });
+  const previousTargetIds = uniqueStrings(previousAttempts.map((attempt) => attempt.targetId));
+  if (previousTargetIds.length > 0) return previousTargetIds;
+
+  const contentPlatform = content.platform && content.platform !== "manual" ? content.platform : "facebook";
+  const platformTargets = await prisma.targetAccount.findMany({
+    where: { platform: contentPlatform, isActive: true, health: { not: "paused" } },
+    select: { id: true }
+  });
+  return uniqueStrings(platformTargets.map((target) => target.id));
+}
+
+async function enqueueContentContinuation(
+  app: FastifyInstance,
+  content: { id: string; status: string; platform: string; scheduledAt: Date | null; scheduledTargets: unknown },
+  action: "retry" | "resume"
+) {
+  const targetIds = await resolvePublishTargetIds(content);
+  if (targetIds.length === 0) {
+    await app.workerCore.processContent(content.id);
+    return { processed: true, queuedPublishes: 0, queuedSchedules: 0 };
+  }
+
+  if (action === "resume" && content.scheduledAt && content.scheduledAt.getTime() > Date.now()) {
+    const schedules = await scheduleContentForTargets(app, content.id, targetIds, content.scheduledAt);
+    return { processed: false, queuedPublishes: 0, queuedSchedules: schedules.length };
+  }
+
+  await Promise.all(targetIds.map((targetId) => app.workerCore.publishNow(content.id, targetId, "admin")));
+  return { processed: false, queuedPublishes: targetIds.length, queuedSchedules: 0 };
+}
+
 function registerContentRoutes(app: FastifyInstance) {
   app.post("/contents/manual", async (request) => {
     const body = request.body as AnyBody;
@@ -478,9 +843,22 @@ function registerContentRoutes(app: FastifyInstance) {
       return { statusCode: 400, ...fail("CONTENT_REQUIRED", "Cần nhập nội dung bài viết.") };
     }
 
-    const targetIds = Array.isArray(body.targetIds) ? body.targetIds.map(String) : [];
-    const manualStatus = body.status ? String(body.status) : (targetIds.length > 0 ? "scheduled" : "ready_to_publish");
-    const scheduledAt = body.scheduledAt ? new Date(String(body.scheduledAt)) : undefined;
+    const targetIds = normalizePathList(body.targetIds);
+    const mediaPaths = normalizePathList(body.mediaPaths);
+    const commentMedia = normalizePathList(body.commentMedia);
+    const postType = body.type ? String(body.type) : "feed";
+    const scheduledAt = parseDateInput(body.scheduledAt);
+    if (body.scheduledAt && !scheduledAt) {
+      return { statusCode: 400, ...fail("INVALID_SCHEDULE", "Thời gian hẹn đăng không hợp lệ.") };
+    }
+
+    const manualStatus = body.status ? String(body.status) : (scheduledAt ? "scheduled" : "ready_to_publish");
+    if (manualStatus === "scheduled" && targetIds.length === 0) {
+      return { statusCode: 400, ...fail("TARGET_REQUIRED", "Cần chọn ít nhất một tài khoản đăng.") };
+    }
+    if (manualStatus === "scheduled" && targetIds.length > 0 && !scheduledAt) {
+      return { statusCode: 400, ...fail("INVALID_SCHEDULE", "Cần chọn thời gian hẹn đăng.") };
+    }
 
     const content = await prisma.content.create({
       data: {
@@ -493,15 +871,20 @@ function registerContentRoutes(app: FastifyInstance) {
         scheduledAt,
         scheduledTargets: targetIds,
         metadata: {
-          type: body.type ? String(body.type) : "feed",
+          type: postType,
           comment: body.comment ? String(body.comment) : undefined,
-          commentMedia: Array.isArray(body.commentMedia) ? body.commentMedia : [],
-          mediaPaths: Array.isArray(body.mediaPaths) ? body.mediaPaths : [],
+          commentMedia,
+          mediaPaths,
           fbPostId: body.fbPostId ? String(body.fbPostId) : undefined,
           manualMode: body.mode ? String(body.mode) : undefined
-        }
+        },
+        ...(mediaPaths.length > 0 ? { media: { create: mediaAssetCreatesFromPaths(mediaPaths, "manual", postType) } } : {})
       }
     });
+
+    if (manualStatus === "scheduled" && scheduledAt && targetIds.length > 0) {
+      await scheduleContentForTargets(app, content.id, targetIds, scheduledAt);
+    }
 
     return ok({ content });
   });
@@ -510,9 +893,11 @@ function registerContentRoutes(app: FastifyInstance) {
     const query = request.query as AnyBody;
     const page = Math.max(Number(query.page ?? 1), 1);
     const limit = Math.min(Math.max(Number(query.limit ?? 20), 1), 100);
-    const where: AnyBody = {};
-    if (query.status) where.status = String(query.status);
-    if (query.platform) where.platform = String(query.platform);
+    const where = buildContentWhere(query);
+    const sortBy = ["createdAt", "updatedAt", "scheduledAt", "platform", "status", "code"].includes(String(query.sortBy))
+      ? String(query.sortBy)
+      : "createdAt";
+    const sortOrder = String(query.sortOrder ?? "desc") === "asc" ? "asc" : "desc";
     const [total, contents] = await Promise.all([
       prisma.content.count({ where }),
       prisma.content.findMany({
@@ -524,15 +909,143 @@ function registerContentRoutes(app: FastifyInstance) {
           publishAttempts: {
             orderBy: { createdAt: "desc" },
             take: 5,
-            select: { targetId: true }
+            include: { target: { select: { id: true, name: true, platform: true } } }
+          },
+          commentQueues: {
+            orderBy: { createdAt: "desc" },
+            take: 5,
+            include: { target: { select: { id: true, name: true, platform: true } } }
           }
         },
-        orderBy: { createdAt: "desc" },
+        orderBy: { [sortBy]: sortOrder },
         skip: (page - 1) * limit,
         take: limit
       })
     ]);
     return ok({ contents }, buildPagination(page, limit, total));
+  });
+
+  app.post("/contents/bulk-action", async (request, reply) => {
+    const body = request.body as AnyBody;
+    const action = String(body.action ?? "");
+    const allowedActions = new Set(["pause", "resume", "cancel", "retry", "move_to_saved", "move_to_trash", "restore", "delete_forever", "export"]);
+    if (!allowedActions.has(action)) return reply.code(400).send(fail("BAD_ACTION", "Hành động hàng loạt không hợp lệ."));
+
+    const ids = Array.isArray(body.ids) ? body.ids.map(String).filter(Boolean) : [];
+    const filter = body.filter && typeof body.filter === "object" ? body.filter as AnyBody : {};
+    const where: Prisma.ContentWhereInput = ids.length > 0
+      ? { OR: [{ id: { in: ids } }, { code: { in: ids } }] }
+      : buildContentWhere(filter);
+    const shouldQueueContinuation = action === "retry" || action === "resume";
+    const contentsToQueue = shouldQueueContinuation
+      ? await prisma.content.findMany({
+          where,
+          select: { id: true, status: true, platform: true, scheduledAt: true, scheduledTargets: true }
+        })
+      : [];
+
+    if (action === "export") {
+      const contents = await prisma.content.findMany({ where, orderBy: { updatedAt: "desc" }, take: 10_000 });
+      return ok({ affected: contents.length, contents });
+    }
+
+    if (action === "delete_forever") {
+      const deleted = await prisma.content.deleteMany({ where });
+      return ok({ affected: deleted.count });
+    }
+
+    const now = new Date();
+    const reason = body.reason ? String(body.reason) : undefined;
+    const dataByAction: Record<string, Prisma.ContentUpdateManyMutationInput> = {
+      pause: { status: "paused" },
+      resume: { status: "ready_to_publish" },
+      cancel: { status: "trashed", deletedAt: now, cancelledAt: now },
+      retry: { status: "ready_to_publish", lastError: null, retryCount: { increment: 1 } },
+      move_to_saved: { status: "saved", savedReason: reason ?? "Chuyển vào Kho lưu trữ", savedSource: "bulk_action" },
+      move_to_trash: { status: "trashed", deletedAt: now },
+      restore: { status: "draft", deletedAt: null, cancelledAt: null, cancelReason: null }
+    };
+
+    const updated = await prisma.content.updateMany({ where, data: dataByAction[action] });
+    const queued = [];
+    if (shouldQueueContinuation) {
+      for (const content of contentsToQueue) {
+        queued.push(await enqueueContentContinuation(app, content, action as "retry" | "resume"));
+      }
+    }
+    return ok({
+      affected: updated.count,
+      queuedPublishes: queued.reduce((total, item) => total + item.queuedPublishes, 0),
+      queuedSchedules: queued.reduce((total, item) => total + item.queuedSchedules, 0),
+      queuedProcesses: queued.filter((item) => item.processed).length
+    });
+  });
+
+  app.post("/contents/bulk-import", async (request, reply) => {
+    const payload = await readConvertToolPayload(request);
+    const mapping = parseJsonObject(payload.fields.mapping, {
+      caption: "caption",
+      mediaPaths: "media paths",
+      comments: "comments",
+      commentMediaPaths: "comment media paths",
+      scheduleTime: "schedule time",
+      postType: "post type"
+    });
+    const targetIds = parseJsonArray(payload.fields.targetIds);
+    if (targetIds.length === 0) return reply.code(400).send(fail("TARGET_REQUIRED", "Cần chọn ít nhất một tài khoản đăng."));
+    if (payload.rows.length === 0) return reply.code(400).send(fail("IMPORT_EMPTY", "File import không có dòng dữ liệu."));
+
+    const scheduleMode = String(payload.fields.scheduleMode ?? "now");
+    const fixedScheduledAt = parseDateInput(payload.fields.scheduledAt);
+    if (payload.fields.scheduledAt && !fixedScheduledAt) {
+      return reply.code(400).send(fail("INVALID_SCHEDULE", "Thời gian hẹn đăng không hợp lệ."));
+    }
+    const created = [];
+    const failed: Array<{ row: number; error: string }> = [];
+
+    for (const [index, row] of payload.rows.entries()) {
+      try {
+        const caption = getRowValue(row, [String(mapping.caption ?? "caption"), "caption", "nội dung", "noi dung"]);
+        if (!caption) throw new Error("Thiếu caption/nội dung.");
+        const rowScheduledAt = getRowValue(row, [String(mapping.scheduleTime ?? "schedule time"), "schedule time", "scheduledAt"]);
+        const shouldSchedule = scheduleMode !== "now";
+        const rowScheduleDate = parseDateInput(rowScheduledAt);
+        if (rowScheduledAt && !rowScheduleDate) throw new Error("Thời gian hẹn đăng không hợp lệ.");
+        const scheduledAt = rowScheduleDate ?? fixedScheduledAt;
+        if (shouldSchedule && !scheduledAt) throw new Error("Thiếu thời gian hẹn đăng.");
+        const mediaPaths = getRowValue(row, [String(mapping.mediaPaths ?? "media paths"), "media paths", "media", "mediaPaths"]).split(/[,\n;]/).map((item) => item.trim()).filter(Boolean);
+        const comment = getRowValue(row, [String(mapping.comments ?? "comments"), "comments", "comment"]);
+        const commentMedia = getRowValue(row, [String(mapping.commentMediaPaths ?? "comment media paths"), "comment media paths", "commentMedia"]).split(/[,\n;]/).map((item) => item.trim()).filter(Boolean);
+        const postType = getRowValue(row, [String(mapping.postType ?? "post type"), "post type", "type"]) || "feed";
+
+        const content = await prisma.content.create({
+          data: {
+            code: `IMP-${Date.now()}-${index}-${randomUUID().slice(0, 4)}`,
+            platform: String(payload.fields.platform ?? "manual"),
+            originalText: caption,
+            status: shouldSchedule ? "scheduled" : "ready_to_publish",
+            scheduledAt: shouldSchedule ? scheduledAt : undefined,
+            scheduledTargets: targetIds,
+            metadata: {
+              type: postType,
+              mediaPaths,
+              comment,
+              commentMedia,
+              bulkImport: true
+            },
+            ...(mediaPaths.length > 0 ? { media: { create: mediaAssetCreatesFromPaths(mediaPaths, "bulk_import", postType) } } : {})
+          }
+        });
+        if (shouldSchedule && scheduledAt) {
+          await scheduleContentForTargets(app, content.id, targetIds, scheduledAt);
+        }
+        created.push(content);
+      } catch (error) {
+        failed.push({ row: index + 1, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+
+    return ok({ created, failed, total: payload.rows.length });
   });
 
   app.get("/contents/:code", async (request, reply) => {
@@ -543,6 +1056,10 @@ function registerContentRoutes(app: FastifyInstance) {
         links: true,
         media: true,
         publishAttempts: { include: { target: { select: { id: true, name: true, platform: true } } } },
+        commentQueues: {
+          orderBy: { createdAt: "desc" },
+          include: { target: { select: { id: true, name: true, platform: true } } }
+        },
         source: true
       }
     });
@@ -561,7 +1078,7 @@ function registerContentRoutes(app: FastifyInstance) {
     const { code } = request.params as { code: string };
     const body = request.body as AnyBody;
     const current = await prisma.content.findUnique({ where: { code } });
-    if (!current) return reply.code(404).send(fail("NOT_FOUND", "Khong tim thay noi dung."));
+    if (!current) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy nội dung."));
 
     const baseMetadata = current.metadata && typeof current.metadata === "object" && !Array.isArray(current.metadata)
       ? (current.metadata as Record<string, unknown>)
@@ -570,9 +1087,11 @@ function registerContentRoutes(app: FastifyInstance) {
       ...baseMetadata,
       ...(body.type !== undefined ? { type: String(body.type) } : {}),
       ...(body.comment !== undefined ? { comment: String(body.comment) } : {}),
-      ...(Array.isArray(body.mediaPaths) ? { mediaPaths: body.mediaPaths.map(String) } : {})
+      ...(body.mediaPaths !== undefined ? { mediaPaths: normalizePathList(body.mediaPaths) } : {})
     };
     const nextTargetIds = Array.isArray(body.targetIds) ? body.targetIds.map(String) : current.scheduledTargets;
+    const nextPostType = String(nextMetadata.type ?? "feed");
+    const nextMediaPaths = normalizePathList((nextMetadata as AnyBody).mediaPaths);
 
     const content = await prisma.content.update({
       where: { code },
@@ -582,6 +1101,9 @@ function registerContentRoutes(app: FastifyInstance) {
         metadata: nextMetadata as Prisma.InputJsonValue
       }
     });
+    if (body.mediaPaths !== undefined) {
+      await syncContentMediaFromPaths(current.id, nextMediaPaths, "content_edit", nextPostType);
+    }
     return ok({ content });
   });
 
@@ -648,8 +1170,8 @@ function registerContentRoutes(app: FastifyInstance) {
     const { code } = request.params as { code: string };
     const content = await prisma.content.findUnique({ where: { code } });
     if (!content) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy nội dung."));
-    await app.workerCore.processContent(content.id);
-    return ok({ queued: true });
+    const queued = await enqueueContentContinuation(app, content, "retry");
+    return ok({ queued: true, ...queued });
   });
   app.post("/contents/:code/publish", async (request, reply) => {
     const { code } = request.params as { code: string };
@@ -680,7 +1202,7 @@ function registerContentRoutes(app: FastifyInstance) {
     }
 
     if (targetIds.length === 0) {
-      return reply.code(400).send(fail("TARGET_REQUIRED", `Không tìm được tài khoản đích để đăng (platform: ${content.platform}). Hãy chọn target hoặc tạo tài khoản phù hợp.`));
+      return reply.code(400).send(fail("TARGET_REQUIRED", `Không tìm được tài khoản đích để đăng (nền tảng: ${content.platform}). Hãy chọn tài khoản đích hoặc tạo tài khoản phù hợp.`));
     }
 
     await Promise.all(targetIds.map((targetId) => app.workerCore.publishNow(content.id, targetId, "admin")));
@@ -691,17 +1213,11 @@ function registerContentRoutes(app: FastifyInstance) {
     const body = request.body as AnyBody;
     const content = await prisma.content.findUnique({ where: { code } });
     if (!content) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy nội dung."));
-    const scheduledAt = new Date(String(body.scheduledAt));
-    const targetIds = Array.isArray(body.targetIds) ? body.targetIds.map(String) : [];
-    const schedules = await Promise.all(
-      targetIds.map((targetId) =>
-        prisma.schedule.create({
-          data: { contentId: content.id, targetId, scheduledAt }
-        })
-      )
-    );
-    await prisma.content.update({ where: { id: content.id }, data: { status: "scheduled", scheduledAt, scheduledTargets: targetIds } });
-    await Promise.all(schedules.map((schedule) => app.workerCore.scheduleRelease(schedule.id, scheduledAt)));
+    const scheduledAt = parseDateInput(body.scheduledAt);
+    if (!scheduledAt) return reply.code(400).send(fail("INVALID_SCHEDULE", "Thời gian hẹn đăng không hợp lệ."));
+    const targetIds = normalizePathList(body.targetIds);
+    if (targetIds.length === 0) return reply.code(400).send(fail("TARGET_REQUIRED", "Cần chọn ít nhất một tài khoản đăng."));
+    const schedules = await replaceContentSchedules(app, content.id, targetIds, scheduledAt);
     return ok({ schedules });
   });
   app.delete("/contents/:code", async (request) => {
@@ -756,6 +1272,517 @@ async function saveUploadedFile(part: Awaited<ReturnType<FastifyRequest["file"]>
     mimeType: part.mimetype,
     fileSize: part.file.bytesRead
   };
+}
+
+function getExportDir() {
+  const dir = path.resolve(config.MEDIA_UPLOAD_ROOT, "exports");
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function checksumText(value: string) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function parseJsonArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String).filter(Boolean);
+  if (typeof value !== "string") return [];
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
+  } catch {
+    // Plain comma-separated values are accepted for multipart forms.
+  }
+  return trimmed.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function parseJsonObject(value: unknown, fallback: Record<string, unknown> = {}) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value !== "string" || !value.trim()) return fallback;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function classifyLinkNetwork(url: string, detectedNetwork?: string) {
+  const normalized = url.toLowerCase();
+  if (normalized.includes("shopee.")) return "shopee";
+  if (normalized.includes("lazada.")) return "lazada";
+  if (normalized.includes("google.") || normalized.includes("forms.gle") || normalized.includes("drive.google.")) return "google";
+  return detectedNetwork && detectedNetwork !== "unknown" ? detectedNetwork : "unknown";
+}
+
+function collectLinks(text: string) {
+  const links = new Map<string, { originalUrl: string; network: string }>();
+  const detected = detectLinks(text) as Array<{ url?: string; originalUrl?: string; network?: string }>;
+  for (const item of detected) {
+    const originalUrl = String(item.url ?? item.originalUrl ?? "").trim();
+    if (!originalUrl) continue;
+    links.set(originalUrl, { originalUrl, network: classifyLinkNetwork(originalUrl, item.network) });
+  }
+
+  const genericMatches = text.match(/https?:\/\/[^\s"'<>]+/g) ?? [];
+  for (const rawUrl of genericMatches) {
+    const originalUrl = rawUrl.replace(/[),.;!?]+$/, "");
+    if (!links.has(originalUrl)) links.set(originalUrl, { originalUrl, network: classifyLinkNetwork(originalUrl) });
+  }
+
+  return Array.from(links.values()).map((link) => ({
+    ...link,
+    action: link.network === "shopee" || link.network === "lazada" ? "convert" as const : "saved_for_review" as const,
+    reason: link.network === "shopee" || link.network === "lazada" ? undefined : "Link chưa hỗ trợ convert tự động"
+  }));
+}
+
+function buildAutoRulePayload(body: AnyBody, partial = false): Prisma.AutoConversionRuleUncheckedCreateInput | Prisma.AutoConversionRuleUncheckedUpdateInput {
+  const data: AnyBody = {};
+  const assign = (key: string, value: unknown) => {
+    if (!partial || value !== undefined) data[key] = value;
+  };
+
+  assign("name", body.name !== undefined ? String(body.name) : undefined);
+  assign("description", body.description !== undefined ? String(body.description) : undefined);
+  assign("enabled", body.enabled !== undefined ? Boolean(body.enabled) : undefined);
+  assign("sourcePlatform", body.sourcePlatform !== undefined ? String(body.sourcePlatform) : undefined);
+  assign("sourceAccountId", body.sourceAccountId ? String(body.sourceAccountId) : null);
+  assign("sourceRef", body.sourceRef !== undefined ? String(body.sourceRef) : undefined);
+  assign("triggerMode", body.triggerMode !== undefined ? String(body.triggerMode) : undefined);
+  assign("pollingIntervalMinutes", body.pollingIntervalMinutes !== undefined ? Number(body.pollingIntervalMinutes) : undefined);
+  assign("targetAccountIds", parseJsonArray(body.targetAccountIds));
+  assign("postType", body.postType !== undefined ? String(body.postType) : undefined);
+  assign("includeFirstComment", body.includeFirstComment !== undefined ? Boolean(body.includeFirstComment) : undefined);
+  assign("commentMode", body.commentMode !== undefined ? String(body.commentMode) : undefined);
+  assign("customComment", body.customComment !== undefined ? String(body.customComment) : undefined);
+  assign("linkRules", parseJsonObject(body.linkRules));
+  assign("contentRules", parseJsonObject(body.contentRules));
+  assign("mediaRules", parseJsonObject(body.mediaRules));
+  assign("scheduleRules", parseJsonObject(body.scheduleRules));
+  assign("aiConfigId", body.aiConfigId ? String(body.aiConfigId) : null);
+  assign("cloudinaryKeyIds", parseJsonArray(body.cloudinaryKeyIds));
+
+  if (!partial) {
+    data.name = String(body.name ?? "").trim();
+    data.sourcePlatform = String(body.sourcePlatform ?? "facebook");
+    data.sourceRef = String(body.sourceRef ?? "").trim();
+    data.enabled = body.enabled === undefined ? true : Boolean(body.enabled);
+    data.triggerMode = String(body.triggerMode ?? "polling");
+    data.pollingIntervalMinutes = Number(body.pollingIntervalMinutes ?? 15);
+    data.postType = String(body.postType ?? "feed");
+    data.includeFirstComment = Boolean(body.includeFirstComment ?? false);
+    data.commentMode = String(body.commentMode ?? "none");
+  }
+
+  return data;
+}
+
+function registerAutoConversionRoutes(app: FastifyInstance) {
+  app.get("/auto-conversion/rules", async (request) => {
+    const query = request.query as AnyBody;
+    const page = Math.max(Number(query.page ?? 1), 1);
+    const limit = Math.min(Math.max(Number(query.limit ?? 20), 1), 100);
+    const where: Prisma.AutoConversionRuleWhereInput = {};
+
+    if (query.enabled !== undefined && String(query.enabled) !== "all") where.enabled = String(query.enabled) === "true";
+    if (query.sourcePlatform && String(query.sourcePlatform) !== "all") where.sourcePlatform = String(query.sourcePlatform);
+    const keyword = String(query.keyword ?? "").trim();
+    if (keyword) {
+      const contains = { contains: keyword, mode: "insensitive" as const };
+      where.OR = [{ name: contains }, { description: contains }, { sourceRef: contains }, { sourcePlatform: contains }];
+    }
+
+    const [total, rules] = await Promise.all([
+      prisma.autoConversionRule.count({ where }),
+      prisma.autoConversionRule.findMany({
+        where,
+        include: { runs: { orderBy: { createdAt: "desc" }, take: 1 } },
+        orderBy: { updatedAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit
+      })
+    ]);
+
+    return ok({ rules }, buildPagination(page, limit, total));
+  });
+
+  app.post("/auto-conversion/rules", async (request, reply) => {
+    const body = request.body as AnyBody;
+    const data = buildAutoRulePayload(body) as Prisma.AutoConversionRuleUncheckedCreateInput;
+    if (!data.name || !data.sourceRef) return reply.code(400).send(fail("BAD_REQUEST", "Cần nhập tên cấu hình và nguồn lấy bài."));
+    const rule = await prisma.autoConversionRule.create({ data });
+    return ok({ rule });
+  });
+
+  app.get("/auto-conversion/rules/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const rule = await prisma.autoConversionRule.findUnique({ where: { id }, include: { runs: { orderBy: { createdAt: "desc" }, take: 10 } } });
+    if (!rule) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy cấu hình chuyển đổi tự động."));
+    return ok({ rule });
+  });
+
+  app.put("/auto-conversion/rules/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const rule = await prisma.autoConversionRule.update({ where: { id }, data: buildAutoRulePayload(request.body as AnyBody, true) as Prisma.AutoConversionRuleUncheckedUpdateInput }).catch(() => null);
+    if (!rule) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy cấu hình chuyển đổi tự động."));
+    return ok({ rule });
+  });
+
+  app.delete("/auto-conversion/rules/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const deleted = await prisma.autoConversionRule.delete({ where: { id } }).catch(() => null);
+    if (!deleted) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy cấu hình chuyển đổi tự động."));
+    return ok({ success: true });
+  });
+
+  app.post("/auto-conversion/rules/:id/test", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as AnyBody;
+    const rule = await prisma.autoConversionRule.findUnique({ where: { id } });
+    if (!rule) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy cấu hình chuyển đổi tự động."));
+
+    const sampleText = String(body.text ?? body.sampleText ?? rule.sourceRef);
+    const links = collectLinks(sampleText);
+    const warnings = links.filter((link) => link.action === "saved_for_review").map((link) => `${link.originalUrl}: ${link.reason}`);
+    return ok({
+      detectedItems: [{ sourceRef: rule.sourceRef, text: sampleText, links }],
+      warnings,
+      preview: {
+        originalText: sampleText,
+        targetAccountIds: rule.targetAccountIds,
+        nextStatus: warnings.length > 0 ? "saved_for_review" : "ready_to_publish"
+      }
+    });
+  });
+
+  app.post("/auto-conversion/rules/:id/run-now", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as AnyBody;
+    const rule = await prisma.autoConversionRule.findUnique({ where: { id } });
+    if (!rule) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy cấu hình chuyển đổi tự động."));
+
+    const sourceExternalId = `manual-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    const originalText = String(body.text ?? `Kiểm tra nguồn ${rule.sourceRef}`);
+    const links = collectLinks(originalText);
+    const hasUnsupportedLink = links.some((link) => link.action === "saved_for_review");
+    const targetAccountIds = Array.isArray(rule.targetAccountIds) ? rule.targetAccountIds.map(String) : [];
+    const run = await prisma.autoConversionRun.create({
+      data: {
+        ruleId: rule.id,
+        sourcePlatform: rule.sourcePlatform,
+        sourceRef: rule.sourceRef,
+        sourceExternalId,
+        originalText,
+        status: hasUnsupportedLink ? "saved_for_review" : "new_detected",
+        targetAccountIds,
+        metadata: { trigger: "manual_run_now", queuedAt: new Date().toISOString() },
+        links: {
+          create: links.map((link) => ({
+            originalUrl: link.originalUrl,
+            network: link.network,
+            action: link.action === "convert" ? "converted" : "saved_for_review",
+            error: link.reason
+          }))
+        }
+      }
+    });
+
+    if (hasUnsupportedLink) {
+      const content = await prisma.content.create({
+        data: {
+          code: `AUTO-SAVED-${Date.now()}-${randomUUID().slice(0, 4)}`,
+          platform: rule.sourcePlatform,
+          sourceUrl: rule.sourceRef,
+          originalText,
+          status: "saved",
+          savedReason: "Có link chưa hỗ trợ convert tự động",
+          savedSource: "auto_conversion",
+          scheduledTargets: targetAccountIds,
+          metadata: { autoConversionRunId: run.id }
+        }
+      });
+      await prisma.autoConversionRun.update({ where: { id: run.id }, data: { contentId: content.id } });
+    }
+
+    const job = await prisma.workerJobLog.create({
+      data: {
+        queueName: "auto-conversion",
+        jobName: "auto-source-check",
+        jobId: run.id,
+        status: "queued",
+        payload: { ruleId: rule.id, runId: run.id }
+      }
+    });
+    return ok({ queued: true, jobId: job.id, runId: run.id });
+  });
+
+  app.post("/auto-conversion/rules/:id/pause", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const rule = await prisma.autoConversionRule.update({ where: { id }, data: { enabled: false } }).catch(() => null);
+    if (!rule) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy cấu hình chuyển đổi tự động."));
+    return ok({ rule });
+  });
+
+  app.post("/auto-conversion/rules/:id/resume", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const rule = await prisma.autoConversionRule.update({ where: { id }, data: { enabled: true } }).catch(() => null);
+    if (!rule) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy cấu hình chuyển đổi tự động."));
+    return ok({ rule });
+  });
+
+  app.get("/auto-conversion/runs", async (request) => {
+    const query = request.query as AnyBody;
+    const page = Math.max(Number(query.page ?? 1), 1);
+    const limit = Math.min(Math.max(Number(query.limit ?? 20), 1), 100);
+    const where: Prisma.AutoConversionRunWhereInput = {};
+
+    if (query.ruleId && String(query.ruleId) !== "all") where.ruleId = String(query.ruleId);
+    if (query.status && String(query.status) !== "all") where.status = String(query.status);
+    if (query.sourcePlatform && String(query.sourcePlatform) !== "all") where.sourcePlatform = String(query.sourcePlatform);
+    if (query.dateFrom || query.dateTo) {
+      where.createdAt = {
+        ...(query.dateFrom ? { gte: new Date(String(query.dateFrom)) } : {}),
+        ...(query.dateTo ? { lte: new Date(String(query.dateTo)) } : {})
+      };
+    }
+    const keyword = String(query.keyword ?? "").trim();
+    if (keyword) {
+      const contains = { contains: keyword, mode: "insensitive" as const };
+      where.OR = [{ sourceRef: contains }, { sourceExternalId: contains }, { originalText: contains }, { processedText: contains }, { errorMessage: contains }];
+    }
+
+    const [total, runs] = await Promise.all([
+      prisma.autoConversionRun.count({ where }),
+      prisma.autoConversionRun.findMany({
+        where,
+        include: { rule: true, links: true, media: true },
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit
+      })
+    ]);
+
+    return ok({ runs }, buildPagination(page, limit, total));
+  });
+
+  app.get("/auto-conversion/runs/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const run = await prisma.autoConversionRun.findUnique({ where: { id }, include: { rule: true, links: true, media: true } });
+    if (!run) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy lần chuyển đổi tự động."));
+    const [content, logs] = await Promise.all([
+      run.contentId ? prisma.content.findUnique({ where: { id: run.contentId } }) : null,
+      prisma.workerJobLog.findMany({ where: { jobId: id }, orderBy: { createdAt: "desc" }, take: 100 })
+    ]);
+    return ok({ run, links: run.links, media: run.media, content, logs });
+  });
+
+  app.post("/auto-conversion/runs/:id/retry", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as AnyBody;
+    const run = await prisma.autoConversionRun.update({
+      where: { id },
+      data: {
+        status: body.fromStep ? String(body.fromStep) : "new_detected",
+        errorCode: null,
+        errorMessage: null,
+        startedAt: new Date(),
+        completedAt: null
+      }
+    }).catch(() => null);
+    if (!run) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy lần chuyển đổi tự động."));
+    await prisma.workerJobLog.create({ data: { queueName: "auto-conversion", jobName: "auto-retry", jobId: id, status: "queued", payload: { fromStep: body.fromStep ?? null } } });
+    return ok({ queued: true });
+  });
+
+  app.post("/auto-conversion/runs/:id/skip", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as AnyBody;
+    const run = await prisma.autoConversionRun.update({
+      where: { id },
+      data: { status: "skipped", errorMessage: body.reason ? String(body.reason) : undefined, completedAt: new Date() }
+    }).catch(() => null);
+    if (!run) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy lần chuyển đổi tự động."));
+    return ok({ run });
+  });
+}
+
+function registerCrawlRoutes(app: FastifyInstance) {
+  app.post("/crawl-jobs", async (request, reply) => {
+    const body = request.body as AnyBody;
+    const sourcePlatform = String(body.sourcePlatform ?? body.platform ?? "").trim();
+    const sourceRef = String(body.sourceRef ?? "").trim();
+    if (!sourcePlatform || !sourceRef) return reply.code(400).send(fail("BAD_REQUEST", "Cần nhập nền tảng và nguồn crawl."));
+
+    const job = await prisma.crawlJob.create({
+      data: {
+        sourcePlatform,
+        sourceRef,
+        accountId: body.accountId ? String(body.accountId) : undefined,
+        status: "pending",
+        options: parseJsonObject(body.options) as Prisma.InputJsonValue,
+        storageConfig: parseJsonObject(body.storageConfig) as Prisma.InputJsonValue,
+        commentOptions: parseJsonObject(body.commentOptions) as Prisma.InputJsonValue,
+        createdBy: "admin"
+      }
+    });
+    await prisma.workerJobLog.create({ data: { queueName: "crawl", jobName: "crawl-job-run", jobId: job.id, status: "queued", payload: { crawlJobId: job.id } } });
+    return ok({ crawlJob: job });
+  });
+
+  app.get("/crawl-jobs", async (request) => {
+    const query = request.query as AnyBody;
+    const page = Math.max(Number(query.page ?? 1), 1);
+    const limit = Math.min(Math.max(Number(query.limit ?? 20), 1), 100);
+    const where: Prisma.CrawlJobWhereInput = {};
+    if (query.platform && String(query.platform) !== "all") where.sourcePlatform = String(query.platform);
+    if (query.status && String(query.status) !== "all") where.status = String(query.status);
+    const keyword = String(query.keyword ?? "").trim();
+    if (keyword) {
+      const contains = { contains: keyword, mode: "insensitive" as const };
+      where.OR = [{ sourceRef: contains }, { sourcePlatform: contains }, { error: contains }];
+    }
+
+    const [total, crawlJobs] = await Promise.all([
+      prisma.crawlJob.count({ where }),
+      prisma.crawlJob.findMany({ where, orderBy: { createdAt: "desc" }, skip: (page - 1) * limit, take: limit })
+    ]);
+    return ok({ crawlJobs }, buildPagination(page, limit, total));
+  });
+
+  app.get("/crawl-jobs/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const crawlJob = await prisma.crawlJob.findUnique({ where: { id }, include: { results: { take: 20, orderBy: { createdAt: "desc" } } } });
+    if (!crawlJob) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy lịch sử crawl."));
+    return ok({
+      crawlJob,
+      summary: {
+        totalFound: crawlJob.totalFound,
+        totalSaved: crawlJob.totalSaved,
+        totalDuplicate: crawlJob.totalDuplicate,
+        totalFailed: crawlJob.totalFailed
+      }
+    });
+  });
+
+  app.post("/crawl-jobs/:id/retry", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const crawlJob = await prisma.crawlJob.update({ where: { id }, data: { status: "pending", error: null } }).catch(() => null);
+    if (!crawlJob) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy lịch sử crawl."));
+    await prisma.workerJobLog.create({ data: { queueName: "crawl", jobName: "crawl-job-run", jobId: id, status: "queued", payload: { retry: true } } });
+    return ok({ queued: true });
+  });
+
+  app.post("/crawl-jobs/:id/cancel", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const crawlJob = await prisma.crawlJob.update({ where: { id }, data: { status: "cancelled", completedAt: new Date() } }).catch(() => null);
+    if (!crawlJob) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy lịch sử crawl."));
+    return ok({ crawlJob });
+  });
+
+  app.get("/crawl-results", async (request) => {
+    const query = request.query as AnyBody;
+    const page = Math.max(Number(query.page ?? 1), 1);
+    const limit = Math.min(Math.max(Number(query.limit ?? 20), 1), 100);
+    const where: Prisma.CrawlResultWhereInput = {};
+    if (query.crawlJobId) where.crawlJobId = String(query.crawlJobId);
+    if (query.platform && String(query.platform) !== "all") where.platform = String(query.platform);
+    if (query.status && String(query.status) !== "all") where.status = String(query.status);
+    const keyword = String(query.keyword ?? "").trim();
+    if (keyword) {
+      const contains = { contains: keyword, mode: "insensitive" as const };
+      where.OR = [{ originalText: contains }, { sourceRef: contains }, { externalId: contains }, { author: contains }, { sourceUrl: contains }];
+    }
+
+    const [total, results] = await Promise.all([
+      prisma.crawlResult.count({ where }),
+      prisma.crawlResult.findMany({ where, include: { crawlJob: true }, orderBy: { createdAt: "desc" }, skip: (page - 1) * limit, take: limit })
+    ]);
+    return ok({ results }, buildPagination(page, limit, total));
+  });
+
+  app.get("/crawl-results/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const result = await prisma.crawlResult.findUnique({ where: { id }, include: { crawlJob: true } });
+    if (!result) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy kết quả crawl."));
+    return ok({ result });
+  });
+
+  app.post("/crawl-results/:id/create-content", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const result = await prisma.crawlResult.findUnique({ where: { id } });
+    if (!result) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy kết quả crawl."));
+    const content = await createContentFromCrawlResult(result);
+    return ok({ content });
+  });
+
+  app.post("/crawl-results/bulk-create-content", async (request) => {
+    const body = request.body as AnyBody;
+    const ids = Array.isArray(body.ids) ? body.ids.map(String).filter(Boolean) : [];
+    const results = await prisma.crawlResult.findMany({ where: { id: { in: ids } } });
+    const created: unknown[] = [];
+    const failed: Array<{ id: string; error: string }> = [];
+
+    for (const result of results) {
+      try {
+        created.push(await createContentFromCrawlResult(result));
+      } catch (error) {
+        failed.push({ id: result.id, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+
+    return ok({ created, failed });
+  });
+
+  app.delete("/crawl-results/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const result = await prisma.crawlResult.update({ where: { id }, data: { status: "deleted" } }).catch(() => null);
+    if (!result) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy kết quả crawl."));
+    return ok({ success: true });
+  });
+}
+
+async function createContentFromCrawlResult(result: CrawlResult) {
+  const media = Array.isArray(result.media) ? result.media as AnyBody[] : [];
+  const links = Array.isArray(result.links) ? result.links as AnyBody[] : collectLinks(result.originalText);
+  const content = await prisma.content.create({
+    data: {
+      code: `CRL-${Date.now()}-${randomUUID().slice(0, 6)}`,
+      platform: result.platform,
+      externalId: result.externalId,
+      sourceUrl: result.sourceUrl,
+      author: result.author,
+      originalText: result.originalText,
+      status: "draft",
+      metadata: {
+        crawlResultId: result.id,
+        crawlJobId: result.crawlJobId,
+        comments: result.comments
+      },
+      media: {
+        create: media.map((item, index) => ({
+          type: String(item.type ?? (String(item.mimeType ?? "").startsWith("video/") ? "video" : "image")),
+          mimeType: item.mimeType ? String(item.mimeType) : undefined,
+          sourceUrl: item.sourceUrl ? String(item.sourceUrl) : undefined,
+          localPath: item.localPath ? String(item.localPath) : undefined,
+          cdnUrl: item.cloudinaryUrl ? String(item.cloudinaryUrl) : item.cdnUrl ? String(item.cdnUrl) : undefined,
+          metadata: { ...item, sortOrder: index }
+        }))
+      },
+      links: {
+        create: links.map((link: AnyBody) => ({
+          originalUrl: String(link.originalUrl ?? link.url),
+          convertedUrl: link.convertedUrl ? String(link.convertedUrl) : undefined,
+          network: String(link.network ?? "unknown"),
+          status: link.convertedUrl ? "converted" : "detected"
+        })).filter((link) => link.originalUrl)
+      }
+    }
+  });
+  await prisma.crawlResult.update({ where: { id: result.id }, data: { status: "converted_to_content", contentId: content.id } });
+  return content;
 }
 
 function registerSourceRoutes(app: FastifyInstance) {
@@ -824,23 +1851,214 @@ function registerLinkRoutes(app: FastifyInstance) {
   });
 }
 
+async function readConvertToolPayload(request: FastifyRequest) {
+  const isMultipart = typeof (request as AnyBody).isMultipart === "function" && (request as AnyBody).isMultipart();
+  if (!isMultipart) {
+    const body = (request.body ?? {}) as AnyBody;
+    return {
+      fields: body,
+      rows: Array.isArray(body.rows) ? body.rows as Record<string, unknown>[] : [],
+      text: String(body.text ?? "")
+    };
+  }
+
+  const fields: AnyBody = {};
+  let rows: Record<string, unknown>[] = [];
+  let text = "";
+  const parts = request.parts();
+
+  for await (const part of parts) {
+    if (part.type === "field") {
+      fields[part.fieldname] = part.value;
+      continue;
+    }
+
+    const buffer = await part.toBuffer();
+    const filename = part.filename.toLowerCase();
+    if (filename.endsWith(".xlsx") || filename.endsWith(".xls") || filename.endsWith(".csv")) {
+      rows = parseWorkbookRows(buffer);
+      text += `\n${rows.map((row) => Object.values(row).join(" ")).join("\n")}`;
+    } else {
+      text += `\n${buffer.toString("utf8")}`;
+    }
+  }
+
+  return {
+    fields,
+    rows,
+    text: `${fields.text ?? ""}\n${text}`.trim()
+  };
+}
+
+function parseWorkbookRows(buffer: Buffer) {
+  const workbook = XLSX.read(buffer, { type: "buffer", raw: false });
+  const firstSheet = workbook.SheetNames[0];
+  if (!firstSheet) return [];
+  return XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[firstSheet], { defval: "" });
+}
+
+function getRowValue(row: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = row[key];
+    if (value !== undefined && String(value).trim()) return String(value).trim();
+  }
+  return "";
+}
+
+function replaceAllUrls(text: string, results: ConvertLinkBatch["results"]) {
+  return results.reduce((current, result) => {
+    if (!result.convertedUrl) return current;
+    return current.split(result.originalUrl).join(result.convertedUrl);
+  }, text);
+}
+
+function registerConvertLinkToolRoutes(app: FastifyInstance) {
+  app.post("/tools/convert-link/detect", async (request) => {
+    const payload = await readConvertToolPayload(request);
+    const subIds = parseJsonArray(payload.fields.subIds);
+    const text = payload.text || payload.rows.map((row) => Object.values(row).join(" ")).join("\n");
+    const links = collectLinks(text);
+    const batchId = randomUUID();
+    const batch: ConvertLinkBatch = {
+      id: batchId,
+      text,
+      rows: payload.rows,
+      links,
+      subIds,
+      results: [],
+      createdAt: new Date().toISOString()
+    };
+    convertLinkBatches.set(batchId, batch);
+    return ok({ links, batchId });
+  });
+
+  app.post("/tools/convert-link/export-batch", async (request, reply) => {
+    const body = request.body as AnyBody;
+    const batchId = String(body.batchId ?? "");
+    const batch = convertLinkBatches.get(batchId);
+    if (!batch) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy batch convert link."));
+
+    const rows = batch.links.map((link) => ({
+      "Liên kết gốc": link.originalUrl,
+      "Sub_id1": batch.subIds[0] ?? "",
+      "Sub_id2": batch.subIds[1] ?? "",
+      "Sub_id3": batch.subIds[2] ?? "",
+      "Sub_id4": batch.subIds[3] ?? "",
+      "Sub_id5": batch.subIds[4] ?? ""
+    }));
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows, { header: ["Liên kết gốc", "Sub_id1", "Sub_id2", "Sub_id3", "Sub_id4", "Sub_id5"] }), "Batch Custom Links");
+    const filename = `${batchId}-Batch-Custom-Links.xlsx`;
+    const fullPath = path.join(getExportDir(), filename);
+    writeFileSync(fullPath, XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }));
+
+    return ok({ fileUrl: `/api/v1/tools/convert-link/download/${filename}`, filename });
+  });
+
+  app.get("/tools/convert-link/download/:filename", async (request, reply) => {
+    const { filename } = request.params as { filename: string };
+    const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, "");
+    const fullPath = path.join(getExportDir(), safeName);
+    if (!existsSync(fullPath)) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy file xuất."));
+    reply.header("Content-Disposition", `attachment; filename="${safeName}"`);
+    reply.header("Content-Type", safeName.endsWith(".csv") ? "text/csv; charset=utf-8" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    return reply.send(createReadStream(fullPath));
+  });
+
+  app.post("/tools/convert-link/import-result", async (request, reply) => {
+    const payload = await readConvertToolPayload(request);
+    const batchId = String(payload.fields.batchId ?? "");
+    const batch = convertLinkBatches.get(batchId);
+    if (!batch) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy batch convert link."));
+
+    const csvText = String(payload.fields.csvText ?? "").trim();
+    const rows = payload.rows.length > 0 ? payload.rows : csvText ? parseWorkbookRows(Buffer.from(csvText, "utf8")) : [];
+    const results = rows.map((row) => ({
+      originalUrl: getRowValue(row, ["Liên kết gốc", "Lien ket goc", "Original URL", "originalUrl"]),
+      convertedUrl: getRowValue(row, ["Liên kết chuyển đổi", "Lien ket chuyen doi", "Converted URL", "convertedUrl"]),
+      failureReason: getRowValue(row, ["Lí do thất bại", "Lý do thất bại", "Li do that bai", "Ly do that bai", "failureReason"])
+    })).filter((row) => row.originalUrl);
+
+    batch.results = results;
+    convertLinkBatches.set(batch.id, batch);
+    return ok({
+      total: results.length,
+      converted: results.filter((result) => result.convertedUrl).length,
+      failed: results.filter((result) => !result.convertedUrl).length,
+      results
+    });
+  });
+
+  app.post("/tools/convert-link/apply-result", async (request, reply) => {
+    const body = request.body as AnyBody;
+    const batchId = String(body.batchId ?? "");
+    const output = String(body.output ?? "text");
+    const batch = convertLinkBatches.get(batchId);
+    if (!batch) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy batch convert link."));
+
+    if (output === "xlsx") {
+      const replacedRows = batch.rows.length > 0
+        ? batch.rows.map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, typeof value === "string" ? replaceAllUrls(value, batch.results) : value])))
+        : [{ "Nội dung": replaceAllUrls(batch.text, batch.results) }];
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(replacedRows), "Kết quả");
+      const filename = `${batchId}-converted-result.xlsx`;
+      writeFileSync(path.join(getExportDir(), filename), XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }));
+      return ok({ fileUrl: `/api/v1/tools/convert-link/download/${filename}`, filename });
+    }
+
+    return ok({ text: replaceAllUrls(batch.text, batch.results) });
+  });
+}
+
 function registerScheduleRoutes(app: FastifyInstance) {
   app.get("/schedules", async () => ok({ schedules: await prisma.schedule.findMany({ include: { content: true, target: true }, orderBy: { scheduledAt: "asc" } }) }));
-  app.post("/schedules", async (request) => createSchedule(request, app));
-  app.put("/schedules/:id", async (request) => ok({ schedule: await prisma.schedule.update({ where: request.params as { id: string }, data: request.body as AnyBody }) }));
-  app.delete("/schedules/:id", async (request) => {
-    await prisma.schedule.delete({ where: request.params as { id: string } });
+  app.post("/schedules", async (request, reply) => createSchedule(request, reply, app));
+  app.put("/schedules/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as AnyBody;
+    const current = await prisma.schedule.findUnique({ where: { id } });
+    if (!current) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy lịch đăng."));
+
+    const scheduledAt = body.scheduledAt !== undefined ? parseDateInput(body.scheduledAt) : current.scheduledAt;
+    if (!scheduledAt) return reply.code(400).send(fail("INVALID_SCHEDULE", "Thời gian hẹn đăng không hợp lệ."));
+
+    await removeScheduleQueueJobs(app, id);
+    const schedule = await prisma.schedule.update({
+      where: { id },
+      data: {
+        ...(body.contentId !== undefined ? { contentId: String(body.contentId) } : {}),
+        ...(body.targetId !== undefined ? { targetId: String(body.targetId) } : {}),
+        scheduledAt,
+        ...(body.status !== undefined ? { status: String(body.status) } : {})
+      }
+    });
+
+    if (schedule.status === "scheduled") {
+      await app.workerCore.scheduleRelease(schedule.id, schedule.scheduledAt);
+    }
+    await Promise.all(uniqueStrings([current.contentId, schedule.contentId]).map((contentId) => syncContentScheduleSummary(contentId)));
+    return ok({ schedule });
+  });
+  app.delete("/schedules/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const schedule = await prisma.schedule.findUnique({ where: { id } });
+    if (!schedule) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy lịch đăng."));
+    await removeScheduleQueueJobs(app, id);
+    await prisma.schedule.delete({ where: { id } });
+    await syncContentScheduleSummary(schedule.contentId);
     return ok({ success: true });
   });
 }
 
-async function createSchedule(request: FastifyRequest, app: FastifyInstance) {
+async function createSchedule(request: FastifyRequest, reply: FastifyReply, app: FastifyInstance) {
   const body = request.body as AnyBody;
   const contentId = String(body.contentId);
-  const scheduledAt = new Date(String(body.scheduledAt));
-  const targetIds = Array.isArray(body.targetIds) ? body.targetIds.map(String) : [];
-  const schedules = await Promise.all(targetIds.map((targetId) => prisma.schedule.create({ data: { contentId, targetId, scheduledAt } })));
-  await Promise.all(schedules.map((schedule) => app.workerCore.scheduleRelease(schedule.id, scheduledAt)));
+  const scheduledAt = parseDateInput(body.scheduledAt);
+  if (!scheduledAt) return reply.code(400).send(fail("INVALID_SCHEDULE", "Thời gian hẹn đăng không hợp lệ."));
+  const targetIds = normalizePathList(body.targetIds);
+  if (targetIds.length === 0) return reply.code(400).send(fail("TARGET_REQUIRED", "Cần chọn ít nhất một tài khoản đăng."));
+  const schedules = await scheduleContentForTargets(app, contentId, targetIds, scheduledAt);
   return ok({ schedules });
 }
 

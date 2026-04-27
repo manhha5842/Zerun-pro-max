@@ -1,232 +1,273 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  AlertTriangle,
-  CheckCircle2,
-  Clock3,
-  ExternalLink,
-  FolderLock,
-  Plus,
-  RefreshCw,
-  RotateCcw,
-  Search,
-  ShieldCheck,
-  Trash2
-} from "lucide-react";
-import { apiDelete, apiGet, apiPost } from "../api/client";
+import { CheckCircle2, LogIn, PlayCircle, Plus, RefreshCw, ShieldCheck, Square, Trash2 } from "lucide-react";
+import { apiDelete, apiGet, apiPost, apiPut } from "../api/client";
 import { AddAccountDialog } from "../components/accounts/AddAccountDialog";
+import { AdminDataTable } from "../components/common/AdminDataTable";
 import { EmptyState } from "../components/common/EmptyState";
+import { FilterToolbar } from "../components/common/FilterToolbar";
 import { PageHeader } from "../components/common/PageHeader";
 import { SectionCard } from "../components/common/SectionCard";
 import { StatusBadge } from "../components/common/StatusBadge";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
+import { Input } from "../components/ui/Input";
+import { Select } from "../components/ui/Select";
 
+type AccountKind = "source" | "target";
 type BrowserLoginPlatform = "facebook" | "instagram" | "threads";
 
 type BrowserLoginSession = {
   sessionId?: string;
   platform?: BrowserLoginPlatform;
-  accountId: string;
-  status: "pending" | "completed" | "cancelled" | "failed" | "healthy" | "degraded" | "checkpoint" | "missing" | "unknown";
-  sessionDir?: string;
-  authPath?: string;
-  browserPid?: number;
-  message?: string;
-  authDetected?: boolean;
+  accountId?: string;
+  status?: "pending" | "completed" | "cancelled" | "failed" | string;
   authState?: "unknown" | "authenticated" | "login_required" | "checkpoint";
-  currentUrl?: string;
-  cookieNames?: string[];
+  authDetected?: boolean;
   browserOpen?: boolean;
+  currentUrl?: string;
   lastCheckedAt?: string;
   createdAt?: string;
+  authPath?: string;
+  sessionDir?: string;
   lastError?: string;
+  message?: string;
   health?: {
     status: string;
-    authState: "unknown" | "authenticated" | "login_required" | "checkpoint";
-    authPath?: string;
-    sessionDir?: string;
-    hasSessionFile: boolean;
-    checkedAt: string;
+    authState?: "unknown" | "authenticated" | "login_required" | "checkpoint";
+    checkedAt?: string;
     message?: string;
   };
 };
 
 type Account = {
   id: string;
-  kind: "source" | "target";
+  kind: AccountKind;
   name: string;
   platform: string;
-  handle?: string;
+  handle?: string | null;
   health: string;
   isActive: boolean;
-  credentials?: Record<string, unknown>;
-  config?: Record<string, unknown>;
   sessionState?: BrowserLoginSession | null;
 };
 
-function getAuthTone(state?: BrowserLoginSession["authState"]) {
-  switch (state) {
-    case "authenticated":
-      return "good" as const;
-    case "checkpoint":
-      return "danger" as const;
-    case "login_required":
-      return "warn" as const;
-    default:
-      return "neutral" as const;
-  }
+type AccountAction = {
+  account: Account;
+  value?: boolean;
+};
+
+const platformLabels: Record<string, string> = {
+  facebook: "Facebook",
+  instagram: "Instagram",
+  threads: "Threads",
+  telegram: "Telegram",
+  x: "X / Twitter",
+  "zalo-bot": "Zalo OA",
+  "zalo-web": "Zalo Web"
+};
+
+function isBrowserLoginPlatform(platform: string): platform is BrowserLoginPlatform {
+  return platform === "facebook" || platform === "instagram" || platform === "threads";
 }
 
-function getAuthLabel(state?: BrowserLoginSession["authState"]) {
-  switch (state) {
-    case "authenticated":
-      return "Đã đăng nhập";
-    case "checkpoint":
-      return "Cần xác minh";
-    case "login_required":
-      return "Chưa đăng nhập";
-    default:
-      return "Chưa rõ";
-  }
+function authStateOf(account: Account) {
+  return account.sessionState?.authState ?? account.sessionState?.health?.authState ?? "unknown";
 }
 
-function getSessionStatusTone(status?: BrowserLoginSession["status"]) {
-  switch (status) {
-    case "completed":
-    case "healthy":
-      return "good" as const;
-    case "checkpoint":
-    case "failed":
-      return "danger" as const;
-    case "cancelled":
-    case "missing":
-    case "degraded":
-      return "warn" as const;
-    default:
-      return "neutral" as const;
+function authLabel(state: string) {
+  const labels: Record<string, string> = {
+    authenticated: "Đã đăng nhập",
+    login_required: "Cần đăng nhập",
+    checkpoint: "Checkpoint",
+    unknown: "Chưa kiểm tra"
+  };
+  return labels[state] ?? state;
+}
+
+function authTone(state: string) {
+  if (state === "authenticated") return "good" as const;
+  if (state === "checkpoint") return "danger" as const;
+  if (state === "login_required") return "warn" as const;
+  return "neutral" as const;
+}
+
+function formatDate(value?: string) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleString("vi-VN");
+}
+
+function sessionCheckedAt(account: Account) {
+  return account.sessionState?.lastCheckedAt ?? account.sessionState?.health?.checkedAt;
+}
+
+function sessionPath(account: Account) {
+  return account.sessionState?.authPath ?? account.sessionState?.sessionDir ?? "-";
+}
+
+function platformLabel(platform: string) {
+  return platformLabels[platform] ?? platform;
+}
+
+function connectionSummary(account: Account) {
+  if (!isBrowserLoginPlatform(account.platform)) {
+    return account.kind === "target" ? "Kết nối bằng credentials/config." : "Dùng để crawl hoặc lấy dữ liệu nguồn.";
   }
+  const state = authStateOf(account);
+  if (state === "authenticated") return "Session đã sẵn sàng để worker dùng khi đăng bài.";
+  if (state === "checkpoint") return "Tài khoản đang cần xác minh checkpoint.";
+  if (state === "login_required") return "Cần mở trình duyệt và đăng nhập lại.";
+  return "Chưa có trạng thái session, hãy kiểm tra hoặc đăng nhập.";
 }
 
 export function AccountsPage() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [kind, setKind] = useState<"all" | AccountKind>("target");
+  const [keyword, setKeyword] = useState("");
+  const [platform, setPlatform] = useState("all");
+  const [health, setHealth] = useState("all");
+  const [authState, setAuthState] = useState("all");
+  const [active, setActive] = useState("all");
+  const [feedback, setFeedback] = useState<string | null>(null);
   const [browserLogin, setBrowserLogin] = useState<BrowserLoginSession | null>(null);
-  const activePlatform = browserLogin?.platform ?? "facebook";
 
-  const query = useQuery({ queryKey: ["accounts"], queryFn: () => apiGet<{ accounts: Account[] }>("/accounts") });
+  const query = useQuery({
+    queryKey: ["accounts"],
+    queryFn: () => apiGet<{ accounts: Account[] }>("/accounts")
+  });
 
-  const browserLoginQuery = useQuery({
-    queryKey: ["browser-login", activePlatform, browserLogin?.sessionId],
-    queryFn: () => apiGet<BrowserLoginSession>(`/${activePlatform}/browser-login/${browserLogin?.sessionId}`),
-    enabled: Boolean(browserLogin?.sessionId),
-    refetchInterval: (state) => {
-      const data = state.state.data;
-      if (!data) return 3000;
-      return data.status === "pending" ? 3000 : false;
+  const invalidateAccounts = async () => {
+    await queryClient.invalidateQueries({ queryKey: ["accounts"] });
+  };
+
+  const createSource = useMutation({
+    mutationFn: (values: unknown) => apiPost("/sources", values),
+    onSuccess: async () => {
+      setFeedback("Đã thêm tài khoản nguồn.");
+      await invalidateAccounts();
     }
   });
 
-  const activeBrowserLogin = browserLoginQuery.data ?? browserLogin;
-
   const createTarget = useMutation({
     mutationFn: (values: unknown) => apiPost("/targets", values),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["accounts"] });
-      void queryClient.invalidateQueries({ queryKey: ["targets"] });
-      setFeedback({ type: "success", message: "Đã thêm tài khoản đăng." });
-    },
-    onError: (error: Error) => setFeedback({ type: "error", message: error.message })
+    onSuccess: async () => {
+      setFeedback("Đã thêm tài khoản đăng. Nếu là Facebook, Instagram hoặc Threads, hãy bấm Login để lưu session trình duyệt.");
+      await invalidateAccounts();
+    }
+  });
+
+  const remove = useMutation({
+    mutationFn: (account: Account) => apiDelete(`/${account.kind === "source" ? "sources" : "targets"}/${account.id}`),
+    onSuccess: async (_, account) => {
+      setFeedback(`Đã xóa ${account.kind === "source" ? "tài khoản nguồn" : "tài khoản đăng"}.`);
+      await invalidateAccounts();
+    }
+  });
+
+  const toggleActive = useMutation({
+    mutationFn: ({ account, value }: AccountAction) => apiPut(`/${account.kind === "source" ? "sources" : "targets"}/${account.id}`, { isActive: value }),
+    onSuccess: async (_, action) => {
+      setFeedback(action.value ? "Đã bật tài khoản." : "Đã tắt tài khoản.");
+      await invalidateAccounts();
+    }
   });
 
   const test = useMutation({
     mutationFn: (account: Account) => apiPost(`/accounts/${account.id}/test`, { kind: account.kind }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["accounts"] });
-      setFeedback({ type: "success", message: "Đã gửi yêu cầu kiểm tra tài khoản." });
-    },
-    onError: (error: Error) => setFeedback({ type: "error", message: error.message })
+    onSuccess: async () => {
+      setFeedback("Đã gửi yêu cầu kiểm tra tài khoản vào worker.");
+      await invalidateAccounts();
+    }
   });
 
-  const remove = useMutation({
-    mutationFn: (account: Account) => apiDelete(`/targets/${account.id}`),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["accounts"] });
-      void queryClient.invalidateQueries({ queryKey: ["targets"] });
-      setFeedback({ type: "success", message: "Đã xoá tài khoản đăng." });
-    },
-    onError: (error: Error) => setFeedback({ type: "error", message: error.message })
+  const checkSession = useMutation({
+    mutationFn: (account: Account) => apiPost<{ health?: BrowserLoginSession["health"] }>(`/accounts/${account.id}/${account.platform}-session/check`, {}),
+    onSuccess: async (data) => {
+      setFeedback(data.health?.message ?? "Đã kiểm tra session.");
+      await invalidateAccounts();
+    }
   });
 
   const startBrowserLogin = useMutation({
-    mutationFn: (account: Account) => apiPost<BrowserLoginSession>(`/${account.platform}/accounts/${account.id}/browser-login/start`),
-    onSuccess: (data) => {
-      setBrowserLogin(data);
-      setFeedback({ type: "success", message: data.message ?? "Đã mở trình duyệt để đăng nhập." });
-      void queryClient.invalidateQueries({ queryKey: ["accounts"] });
-    },
-    onError: (error: Error) => setFeedback({ type: "error", message: error.message })
+    mutationFn: (account: Account) => apiPost<BrowserLoginSession>(`/${account.platform}/accounts/${account.id}/browser-login/start`, {}),
+    onSuccess: async (data, account) => {
+      setBrowserLogin({ ...data, platform: account.platform as BrowserLoginPlatform, accountId: account.id });
+      setFeedback(data.message ?? "Đã mở phiên đăng nhập trình duyệt.");
+      await invalidateAccounts();
+    }
+  });
+
+  const refreshBrowserLogin = useMutation({
+    mutationFn: (session: BrowserLoginSession) => apiGet<BrowserLoginSession>(`/${session.platform ?? "facebook"}/browser-login/${session.sessionId}`),
+    onSuccess: (data, session) => {
+      setBrowserLogin({ ...session, ...data });
+      setFeedback("Đã cập nhật trạng thái phiên đăng nhập.");
+    }
   });
 
   const completeBrowserLogin = useMutation({
-    mutationFn: ({ platform, sessionId }: { platform: string; sessionId: string }) => apiPost<BrowserLoginSession>(`/${platform}/browser-login/${sessionId}/complete`),
-    onSuccess: (data) => {
-      setBrowserLogin(data);
-      setFeedback({ type: "success", message: data.message ?? "Đã lưu session." });
-      void queryClient.invalidateQueries({ queryKey: ["accounts"] });
-      void queryClient.invalidateQueries({ queryKey: ["targets"] });
-    },
-    onError: (error: Error) => setFeedback({ type: "error", message: error.message })
+    mutationFn: (session: BrowserLoginSession) => apiPost<BrowserLoginSession>(`/${session.platform ?? "facebook"}/browser-login/${session.sessionId}/complete`, {}),
+    onSuccess: async (data, session) => {
+      setBrowserLogin({ ...session, ...data });
+      setFeedback(data.message ?? "Đã lưu session vào tài khoản.");
+      await invalidateAccounts();
+    }
   });
 
   const cancelBrowserLogin = useMutation({
-    mutationFn: ({ platform, sessionId }: { platform: string; sessionId: string }) => apiPost<BrowserLoginSession>(`/${platform}/browser-login/${sessionId}/cancel`),
-    onSuccess: (data) => {
-      setFeedback({ type: "success", message: "Đã huỷ phiên đăng nhập." });
-      setBrowserLogin(data);
-      void queryClient.invalidateQueries({ queryKey: ["accounts"] });
-    },
-    onError: (error: Error) => setFeedback({ type: "error", message: error.message })
+    mutationFn: (session: BrowserLoginSession) => apiPost<BrowserLoginSession>(`/${session.platform ?? "facebook"}/browser-login/${session.sessionId}/cancel`, {}),
+    onSuccess: async (data, session) => {
+      setBrowserLogin({ ...session, ...data });
+      setFeedback("Đã hủy phiên đăng nhập.");
+      await invalidateAccounts();
+    }
   });
 
-  const checkBrowserSession = useMutation({
-    mutationFn: ({ accountId, platform }: { accountId: string; platform: BrowserLoginPlatform }) =>
-      apiPost<{ health: BrowserLoginSession["health"] }>(`/accounts/${accountId}/${platform}-session/check`),
-    onSuccess: (_data, variables) => {
-      void queryClient.invalidateQueries({ queryKey: ["accounts"] });
-      const label = variables.platform === "facebook" ? "Facebook" : variables.platform === "instagram" ? "Instagram" : "Threads";
-      setFeedback({ type: "success", message: `Đã kiểm tra session ${label}.` });
-    },
-    onError: (error: Error) => setFeedback({ type: "error", message: error.message })
-  });
+  const accounts = query.data?.accounts ?? [];
+  const rows = useMemo(() => {
+    return accounts.filter((account) => {
+      const text = [account.name, account.handle, account.platform, account.health, authStateOf(account)].join(" ").toLowerCase();
+      if (kind !== "all" && account.kind !== kind) return false;
+      if (keyword.trim() && !text.includes(keyword.trim().toLowerCase())) return false;
+      if (platform !== "all" && account.platform !== platform) return false;
+      if (health !== "all" && account.health !== health) return false;
+      if (authState !== "all" && authStateOf(account) !== authState) return false;
+      if (active !== "all" && String(account.isActive) !== active) return false;
+      return true;
+    });
+  }, [accounts, active, authState, health, keyword, kind, platform]);
 
-  const targetAccounts = (query.data?.accounts ?? []).filter((account) => account.kind === "target");
-  const browserAccounts = targetAccounts.filter((account) => ["facebook", "instagram", "threads"].includes(account.platform));
+  const targetAccounts = useMemo(() => accounts.filter((account) => account.kind === "target"), [accounts]);
+  const connectableTargets = useMemo(() => targetAccounts.filter((account) => isBrowserLoginPlatform(account.platform)), [targetAccounts]);
 
-  const stats = useMemo(() => {
-    const needsAttention = browserAccounts.filter((account) => {
-      const authState = account.sessionState?.authState ?? account.sessionState?.health?.authState;
-      return authState && authState !== "authenticated";
-    }).length;
+  const stats = useMemo(() => ({
+    targets: targetAccounts.length,
+    sources: accounts.filter((account) => account.kind === "source").length,
+    connected: connectableTargets.filter((account) => authStateOf(account) === "authenticated").length,
+    needsLogin: connectableTargets.filter((account) => ["login_required", "checkpoint", "unknown"].includes(authStateOf(account))).length
+  }), [accounts, connectableTargets, targetAccounts]);
 
-    return {
-      total: targetAccounts.length,
-      browser: browserAccounts.length,
-      healthy: targetAccounts.filter((account) => account.health === "healthy").length,
-      needsAttention
-    };
-  }, [browserAccounts, targetAccounts]);
+  const actionBusy =
+    remove.isPending ||
+    toggleActive.isPending ||
+    test.isPending ||
+    checkSession.isPending ||
+    startBrowserLogin.isPending ||
+    refreshBrowserLogin.isPending ||
+    completeBrowserLogin.isPending ||
+    cancelBrowserLogin.isPending;
 
   return (
     <>
       <PageHeader
-        title="Tài khoản đăng"
-        subtitle="Chỉ quản lý các tài khoản dùng để đăng bài. Tài khoản nguồn đã tách sang Crawl data."
+        title="Tài khoản"
+        subtitle="Kết nối tài khoản đăng, lưu session trình duyệt và kiểm tra session health trước khi worker publish nội dung."
         actions={
           <>
             <Button variant="secondary" icon={<RefreshCw aria-hidden />} onClick={() => query.refetch()} disabled={query.isFetching}>
-              {query.isFetching ? "Đang tải..." : "Làm mới"}
+              Làm mới
             </Button>
             <Button icon={<Plus aria-hidden />} onClick={() => setDialogOpen(true)}>
               Thêm tài khoản
@@ -235,201 +276,210 @@ export function AccountsPage() {
         }
       />
 
-      <section className="grid-metrics" style={{ marginBottom: 18 }}>
-        <div className="panel metric">
-          <p className="metric-label">Tổng tài khoản</p>
-          <p className="metric-value">{stats.total}</p>
-        </div>
-        <div className="panel metric">
-          <p className="metric-label">Có browser session</p>
-          <p className="metric-value">{stats.browser}</p>
-        </div>
-        <div className="panel metric">
-          <p className="metric-label">Đang ổn</p>
-          <p className="metric-value">{stats.healthy}</p>
-        </div>
-        <div className="panel metric">
-          <p className="metric-label">Cần xử lý session</p>
-          <p className="metric-value">{stats.needsAttention}</p>
-        </div>
-      </section>
+      <div className="metric-grid">
+        <SectionCard title="Tài khoản đăng"><strong>{stats.targets}</strong></SectionCard>
+        <SectionCard title="Tài khoản nguồn"><strong>{stats.sources}</strong></SectionCard>
+        <SectionCard title="Session đã kết nối"><strong>{stats.connected}</strong></SectionCard>
+        <SectionCard title="Cần xử lý login"><strong>{stats.needsLogin}</strong></SectionCard>
+      </div>
+
+      {feedback ? <div className="inline-alert">{feedback}</div> : null}
+
+      {browserLogin?.sessionId ? (
+        <SectionCard
+          title="Phiên đăng nhập đang mở"
+          description="Đăng nhập trong cửa sổ trình duyệt vừa mở, sau đó quay lại đây để lưu session vào tài khoản."
+          actions={
+            <>
+              <Button size="sm" variant="secondary" icon={<RefreshCw aria-hidden />} onClick={() => refreshBrowserLogin.mutate(browserLogin)} disabled={actionBusy}>
+                Cập nhật
+              </Button>
+              <Button size="sm" icon={<ShieldCheck aria-hidden />} onClick={() => completeBrowserLogin.mutate(browserLogin)} disabled={actionBusy || browserLogin.status !== "pending"}>
+                Lưu session
+              </Button>
+              <Button size="sm" variant="ghost" icon={<Square aria-hidden />} onClick={() => cancelBrowserLogin.mutate(browserLogin)} disabled={actionBusy || browserLogin.status !== "pending"}>
+                Hủy
+              </Button>
+            </>
+          }
+        >
+          <div className="account-session-grid">
+            <div>
+              <span>Trạng thái</span>
+              <StatusBadge status={browserLogin.status ?? "pending"} />
+            </div>
+            <div>
+              <span>Auth state</span>
+              <Badge tone={authTone(browserLogin.authState ?? "unknown")}>{authLabel(browserLogin.authState ?? "unknown")}</Badge>
+            </div>
+            <div>
+              <span>Nền tảng</span>
+              <strong>{platformLabel(browserLogin.platform ?? "facebook")}</strong>
+            </div>
+            <div>
+              <span>Kiểm tra gần nhất</span>
+              <strong>{formatDate(browserLogin.lastCheckedAt)}</strong>
+            </div>
+            <div className="full">
+              <span>Session path</span>
+              <code className="code-inline">{browserLogin.authPath ?? browserLogin.sessionDir ?? "-"}</code>
+            </div>
+            {browserLogin.currentUrl ? (
+              <div className="full">
+                <span>URL hiện tại</span>
+                <code className="code-inline">{browserLogin.currentUrl}</code>
+              </div>
+            ) : null}
+            {browserLogin.lastError ? (
+              <div className="field-error full">
+                <span>{browserLogin.lastError}</span>
+              </div>
+            ) : null}
+          </div>
+        </SectionCard>
+      ) : null}
 
       <SectionCard
-        title="Browser session"
-        description="Mở trình duyệt để đăng nhập thủ công cho Facebook, Instagram hoặc Threads rồi lưu lại session."
-        className="mb-4"
+        title="Kết nối nhanh"
+        description="Facebook, Instagram và Threads dùng browser session. Telegram/X dùng credentials đã lưu trong tài khoản."
       >
-        <div className="account-form-header">
-          <div>
-            <p className="muted-copy">Phiên đang mở sẽ hiện tại đây. Trạng thái đã lưu vẫn hiển thị trực tiếp trong bảng tài khoản bên dưới.</p>
-
-            {activeBrowserLogin ? (
-              <div className="stack-tight" style={{ marginTop: 12 }}>
-                <div className="feature-inline-actions">
-                  <Badge tone={getSessionStatusTone(activeBrowserLogin.status)}>{activeBrowserLogin.status}</Badge>
-                  <Badge tone={getAuthTone(activeBrowserLogin.authState)}>{getAuthLabel(activeBrowserLogin.authState)}</Badge>
-                  {activeBrowserLogin.browserOpen ? (
-                    <span className="table-subtle" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                      <Clock3 size={14} aria-hidden /> Trình duyệt đang mở
-                    </span>
-                  ) : null}
-                  {activeBrowserLogin.authDetected ? (
-                    <span className="table-subtle" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                      <CheckCircle2 size={14} aria-hidden /> Đã phát hiện cookie đăng nhập
-                    </span>
-                  ) : null}
-                </div>
-
-                {activeBrowserLogin.sessionDir ? <code className="code-inline">{activeBrowserLogin.sessionDir}</code> : null}
-
-                <div className="feature-inline-actions">
-                  {activeBrowserLogin.sessionId ? (
-                    <Button
-                      variant="secondary"
-                      icon={<ShieldCheck aria-hidden />}
-                      onClick={() => completeBrowserLogin.mutate({ platform: activeBrowserLogin.platform ?? "facebook", sessionId: activeBrowserLogin.sessionId! })}
-                      disabled={completeBrowserLogin.isPending || cancelBrowserLogin.isPending || activeBrowserLogin.status !== "pending"}
-                    >
-                      {completeBrowserLogin.isPending ? "Đang lưu..." : "Lưu session"}
-                    </Button>
-                  ) : null}
-                  {activeBrowserLogin.sessionId ? (
-                    <Button
-                      variant="ghost"
-                      icon={<RotateCcw aria-hidden />}
-                      onClick={() => cancelBrowserLogin.mutate({ platform: activeBrowserLogin.platform ?? "facebook", sessionId: activeBrowserLogin.sessionId! })}
-                      disabled={completeBrowserLogin.isPending || cancelBrowserLogin.isPending || activeBrowserLogin.status !== "pending"}
-                    >
-                      Huỷ phiên
-                    </Button>
-                  ) : null}
-                </div>
-
-                {activeBrowserLogin.currentUrl ? <div className="table-subtle">URL hiện tại: {activeBrowserLogin.currentUrl}</div> : null}
-                {activeBrowserLogin.lastCheckedAt ? <div className="table-subtle">Kiểm tra gần nhất: {new Date(activeBrowserLogin.lastCheckedAt).toLocaleString("vi-VN")}</div> : null}
-                {activeBrowserLogin.lastError ? (
-                  <div className="table-subtle" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                    <AlertTriangle size={14} aria-hidden /> {activeBrowserLogin.lastError}
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <div className="table-subtle" style={{ marginTop: 10 }}>Chưa có phiên đăng nhập nào đang mở.</div>
-            )}
-          </div>
-          <FolderLock aria-hidden size={18} />
-        </div>
-      </SectionCard>
-
-      {feedback ? <div className={`banner ${feedback.type}`}>{feedback.message}</div> : null}
-      {query.error instanceof Error ? <div className="banner error">{query.error.message}</div> : null}
-
-      <SectionCard title="Danh sách tài khoản" description="Tập trung vào trạng thái session, tình trạng hoạt động và thao tác nhanh." padded={false}>
-        <table className="table table-compact">
-          <thead>
-            <tr>
-              <th>Tên</th>
-              <th>Nền tảng</th>
-              <th>Handle</th>
-              <th>Trạng thái</th>
-              <th>Session</th>
-              <th>Thao tác</th>
-            </tr>
-          </thead>
-          <tbody>
-            {targetAccounts.map((account) => {
-              const persistedSession = account.sessionState;
-              const sessionHint =
-                (account.credentials?.sessionDir as string) ||
-                (account.credentials?.authPath as string) ||
-                persistedSession?.sessionDir ||
-                persistedSession?.authPath ||
-                "Chưa cấu hình";
-              const authState = persistedSession?.authState ?? persistedSession?.health?.authState;
-              const sessionStatus = persistedSession?.status ?? persistedSession?.health?.status;
-              const sessionMessage = persistedSession?.health?.message ?? persistedSession?.lastError;
-              const isCurrentBrowserLogin = activeBrowserLogin?.accountId === account.id;
-
+        {connectableTargets.length > 0 ? (
+          <div className="account-connect-grid">
+            {connectableTargets.slice(0, 6).map((account) => {
+              const state = authStateOf(account);
               return (
-                <tr key={`${account.kind}-${account.id}`}>
-                  <td>
-                    <strong>{account.name}</strong>
-                    <div className="table-subtle">{account.isActive ? "Đang bật" : "Đang tắt"}</div>
-                    {["facebook", "instagram", "threads"].includes(account.platform) ? (
-                      <div className="feature-inline-actions" style={{ marginTop: 8 }}>
-                        {sessionStatus ? <Badge tone={getSessionStatusTone(sessionStatus as BrowserLoginSession["status"])}>Session: {sessionStatus}</Badge> : null}
-                        <Badge tone={getAuthTone(authState)}>{getAuthLabel(authState)}</Badge>
-                        {isCurrentBrowserLogin && activeBrowserLogin ? <Badge tone={getSessionStatusTone(activeBrowserLogin.status)}>Đang thao tác</Badge> : null}
-                      </div>
-                    ) : null}
-                  </td>
-                  <td>{account.platform}</td>
-                  <td>{account.handle || <span className="table-subtle">Chưa có</span>}</td>
-                  <td>
-                    <StatusBadge status={sessionStatus ? String(sessionStatus) : account.health} />
-                  </td>
-                  <td>
-                    <code className="code-inline">{sessionHint}</code>
-                    {persistedSession?.lastCheckedAt ? <div className="table-subtle" style={{ marginTop: 6 }}>Kiểm tra gần nhất: {new Date(persistedSession.lastCheckedAt).toLocaleString("vi-VN")}</div> : null}
-                    {sessionMessage ? <div className="table-subtle" style={{ marginTop: 6 }}>{sessionMessage}</div> : null}
-                  </td>
-                  <td>
-                    <div className="actions actions-tight">
-                      {["facebook", "instagram", "threads"].includes(account.platform) ? (
-                        <>
-                          <Button
-                            variant="secondary"
-                            icon={<ExternalLink aria-hidden />}
-                            onClick={() => startBrowserLogin.mutate(account)}
-                            disabled={startBrowserLogin.isPending || completeBrowserLogin.isPending || cancelBrowserLogin.isPending}
-                          >
-                            {persistedSession?.authPath ? "Mở lại session" : startBrowserLogin.isPending ? "Đang mở..." : "Mở đăng nhập"}
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            icon={<Search aria-hidden />}
-                            onClick={() => checkBrowserSession.mutate({ accountId: account.id, platform: account.platform as BrowserLoginPlatform })}
-                            disabled={checkBrowserSession.isPending || startBrowserLogin.isPending}
-                          >
-                            {checkBrowserSession.isPending ? "Đang kiểm tra..." : "Kiểm tra session"}
-                          </Button>
-                        </>
-                      ) : null}
-
-                      <Button variant="secondary" icon={<ShieldCheck aria-hidden />} onClick={() => test.mutate(account)} disabled={test.isPending || remove.isPending}>
-                        {test.isPending ? "Đang kiểm tra..." : "Kiểm tra"}
-                      </Button>
-
-                      <Button
-                        variant="danger"
-                        icon={<Trash2 aria-hidden />}
-                        onClick={() => {
-                          if (window.confirm(`Xoá tài khoản ${account.name}? Hành động này không thể hoàn tác.`)) {
-                            remove.mutate(account);
-                          }
-                        }}
-                        disabled={remove.isPending || test.isPending}
-                      >
-                        {remove.isPending ? "Đang xoá..." : "Xoá"}
-                      </Button>
+                <div className="account-connect-card" key={account.id}>
+                  <div className="account-connect-head">
+                    <div className="account-avatar" aria-hidden>{platformLabel(account.platform).slice(0, 2).toUpperCase()}</div>
+                    <div className="account-meta-stack">
+                      <strong>{account.name}</strong>
+                      <span>{platformLabel(account.platform)} · {account.handle ?? "chưa có handle"}</span>
                     </div>
-                  </td>
-                </tr>
+                    <Badge tone={authTone(state)}>{authLabel(state)}</Badge>
+                  </div>
+                  <p>{connectionSummary(account)}</p>
+                  <div className="row-actions">
+                    <Button size="sm" icon={<LogIn aria-hidden />} onClick={() => startBrowserLogin.mutate(account)} disabled={actionBusy}>
+                      Login
+                    </Button>
+                    <Button size="sm" variant="secondary" icon={<ShieldCheck aria-hidden />} onClick={() => checkSession.mutate(account)} disabled={actionBusy}>
+                      Check
+                    </Button>
+                  </div>
+                </div>
               );
             })}
-
-            {query.data && targetAccounts.length === 0 ? (
-              <tr>
-                <td colSpan={6}>
-                  <EmptyState title="Chưa có tài khoản đăng" description="Dùng nút Thêm tài khoản để tạo tài khoản đăng đầu tiên." />
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
+          </div>
+        ) : (
+          <EmptyState title="Chưa có tài khoản hỗ trợ browser login" description="Thêm tài khoản Facebook, Instagram hoặc Threads để bắt đầu kết nối session." />
+        )}
       </SectionCard>
 
-      <AddAccountDialog open={dialogOpen} onClose={() => setDialogOpen(false)} sourceMutation={{} as any} targetMutation={createTarget as any} targetOnly />
+      <SectionCard>
+        <FilterToolbar actions={<Button variant="secondary" onClick={() => query.refetch()} disabled={query.isFetching}>Áp dụng</Button>}>
+          <Input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="Tìm tên, handle, platform..." />
+          <Select value={kind} onChange={(event) => setKind(event.target.value as "all" | AccountKind)}>
+            <option value="all">Tất cả loại</option>
+            <option value="target">Tài khoản đăng</option>
+            <option value="source">Tài khoản nguồn</option>
+          </Select>
+          <Select value={platform} onChange={(event) => setPlatform(event.target.value)}>
+            <option value="all">Tất cả nền tảng</option>
+            <option value="facebook">Facebook</option>
+            <option value="instagram">Instagram</option>
+            <option value="threads">Threads</option>
+            <option value="telegram">Telegram</option>
+            <option value="x">X / Twitter</option>
+            <option value="zalo-bot">Zalo OA</option>
+            <option value="zalo-web">Zalo Web</option>
+          </Select>
+          <Select value={health} onChange={(event) => setHealth(event.target.value)}>
+            <option value="all">Tất cả health</option>
+            <option value="healthy">Healthy</option>
+            <option value="checkpoint">Checkpoint</option>
+            <option value="degraded">Degraded</option>
+            <option value="paused">Paused</option>
+            <option value="failed">Failed</option>
+          </Select>
+          <Select value={authState} onChange={(event) => setAuthState(event.target.value)}>
+            <option value="all">Tất cả session</option>
+            <option value="authenticated">Đã đăng nhập</option>
+            <option value="login_required">Cần đăng nhập</option>
+            <option value="checkpoint">Checkpoint</option>
+            <option value="unknown">Chưa kiểm tra</option>
+          </Select>
+          <Select value={active} onChange={(event) => setActive(event.target.value)}>
+            <option value="all">Tất cả kích hoạt</option>
+            <option value="true">Đang bật</option>
+            <option value="false">Đang tắt</option>
+          </Select>
+        </FilterToolbar>
+
+        <AdminDataTable
+          rows={rows}
+          getRowKey={(row) => row.id}
+          empty={<EmptyState title="Chưa có tài khoản phù hợp" description="Thêm tài khoản mới hoặc nới bộ lọc để xem lại danh sách." />}
+          columns={[
+            {
+              key: "name",
+              header: "Tài khoản",
+              render: (row) => (
+                <div className="account-table-name">
+                  <strong>{row.name}</strong>
+                  <div className="table-subtle">{row.handle ?? "-"}</div>
+                </div>
+              )
+            },
+            { key: "kind", header: "Loại", render: (row) => row.kind === "source" ? "Nguồn" : "Đăng bài" },
+            { key: "platform", header: "Nền tảng", render: (row) => platformLabel(row.platform) },
+            { key: "active", header: "Kích hoạt", render: (row) => <Badge tone={row.isActive ? "good" : "neutral"}>{row.isActive ? "Đang bật" : "Đang tắt"}</Badge> },
+            { key: "health", header: "Health", render: (row) => <StatusBadge status={row.health} /> },
+            {
+              key: "auth",
+              header: "Session",
+              render: (row) => isBrowserLoginPlatform(row.platform)
+                ? <Badge tone={authTone(authStateOf(row))}>{authLabel(authStateOf(row))}</Badge>
+                : <Badge tone="neutral">Credentials</Badge>
+            },
+            { key: "checked", header: "Kiểm tra gần nhất", render: (row) => formatDate(sessionCheckedAt(row)) },
+            { key: "path", header: "Session path", render: (row) => <code className="code-inline">{sessionPath(row)}</code> },
+            {
+              key: "actions",
+              header: "Thao tác",
+              render: (row) => (
+                <div className="row-actions">
+                  <Button size="sm" variant="secondary" icon={<PlayCircle aria-hidden />} onClick={() => test.mutate(row)} disabled={actionBusy}>Test</Button>
+                  {isBrowserLoginPlatform(row.platform) && row.kind === "target" ? (
+                    <>
+                      <Button size="sm" variant="secondary" icon={<ShieldCheck aria-hidden />} onClick={() => checkSession.mutate(row)} disabled={actionBusy}>Check</Button>
+                      <Button size="sm" icon={<LogIn aria-hidden />} onClick={() => startBrowserLogin.mutate(row)} disabled={actionBusy}>Login</Button>
+                    </>
+                  ) : null}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    icon={row.isActive ? <Square aria-hidden /> : <CheckCircle2 aria-hidden />}
+                    onClick={() => toggleActive.mutate({ account: row, value: !row.isActive })}
+                    disabled={actionBusy}
+                  >
+                    {row.isActive ? "Tắt" : "Bật"}
+                  </Button>
+                  <Button size="sm" variant="danger" icon={<Trash2 aria-hidden />} onClick={() => remove.mutate(row)} disabled={actionBusy}>
+                    Xóa
+                  </Button>
+                </div>
+              )
+            }
+          ]}
+        />
+      </SectionCard>
+
+      <AddAccountDialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        sourceMutation={createSource}
+        targetMutation={createTarget}
+      />
     </>
   );
 }

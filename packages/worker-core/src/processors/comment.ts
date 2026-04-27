@@ -1,7 +1,7 @@
 import { AdapterAuthError, AdapterCheckpointError, classifyError, logger, realtimeBus } from "@zerun/shared";
 import { commentExecuteJobSchema, type CommentExecuteJob } from "../types.js";
 import type { ProcessorContext } from "./context.js";
-import { toAdapterAccount } from "./helpers.js";
+import { normalizeCommentMedia, toAdapterAccount } from "./helpers.js";
 
 export async function processComment(rawJob: unknown, context: ProcessorContext) {
   const job = commentExecuteJobSchema.parse(rawJob) satisfies CommentExecuteJob;
@@ -37,7 +37,7 @@ export async function processComment(rawJob: unknown, context: ProcessorContext)
       account: toAdapterAccount(target),
       postUrl,
       text: queueItem.commentText,
-      media: Array.isArray(queueItem.commentMedia) ? (queueItem.commentMedia as any[]) : []
+      media: normalizeCommentMedia(queueItem.commentMedia)
     });
 
     await context.prisma.commentQueue.update({

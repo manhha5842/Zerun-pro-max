@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import { cn } from "../../lib/utils";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/Card";
 
 export function SectionCard({
   title,
@@ -19,17 +20,17 @@ export function SectionCard({
   style?: CSSProperties;
 }) {
   return (
-    <section className={cn("panel", padded && "panel-pad", className)} style={style}>
+    <Card className={cn(className)} style={style}>
       {title || description || actions ? (
-        <div className="section-card-head">
+        <CardHeader className="section-card-head">
           <div>
-            {title ? <h2 className="section-card-title">{title}</h2> : null}
-            {description ? <p className="section-card-description">{description}</p> : null}
+            {title ? <CardTitle className="section-card-title">{title}</CardTitle> : null}
+            {description ? <CardDescription className="section-card-description">{description}</CardDescription> : null}
           </div>
           {actions ? <div className="actions">{actions}</div> : null}
-        </div>
+        </CardHeader>
       ) : null}
-      {children}
-    </section>
+      <CardContent className={cn(!padded && "p-0", !(title || description || actions) && padded && "pt-5")}>{children}</CardContent>
+    </Card>
   );
 }

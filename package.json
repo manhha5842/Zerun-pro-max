@@ -8,6 +8,7 @@
     "packages/*"
   ],
   "scripts": {
+    "dev": "npm run dev:api",
     "dev:api": "npm run dev -w @zerun/api",
     "dev:web": "npm run dev -w @zerun/web-admin",
     "build": "npm run typecheck && npm run build -w @zerun/web-admin",

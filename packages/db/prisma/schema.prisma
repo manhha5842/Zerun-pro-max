@@ -121,6 +121,13 @@ model Content {
   scheduledAt     DateTime?
   scheduledTargets Json?
   metadata        Json             @default("{}")
+  savedReason     String?
+  savedSource     String?
+  lastError       String?
+  retryCount      Int              @default(0)
+  deletedAt       DateTime?
+  cancelledAt     DateTime?
+  cancelReason    String?
   postedAt        DateTime?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
@@ -134,6 +141,151 @@ model Content {
   @@unique([platform, sourceId, externalId])
   @@index([status])
   @@index([platform])
+  @@index([createdAt])
+  @@index([deletedAt])
+}
+
+model AutoConversionRule {
+  id                     String              @id @default(cuid())
+  name                   String
+  description            String?
+  enabled                Boolean             @default(true)
+  sourcePlatform         String
+  sourceAccountId        String?
+  sourceRef              String
+  triggerMode            String              @default("polling")
+  pollingIntervalMinutes Int                 @default(15)
+  lastCursor             String?
+  lastExternalId         String?
+  lastFetchedAt          DateTime?
+  targetAccountIds       Json                @default("[]")
+  postType               String              @default("feed")
+  includeFirstComment    Boolean             @default(false)
+  commentMode            String              @default("none")
+  customComment          String?
+  linkRules              Json                @default("{}")
+  contentRules           Json                @default("{}")
+  mediaRules             Json                @default("{}")
+  scheduleRules          Json                @default("{}")
+  aiConfigId             String?
+  cloudinaryKeyIds       Json                @default("[]")
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+  runs                   AutoConversionRun[]
+
+  @@index([enabled])
+  @@index([sourcePlatform])
+  @@index([sourceAccountId])
+}
+
+model AutoConversionRun {
+  id               String                @id @default(cuid())
+  ruleId           String
+  sourcePlatform   String
+  sourceRef        String
+  sourceExternalId String
+  sourceUrl        String?
+  originalText     String
+  processedText    String?
+  status           String                @default("new_detected")
+  contentId        String?
+  targetAccountIds Json                  @default("[]")
+  errorCode        String?
+  errorMessage     String?
+  metadata         Json                  @default("{}")
+  startedAt        DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  rule             AutoConversionRule    @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  links            AutoConversionLink[]
+  media            AutoConversionMedia[]
+
+  @@unique([ruleId, sourceExternalId])
+  @@index([status, createdAt])
+  @@index([sourcePlatform])
+  @@index([contentId])
+}
+
+model AutoConversionLink {
+  id           String            @id @default(cuid())
+  runId        String
+  originalUrl  String
+  convertedUrl String?
+  network      String            @default("unknown")
+  action       String            @default("kept")
+  error        String?
+  createdAt    DateTime          @default(now())
+  run          AutoConversionRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([network])
+  @@index([action])
+}
+
+model AutoConversionMedia {
+  id            String            @id @default(cuid())
+  runId         String
+  sourceUrl     String
+  localPath     String?
+  cloudinaryUrl String?
+  mimeType      String?
+  status        String            @default("pending")
+  error         String?
+  createdAt     DateTime          @default(now())
+  run           AutoConversionRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([status])
+}
+
+model CrawlJob {
+  id             String        @id @default(cuid())
+  sourcePlatform String
+  sourceRef      String
+  accountId      String?
+  status         String        @default("pending")
+  options        Json          @default("{}")
+  storageConfig  Json          @default("{}")
+  commentOptions Json          @default("{}")
+  totalFound     Int           @default(0)
+  totalSaved     Int           @default(0)
+  totalDuplicate Int           @default(0)
+  totalFailed    Int           @default(0)
+  error          String?
+  createdBy      String?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  results        CrawlResult[]
+
+  @@index([sourcePlatform])
+  @@index([status, createdAt])
+}
+
+model CrawlResult {
+  id           String    @id @default(cuid())
+  crawlJobId   String
+  platform     String
+  sourceRef    String
+  externalId   String
+  author       String?
+  sourceUrl    String?
+  originalText String
+  media        Json      @default("[]")
+  comments     Json      @default("[]")
+  links        Json      @default("[]")
+  postedAt     DateTime?
+  status       String    @default("new")
+  contentId    String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  crawlJob     CrawlJob  @relation(fields: [crawlJobId], references: [id], onDelete: Cascade)
+
+  @@unique([platform, sourceRef, externalId])
+  @@index([crawlJobId])
+  @@index([status])
   @@index([createdAt])
 }
 

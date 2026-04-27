@@ -1,30 +1,51 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { Slot } from "@radix-ui/react-slot";
+import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "../../lib/utils";
 
-type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "primary" | "secondary" | "ghost" | "danger";
-  size?: "default" | "sm" | "icon";
-  icon?: ReactNode;
-};
+const buttonVariants = cva(
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md border text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+  {
+    variants: {
+      variant: {
+        default: "border-primary bg-primary text-white hover:bg-[var(--color-primary-hover)]",
+        primary: "border-primary bg-primary text-white hover:bg-[var(--color-primary-hover)]",
+        secondary: "border-primarySoft bg-primarySoft text-primary hover:bg-[#cbeadf]",
+        outline: "border-line bg-panel text-foreground hover:bg-[var(--color-bg-muted)]",
+        ghost: "border-transparent bg-transparent text-foreground hover:bg-[var(--color-bg-muted)]",
+        link: "border-transparent bg-transparent text-primary underline-offset-4 hover:underline",
+        destructive: "border-danger bg-danger text-white hover:bg-[#8f1c14]",
+        danger: "border-danger bg-danger text-white hover:bg-[#8f1c14]"
+      },
+      size: {
+        default: "h-10 px-4 py-2",
+        sm: "h-8 px-3 text-xs",
+        lg: "h-11 px-8",
+        icon: "size-9 p-0"
+      }
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default"
+    }
+  }
+);
 
-export function Button({ className, variant = "primary", size = "default", icon, children, ...props }: ButtonProps) {
+type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> &
+  VariantProps<typeof buttonVariants> & {
+    asChild?: boolean;
+    icon?: ReactNode;
+  };
+
+export function Button({ className, variant, size, asChild = false, icon, children, ...props }: ButtonProps) {
+  const Comp = asChild ? Slot : "button";
+
   return (
-    <button
-      className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-md border text-sm font-semibold transition-colors transition-shadow disabled:cursor-not-allowed disabled:opacity-60",
-        size === "default" && "h-10 px-4",
-        size === "sm" && "h-8 px-3 text-[12px]",
-        size === "icon" && "h-9 w-9 p-0",
-        variant === "primary" && "border-primary bg-primary text-white hover:bg-[var(--color-primary-hover)] hover:border-[var(--color-primary-hover)]",
-        variant === "secondary" && "border-primarySoft bg-primarySoft text-primary hover:bg-[#cbeadf]",
-        variant === "ghost" && "border-transparent bg-transparent text-foreground hover:bg-[var(--color-bg-muted)]",
-        variant === "danger" && "border-danger bg-danger text-white hover:bg-[#8f1c14] hover:border-[#8f1c14]",
-        className
-      )}
-      {...props}
-    >
+    <Comp className={cn(buttonVariants({ variant, size, className }))} {...props}>
       {icon}
       {children}
-    </button>
+    </Comp>
   );
 }
+
+export { buttonVariants };

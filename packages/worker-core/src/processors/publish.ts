@@ -1,7 +1,7 @@
 import { AdapterAuthError, AdapterCheckpointError, classifyError, logger, realtimeBus } from "@zerun/shared";
 import { publishExecuteJobSchema, type PublishExecuteJob } from "../types.js";
 import type { ProcessorContext } from "./context.js";
-import { mapMediaAssets, toAdapterAccount } from "./helpers.js";
+import { mapMediaAssets, normalizeMediaPaths, toAdapterAccount } from "./helpers.js";
 
 // BullMQ handles retries automatically via defaultJobOptions in runtime.ts:
 // - attempts: 3 (max 3 total attempts)
@@ -47,12 +47,24 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
 
     // Routes by target.platform: facebook, instagram, threads, x, zalo-bot, zalo-web, etc.
     // The adapter registry resolves the correct adapter for each platform automatically.
+    const metadata = (content.metadata ?? {}) as Record<string, unknown>;
+    const postType = typeof metadata.type === "string" ? metadata.type : undefined;
+    const storedMedia = mapMediaAssets(content.media);
+    const mediaSource = storedMedia.length > 0 ? storedMedia : normalizeMediaPaths(metadata.mediaPaths);
+    const media = mediaSource.map((asset) => ({
+      ...asset,
+      metadata: {
+        ...(asset.metadata ?? {}),
+        ...(postType ? { postType, type: postType } : {})
+      }
+    }));
+
     const adapter = context.registry.getPublish(target.platform as never);
     const result = await adapter.publish({
       account: toAdapterAccount(target),
       contentId: content.id,
       text: content.finalText ?? content.draftText ?? content.originalText,
-      media: mapMediaAssets(content.media)
+      media
     });
 
     await context.prisma.publishAttempt.update({
@@ -97,7 +109,6 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
     });
 
     // Auto-enqueue first comment if defined in content metadata
-    const metadata = (content.metadata ?? {}) as Record<string, unknown>;
     const commentText = typeof metadata.comment === "string" ? metadata.comment.trim() : "";
     if (commentText && result.url) {
       const commentMedia = Array.isArray(metadata.commentMedia) ? metadata.commentMedia : [];

@@ -187,7 +187,8 @@ export class ThreadsAdapter implements SourceAdapter, PublishAdapter {
     const context = await this.openContext(input.account);
     try {
       const page = await context.newPage();
-      await this.publishComment(page, input.postUrl, input.text);
+      const mediaPaths = input.media?.map((m) => m.localPath ?? m.url ?? "").filter(Boolean) ?? [];
+      await this.publishComment(page, input.postUrl, input.text, mediaPaths);
       return { url: input.postUrl, metadata: { platform: this.platform } };
     } catch (error) {
       await captureScreenshot(context, "storage/screenshots", `threads-comment-error-${Date.now()}`).catch(() => undefined);
@@ -197,7 +198,7 @@ export class ThreadsAdapter implements SourceAdapter, PublishAdapter {
     }
   }
 
-  async publishComment(page: any, postUrl: string, text: string): Promise<void> {
+  async publishComment(page: any, postUrl: string, text: string, mediaPaths: string[] = []): Promise<void> {
     await page.goto(postUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await dismissCookieDialog(page);
     await page.waitForTimeout(1_500);
@@ -212,6 +213,26 @@ export class ThreadsAdapter implements SourceAdapter, PublishAdapter {
     const textbox = page.locator('[role="dialog"] [role="textbox"], [role="textbox"], [contenteditable="true"]').first();
     await textbox.fill(text);
     await page.waitForTimeout(300);
+
+    if (mediaPaths.length > 0) {
+      const fileInput = page.locator('input[type="file"][accept*="image"], input[type="file"][accept*="video"], input[type="file"]');
+      if (await fileInput.count() > 0) {
+        await fileInput.first().setInputFiles(mediaPaths);
+      } else {
+        const opened = await clickFirstVisible(page, [
+          '[aria-label*="photo" i]',
+          '[aria-label*="media" i]',
+          '[aria-label*="image" i]',
+          '[aria-label*="attach" i]',
+          'button:has([class*="photo"])',
+          'button:has([class*="media"])'
+        ], { timeout: 8_000 });
+        if (!opened) throw new Error("Threads reply media input was not found.");
+        const chooserInput = page.locator('input[type="file"]').first();
+        if (await chooserInput.count()) await chooserInput.setInputFiles(mediaPaths);
+      }
+      await page.waitForTimeout(3_000);
+    }
 
     await clickFirst(page, [
       'text=/^Post$|^Dang$/i',

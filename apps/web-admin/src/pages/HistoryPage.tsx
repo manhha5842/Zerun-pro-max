@@ -1,204 +1,139 @@
-import { Fragment, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { apiGet } from "../api/client";
-import { PageHeader } from "../components/common/PageHeader";
-import { SectionCard } from "../components/common/SectionCard";
 import { EmptyState } from "../components/common/EmptyState";
-import { StatusBadge } from "../components/common/StatusBadge";
+import { FilterToolbar } from "../components/common/FilterToolbar";
+import { PageHeader } from "../components/common/PageHeader";
+import { PostDataTable, type PostAttemptRow, type PostRow } from "../components/common/PostDataTable";
+import { SectionCard } from "../components/common/SectionCard";
 import { Button } from "../components/ui/Button";
+import { Input } from "../components/ui/Input";
+import { Select } from "../components/ui/Select";
 
-type AttemptRow = {
+type AttemptRow = PostAttemptRow & {
   id: string;
   contentId: string;
   targetId: string;
   attemptNo: number;
-  status: string;
-  resultUrl: string | null;
-  error: string | null;
   createdAt: string;
-  content: { id: string; code: string; originalText: string } | null;
+  content: PostRow | null;
   target: { id: string; name: string; platform: string } | null;
 };
 
-type CommentEntry = {
-  id: string;
-  commentText: string;
-  status: string;
-  scheduledAt: string | null;
-  resultUrl: string | null;
-  error: string | null;
-};
+const historyStatusOptions = [
+  ["all", "Tất cả trạng thái"],
+  ["published", "Đã đăng"],
+  ["success", "Thành công"]
+] as const;
 
-const platformLabel: Record<string, string> = {
-  facebook: "Facebook",
-  instagram: "Instagram",
-  threads: "Threads",
-  x: "X / Twitter",
-  "zalo-bot": "Zalo Bot",
-  "zalo-web": "Zalo Web",
-  telegram: "Telegram"
-};
-
-function truncate(text: string, max = 80): string {
-  return text.length <= max ? text : `${text.slice(0, max).trimEnd()}...`;
+function buildHistoryQuery(params: Record<string, string | number>) {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    const text = String(value);
+    if (text && text !== "all") search.set(key, text);
+  });
+  return search.toString();
 }
 
-function CommentList({ attemptId }: { attemptId: string }) {
-  const q = useQuery<{ comments: CommentEntry[] }>({
-    queryKey: ["history-comments", attemptId],
-    queryFn: () => apiGet(`/history/${attemptId}/comments`)
-  });
-
-  if (q.isLoading) return <div className="text-muted" style={{ fontSize: 13, padding: "6px 0" }}>Dang tai...</div>;
-  if (q.isError) return <div className="text-muted" style={{ fontSize: 13, padding: "6px 0" }}>Khong tai duoc comment.</div>;
-
-  const comments = q.data?.comments ?? [];
-  if (comments.length === 0) return <div className="text-muted" style={{ fontSize: 13, padding: "4px 0" }}>Khong co comment.</div>;
-
-  return (
-    <div className="stack-tight" style={{ gap: 6 }}>
-      {comments.map((c, idx) => (
-        <div key={c.id ?? idx} className="simple-row" style={{ padding: "8px 12px" }}>
-          <div className="simple-row-main">
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <StatusBadge status={c.status} />
-              <span className="text-muted" style={{ fontSize: 12 }}>
-                {c.scheduledAt ? new Date(c.scheduledAt).toLocaleString("vi-VN") : "-"}
-              </span>
-              {c.resultUrl && (
-                <a href={c.resultUrl} target="_blank" rel="noreferrer" className="text-muted" style={{ fontSize: 12 }}>xem</a>
-              )}
-            </div>
-            <div style={{ fontSize: 13, marginTop: 4 }}>{c.commentText}</div>
-            {c.error && <div style={{ color: "var(--color-danger)", fontSize: 12, marginTop: 2 }}>Loi: {c.error}</div>}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+function attemptToPost(attempt: AttemptRow): PostRow {
+  const content = attempt.content;
+  return {
+    id: `${content?.id ?? attempt.contentId}-${attempt.id}`,
+    code: content?.code ?? "-",
+    platform: attempt.target?.platform ?? content?.platform ?? "-",
+    status: attempt.status,
+    originalText: content?.originalText ?? "-",
+    draftText: content?.draftText,
+    finalText: content?.finalText,
+    metadata: content?.metadata,
+    media: content?.media,
+    links: content?.links,
+    commentQueues: content?.commentQueues,
+    comments: content?.comments,
+    publishAttempts: [{ ...attempt, target: attempt.target }],
+    source: content?.source ?? null,
+    scheduledAt: content?.scheduledAt,
+    postedAt: attempt.createdAt,
+    createdAt: attempt.createdAt,
+    updatedAt: content?.updatedAt ?? attempt.createdAt
+  };
 }
 
 export function HistoryPage() {
   const [page, setPage] = useState(1);
+  const [keyword, setKeyword] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [platformFilter, setPlatformFilter] = useState("all");
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [sortBy, setSortBy] = useState("createdAt");
+  const [sortOrder, setSortOrder] = useState("desc");
+  const [pageSize, setPageSize] = useState("20");
+  const queryString = buildHistoryQuery({ page, limit: pageSize, keyword, status: statusFilter, platform: platformFilter, sortBy, sortOrder });
 
-  const q = useQuery<{ attempts: AttemptRow[]; pagination?: any }>({
-    queryKey: ["history", page, statusFilter, platformFilter],
-    queryFn: () =>
-      apiGet(`/history?page=${page}&limit=20${statusFilter !== "all" ? `&status=${statusFilter}` : ""}${platformFilter !== "all" ? `&platform=${platformFilter}` : ""}`)
+  const query = useQuery<{ attempts: AttemptRow[]; pagination?: any }>({
+    queryKey: ["history", queryString],
+    queryFn: () => apiGet(`/history?${queryString}`)
   });
 
-  const attempts = q.data?.attempts ?? [];
-  const pagination = q.data?.pagination;
-
-  function toggleExpand(id: string) {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  }
+  const rows = useMemo(() => (query.data?.attempts ?? []).map(attemptToPost), [query.data?.attempts]);
+  const pagination = query.data?.pagination;
 
   return (
     <>
       <PageHeader
-        title="Lich su dang bai"
-        subtitle="Xem toan bo lan dang va comment kem theo."
-        actions={<Button variant="secondary" size="sm" icon={<RefreshCw size={13} />} onClick={() => q.refetch()}>Lam moi</Button>}
+        title="Lịch sử"
+        subtitle="Chỉ lưu các bài đã đăng thành công. Bài failed hoặc cần review nằm trong Kho lưu trữ."
+        actions={<Button variant="secondary" size="sm" icon={<RefreshCw aria-hidden />} onClick={() => query.refetch()}>Làm mới</Button>}
       />
 
-      <SectionCard title="Bo loc" description="">
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <div className="field">
-            <label className="form-label">Trang thai</label>
-            <select className="form-select" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}>
-              <option value="all">Tat ca</option>
-              <option value="success">Thanh cong</option>
-              <option value="failed">Loi</option>
-              <option value="running">Dang chay</option>
-            </select>
-          </div>
-          <div className="field">
-            <label className="form-label">Nen tang</label>
-            <select className="form-select" value={platformFilter} onChange={(e) => { setPlatformFilter(e.target.value); setPage(1); }}>
-              <option value="all">Tat ca</option>
-              <option value="facebook">Facebook</option>
-              <option value="instagram">Instagram</option>
-              <option value="threads">Threads</option>
-              <option value="x">X / Twitter</option>
-              <option value="zalo-bot">Zalo Bot</option>
-            </select>
-          </div>
-        </div>
-      </SectionCard>
+      <SectionCard title="Lịch sử" description={pagination ? `${pagination.total} bài đã đăng` : ""}>
+        <FilterToolbar actions={<Button variant="secondary" onClick={() => query.refetch()}>Áp dụng</Button>}>
+          <Input value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage(1); }} placeholder="Tìm mã bài, nội dung, tài khoản..." />
+          <Select value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value); setPage(1); }}>
+            {historyStatusOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </Select>
+          <Select value={platformFilter} onChange={(event) => { setPlatformFilter(event.target.value); setPage(1); }}>
+            <option value="all">Tất cả nền tảng</option>
+            <option value="facebook">Facebook</option>
+            <option value="instagram">Instagram</option>
+            <option value="threads">Threads</option>
+            <option value="telegram">Telegram</option>
+            <option value="x">X / Twitter</option>
+            <option value="zalo-bot">Zalo Bot</option>
+          </Select>
+          <Select value={sortBy} onChange={(event) => { setSortBy(event.target.value); setPage(1); }}>
+            <option value="createdAt">Sắp xếp theo thời gian</option>
+            <option value="code">Sắp xếp theo mã bài</option>
+            <option value="account">Sắp xếp theo tài khoản</option>
+            <option value="platform">Sắp xếp theo nền tảng</option>
+            <option value="status">Sắp xếp theo trạng thái</option>
+          </Select>
+          <Select value={sortOrder} onChange={(event) => { setSortOrder(event.target.value); setPage(1); }}>
+            <option value="desc">Giảm dần</option>
+            <option value="asc">Tăng dần</option>
+          </Select>
+          <Select value={pageSize} onChange={(event) => { setPageSize(event.target.value); setPage(1); }}>
+            <option value="10">10 dòng</option>
+            <option value="20">20 dòng</option>
+            <option value="50">50 dòng</option>
+            <option value="100">100 dòng</option>
+          </Select>
+        </FilterToolbar>
 
-      <SectionCard title="Lich su" description={pagination ? `${pagination.total} lan dang` : ""}>
-        {q.isLoading ? (
-          <div className="text-muted" style={{ padding: 16 }}>Dang tai...</div>
-        ) : attempts.length === 0 ? (
-          <EmptyState title="Chua co lich su" description="Cac lan dang bai se hien tai day sau khi he thong chay." />
-        ) : (
-          <table className="table table-compact">
-            <thead>
-              <tr>
-                <th style={{ width: 28 }} />
-                <th>Thoi gian</th>
-                <th>Ma bai</th>
-                <th>Tai khoan</th>
-                <th>Nen tang</th>
-                <th>Trang thai</th>
-                <th>Link / Loi</th>
-              </tr>
-            </thead>
-            <tbody>
-              {attempts.map((a) => (
-                <Fragment key={a.id}>
-                  <tr style={{ cursor: "pointer" }} onClick={() => toggleExpand(a.id)}>
-                    <td style={{ color: "#9ca3af", paddingRight: 4 }}>
-                      {expanded.has(a.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                    </td>
-                    <td style={{ fontSize: 12, whiteSpace: "nowrap" }}>{new Date(a.createdAt).toLocaleString("vi-VN")}</td>
-                    <td><code className="code-inline">{a.content?.code ?? "-"}</code></td>
-                    <td style={{ fontSize: 13 }}>{a.target?.name ?? "-"}</td>
-                    <td>
-                      {a.target?.platform ? <span className="table-tag">{platformLabel[a.target.platform] ?? a.target.platform}</span> : <span className="text-muted">-</span>}
-                    </td>
-                    <td><StatusBadge status={a.status} /></td>
-                    <td style={{ maxWidth: 220, fontSize: 12 }}>
-                      {a.resultUrl ? (
-                        <a href={a.resultUrl} target="_blank" rel="noreferrer">Xem bai</a>
-                      ) : a.error ? (
-                        <span style={{ color: "var(--color-danger)" }}>{truncate(a.error, 60)}</span>
-                      ) : (
-                        <span className="text-muted">-</span>
-                      )}
-                    </td>
-                  </tr>
-                  {expanded.has(a.id) && (
-                    <tr key={`${a.id}-comments`}>
-                      <td />
-                      <td colSpan={6} style={{ background: "var(--color-bg, #f9fafb)", padding: "10px 14px" }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--color-text-soft)", marginBottom: 8 }}>Comment</div>
-                        <CommentList attemptId={a.id} />
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
-        )}
+        <PostDataTable
+          rows={rows}
+          timeHeader="Thời gian đăng"
+          getTimeValue={(row) => row.postedAt ?? row.createdAt}
+          empty={<EmptyState title="Chưa có lịch sử" description="Bài đăng thành công sẽ xuất hiện ở đây." />}
+        />
 
-        {pagination && pagination.totalPages > 1 && (
+        {pagination && pagination.totalPages > 1 ? (
           <div className="actions" style={{ marginTop: 14 }}>
-            <Button variant="secondary" size="sm" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Trang truoc</Button>
+            <Button variant="secondary" size="sm" disabled={page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>Trang trước</Button>
             <span className="text-muted" style={{ fontSize: 13 }}>Trang {page} / {pagination.totalPages}</span>
-            <Button variant="secondary" size="sm" disabled={page >= pagination.totalPages} onClick={() => setPage((p) => p + 1)}>Trang sau</Button>
+            <Button variant="secondary" size="sm" disabled={page >= pagination.totalPages} onClick={() => setPage((current) => current + 1)}>Trang sau</Button>
           </div>
-        )}
+        ) : null}
       </SectionCard>
     </>
   );

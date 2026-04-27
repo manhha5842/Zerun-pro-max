@@ -1,167 +1,73 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
-import { CheckCircle2, Send, Upload, X } from "lucide-react";
-import { apiGet, apiPost } from "../api/client";
-import { EmptyState } from "../components/common/EmptyState";
+import { apiGet, apiPost, apiPostForm } from "../api/client";
+import { FileUploadDropzone } from "../components/common/FileUploadDropzone";
 import { PageHeader } from "../components/common/PageHeader";
 import { SectionCard } from "../components/common/SectionCard";
+import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Label } from "../components/ui/Label";
 import { Select } from "../components/ui/Select";
 import { Textarea } from "../components/ui/Textarea";
-import { Badge } from "../components/ui/Badge";
-import { getPlatformLabel, isSupportedTargetPlatform } from "../utils/platforms";
 
-type TargetAccount = {
+type Account = {
   id: string;
+  kind: "source" | "target";
   name: string;
   platform: string;
-  isActive: boolean;
   health: string;
-};
-
-type AccountResponse = {
-  accounts: Array<{
-    id: string;
-    kind: "source" | "target";
-    name: string;
-    platform: string;
-    isActive: boolean;
-    health: string;
-  }>;
+  isActive: boolean;
 };
 
 type UploadedFile = {
   filename: string;
   localPath: string;
   mimeType: string;
-  fileSize?: number;
 };
-
-type CreatePostResponse = {
-  post: {
-    id: string;
-    status: string;
-  };
-};
-
-type ContentResponse = {
-  content: {
-    code: string;
-  };
-};
-
-type PublishConfig = {
-  targetId: string;
-  mode: "now" | "schedule";
-  scheduledAt: string;
-};
-
-function isImageType(file: UploadedFile) {
-  return file.mimeType.startsWith("image/");
-}
-
-function isVideoType(file: UploadedFile) {
-  return file.mimeType.startsWith("video/");
-}
-
-const PLATFORM_BADGE_TONE: Record<string, "good" | "warn" | "neutral" | "danger"> = {
-  facebook: "good",
-  instagram: "warn",
-  threads: "neutral"
-};
-
-function validateMedia(platform: string, type: string, mediaFiles: UploadedFile[]): string | null {
-  if (platform === "facebook") {
-    if (type === "story" && (mediaFiles.length !== 1 || !mediaFiles.every(isImageType))) return "Facebook Story cần đúng 1 ảnh.";
-    if (type === "reel" && (mediaFiles.length !== 1 || !mediaFiles.every(isVideoType))) return "Facebook Reel cần đúng 1 video.";
-    return null;
-  }
-  if (platform === "instagram") {
-    if (type === "feed") return null;
-    if (type === "story" && (mediaFiles.length !== 1 || !mediaFiles.every(isImageType))) return "Instagram Story cần đúng 1 ảnh.";
-    if (type === "reel" && (mediaFiles.length !== 1 || !mediaFiles.every(isVideoType))) return "Instagram Reel cần đúng 1 video.";
-    return null;
-  }
-  if (platform === "threads") return null;
-  if (type === "story" && (mediaFiles.length !== 1 || !mediaFiles.every(isImageType))) return "Story cần đúng 1 ảnh.";
-  if (type === "reel" && (mediaFiles.length !== 1 || !mediaFiles.every(isVideoType))) return "Reel cần đúng 1 video.";
-  return null;
-}
-
-function allowedPostTypes(platform: string): Array<{ value: string; label: string }> {
-  if (platform === "threads") return [{ value: "feed", label: "Feed" }];
-  return [
-    { value: "feed", label: "Feed" },
-    { value: "story", label: "Story" },
-    { value: "reel", label: "Reel" }
-  ];
-}
-
-function mediaHint(platform: string, type: string): string {
-  if (platform === "threads") return "Threads: có thể đăng không cần media.";
-  if (platform === "facebook" && type === "story") return "Facebook Story: đúng 1 ảnh.";
-  if (platform === "instagram" && type === "story") return "Instagram Story: đúng 1 ảnh.";
-  if (type === "reel") return "Reel: đúng 1 video.";
-  return "Feed: có thể nhiều media.";
-}
 
 export function PostComposerPage() {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const commentFileInputRef = useRef<HTMLInputElement | null>(null);
-  const [form, setForm] = useState({ type: "feed", content: "", comment: "" });
-  const [publishConfig, setPublishConfig] = useState<PublishConfig>({ targetId: "", mode: "now", scheduledAt: "" });
+  const [tab, setTab] = useState<"manual" | "bulk">("manual");
+  const [manual, setManual] = useState({
+    targetId: "",
+    postType: "feed",
+    content: "",
+    includeFirstComment: false,
+    comment: "",
+    mode: "now",
+    scheduledAt: ""
+  });
   const [mediaFiles, setMediaFiles] = useState<UploadedFile[]>([]);
   const [commentMediaFiles, setCommentMediaFiles] = useState<UploadedFile[]>([]);
-  const [includeFirstComment, setIncludeFirstComment] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<{ postId: string; contentCode: string; mode: "now" | "schedule" } | null>(null);
+  const [bulkFile, setBulkFile] = useState<File | null>(null);
+  const [mediaZip, setMediaZip] = useState<File | null>(null);
+  const [bulk, setBulk] = useState({
+    targetId: "",
+    scheduleMode: "now",
+    scheduledAt: "",
+    caption: "caption",
+    mediaPaths: "media paths",
+    comments: "comments",
+    commentMediaPaths: "comment media paths",
+    scheduleTime: "schedule time",
+    postType: "post type"
+  });
 
   const accountsQuery = useQuery({
     queryKey: ["accounts"],
-    queryFn: () => apiGet<AccountResponse>("/accounts")
+    queryFn: () => apiGet<{ accounts: Account[] }>("/accounts")
   });
-
-  const targetAccounts = useMemo<TargetAccount[]>(() => {
-    return (accountsQuery.data?.accounts ?? [])
-      .filter((account) => account.kind === "target" && isSupportedTargetPlatform(account.platform))
-      .map((account) => ({
-        id: account.id,
-        name: account.name,
-        platform: account.platform,
-        isActive: account.isActive,
-        health: account.health
-      }));
-  }, [accountsQuery.data]);
-
-  const selectedAccount = useMemo(() => targetAccounts.find((account) => account.id === publishConfig.targetId) ?? null, [publishConfig.targetId, targetAccounts]);
-  const selectedPlatform = selectedAccount?.platform ?? "facebook";
-  const postTypeOptions = useMemo(() => allowedPostTypes(selectedPlatform), [selectedPlatform]);
-
-  useEffect(() => {
-    if (!selectedAccount) return;
-    if (selectedAccount.platform === "threads" && form.type !== "feed") {
-      setForm((current) => ({ ...current, type: "feed" }));
-      setMediaFiles([]);
-    }
-  }, [selectedAccount, form.type]);
+  const targets = useMemo(() => (accountsQuery.data?.accounts ?? []).filter((account) => account.kind === "target"), [accountsQuery.data]);
+  const selectedTarget = targets.find((target) => target.id === manual.targetId);
 
   const uploadMutation = useMutation({
     mutationFn: async ({ file, kind }: { file: File; kind: "post" | "comment" }) => {
       const body = new FormData();
       body.append("file", file);
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL ?? "/api/v1"}/uploads/manual`, {
-        method: "POST",
-        body,
-        credentials: "include"
-      });
-      const payload = await response.json();
-      if (!response.ok || !payload.success) throw new Error(payload.error?.message ?? "Upload thất bại");
-      return { file: payload.data.file as UploadedFile, kind };
+      const data = await apiPostForm<{ file: UploadedFile }>("/uploads/manual", body);
+      return { file: data.file, kind };
     },
     onSuccess: ({ file, kind }) => {
       if (kind === "post") setMediaFiles((current) => [...current, file]);
@@ -169,308 +75,178 @@ export function PostComposerPage() {
     }
   });
 
-  const submitMutation = useMutation({
+  const submitManualMutation = useMutation({
     mutationFn: async () => {
-      if (!form.content.trim()) throw new Error("Cần nhập nội dung bài đăng.");
-      if (!publishConfig.targetId) throw new Error("Cần chọn 1 tài khoản đăng.");
-      if (!selectedAccount) throw new Error("Không tìm thấy tài khoản đã chọn.");
-      if (publishConfig.mode === "schedule" && !publishConfig.scheduledAt) throw new Error("Đã chọn hẹn lịch nhưng chưa nhập thời gian.");
-      if (selectedAccount.platform === "threads" && form.type !== "feed") throw new Error(`Tài khoản Threads \"${selectedAccount.name}\" chỉ hỗ trợ feed.`);
-
-      const mediaError = validateMedia(selectedAccount.platform, form.type, mediaFiles);
-      if (mediaError) throw new Error(`[${getPlatformLabel(selectedAccount.platform)}] ${mediaError}`);
-
-      const hasScheduledTarget = publishConfig.mode === "schedule";
-      const isFacebookTarget = selectedAccount.platform === "facebook";
-      let fbPostId: string | undefined;
-      let scheduledAt: string | undefined;
-
-      if (isFacebookTarget) {
-        const created = await apiPost<CreatePostResponse>("/facebook/posts", {
-          type: form.type,
-          caption: form.content.trim(),
-          media: mediaFiles.map((file) => ({ localPath: file.localPath, mimeType: file.mimeType })),
-          comments: includeFirstComment && form.comment.trim()
-            ? [{ text: form.comment.trim(), delayMinutes: 5, media: commentMediaFiles.map((file) => file.localPath) }]
-            : [],
-          targets: [{
-            targetAccountId: selectedAccount.id,
-            scheduleMode: "fixed",
-            fixedTime: publishConfig.mode === "schedule" ? publishConfig.scheduledAt : undefined
-          }]
-        });
-        fbPostId = created.post.id;
-
-        const queued = await apiPost<{ scheduledAt: string }>(`/facebook/posts/${created.post.id}/queue`, {
-          mode: hasScheduledTarget ? "schedule" : "now",
-          targets: [{
-            targetId: selectedAccount.id,
-            mode: publishConfig.mode,
-            scheduledAt: publishConfig.mode === "schedule" ? publishConfig.scheduledAt : undefined
-          }]
-        });
-        scheduledAt = queued.scheduledAt;
-      }
-
-      const contentCreated = await apiPost<ContentResponse>("/contents/manual", {
-        originalText: form.content.trim(),
-        platform: selectedAccount.platform,
-        type: form.type,
-        comment: includeFirstComment ? form.comment.trim() || undefined : undefined,
+      if (!manual.targetId) throw new Error("Cần chọn tài khoản đăng.");
+      if (!manual.content.trim()) throw new Error("Cần nhập nội dung bài đăng.");
+      const target = targets.find((item) => item.id === manual.targetId);
+      const content = await apiPost<{ content: { code: string } }>("/contents/manual", {
+        originalText: manual.content.trim(),
+        platform: target?.platform ?? "manual",
+        type: manual.postType,
+        comment: manual.includeFirstComment ? manual.comment : undefined,
         mediaPaths: mediaFiles.map((file) => file.localPath),
-        commentMedia: includeFirstComment ? commentMediaFiles.map((file) => file.localPath) : [],
-        ...(fbPostId ? { fbPostId } : {}),
-        targetIds: [selectedAccount.id],
-        scheduledAt,
-        status: hasScheduledTarget ? "scheduled" : "publishing",
-        mode: hasScheduledTarget ? "schedule" : "now"
+        commentMedia: manual.includeFirstComment ? commentMediaFiles.map((file) => file.localPath) : [],
+        targetIds: [manual.targetId],
+        scheduledAt: manual.mode === "schedule" ? manual.scheduledAt : undefined,
+        status: manual.mode === "schedule" ? "scheduled" : "ready_to_publish",
+        mode: manual.mode
       });
-
-      if (!isFacebookTarget && !hasScheduledTarget) {
-        await apiPost<{ queued: boolean }>(`/contents/${contentCreated.content.code}/publish`, {
-          targetIds: [selectedAccount.id]
-        });
-      }
-
-      return {
-        postId: fbPostId ?? contentCreated.content.code,
-        contentCode: contentCreated.content.code,
-        mode: hasScheduledTarget ? "schedule" : "now"
-      } as const;
+      if (manual.mode === "now") await apiPost(`/contents/${content.content.code}/publish`, { targetIds: [manual.targetId] });
+      return content.content.code;
     },
-    onSuccess: async (data) => {
-      setResult(data);
-      await queryClient.invalidateQueries({ queryKey: ["contents"] });
-      navigate(`/contents/${data.contentCode}`);
+    onSuccess: (code) => navigate(`/contents/${code}`)
+  });
+
+  const submitBulkMutation = useMutation({
+    mutationFn: async () => {
+      if (!bulkFile) throw new Error("Cần chọn file Excel/CSV.");
+      if (!bulk.targetId) throw new Error("Cần chọn tài khoản đăng.");
+      const target = targets.find((item) => item.id === bulk.targetId);
+      const body = new FormData();
+      body.append("file", bulkFile);
+      if (mediaZip) body.append("mediaZip", mediaZip);
+      body.append("targetIds", JSON.stringify([bulk.targetId]));
+      body.append("platform", target?.platform ?? "manual");
+      body.append("scheduleMode", bulk.scheduleMode);
+      body.append("scheduledAt", bulk.scheduledAt);
+      body.append("mapping", JSON.stringify({
+        caption: bulk.caption,
+        mediaPaths: bulk.mediaPaths,
+        comments: bulk.comments,
+        commentMediaPaths: bulk.commentMediaPaths,
+        scheduleTime: bulk.scheduleTime,
+        postType: bulk.postType
+      }));
+      return apiPostForm<{ created: unknown[]; failed: unknown[]; total: number }>("/contents/bulk-import", body);
     },
-    onError: (mutationError) => {
-      setError(mutationError instanceof Error ? mutationError.message : "Không thể tạo bài đăng.");
-    }
+    onSuccess: () => navigate("/contents")
   });
 
   return (
     <>
       <PageHeader
-        title="Nhập bài đăng"
-        subtitle="Flow gọn: chọn 1 tài khoản, chọn loại bài, nhập nội dung, rồi chọn chế độ đăng."
-        actions={
-          <div className="actions">
-            <Link to="/contents">
-              <Button variant="secondary">Mở danh sách bài viết</Button>
-            </Link>
-            <Button variant="secondary" icon={<Upload aria-hidden />} onClick={() => void queryClient.invalidateQueries({ queryKey: ["accounts"] })}>
-              Làm mới tài khoản
-            </Button>
-          </div>
-        }
+        title="Tạo bài viết"
+        subtitle="Tạo thủ công một bài hoặc import hàng loạt Excel/CSV/media zip trong cùng flow đăng bài."
+        actions={<Link to="/contents"><Button variant="secondary">Mở danh sách bài viết</Button></Link>}
       />
 
-      {result ? (
-        <SectionCard className="mb-4" style={{ marginBottom: 16 }}>
-          <div className="field-success" role="status">
-            <CheckCircle2 aria-hidden size={14} />
-            <span>
-              Đã tạo bài đăng <strong>{result.postId}</strong>. Đang chuyển sang danh sách quản lý bài.
-            </span>
-          </div>
-        </SectionCard>
-      ) : null}
+      <div className="tabs">
+        <button type="button" className={tab === "manual" ? "active" : ""} onClick={() => setTab("manual")}>Tạo thủ công</button>
+        <button type="button" className={tab === "bulk" ? "active" : ""} onClick={() => setTab("bulk")}>Import hàng loạt</button>
+      </div>
 
-      {error ? (
-        <SectionCard className="mb-4" style={{ marginBottom: 16 }}>
-          <div className="field-error" role="alert">{error}</div>
-        </SectionCard>
-      ) : null}
-
-      <SectionCard title="Tạo bài đăng" className="composer-single-card">
-        {targetAccounts.length === 0 ? (
-          <EmptyState title="Chưa có tài khoản đăng bài nào" description="Hãy vào mục Tài khoản đăng bài để tạo account trước." />
-        ) : (
-          <div className="composer-flow-grid">
-            <div className="field compact-field full">
-              <Label htmlFor="target-account">Tài khoản đăng</Label>
-              <Select
-                id="target-account"
-                value={publishConfig.targetId}
-                onChange={(event) => {
-                  const nextTargetId = event.target.value;
-                  const nextAccount = targetAccounts.find((account) => account.id === nextTargetId) ?? null;
-                  setError(null);
-                  setPublishConfig((current) => ({ ...current, targetId: nextTargetId }));
-                  setMediaFiles([]);
-                  if (nextAccount?.platform === "threads") {
-                    setForm((current) => ({ ...current, type: "feed" }));
-                  }
-                }}
-              >
-                <option value="">Chọn 1 tài khoản</option>
-                {targetAccounts.map((account) => (
-                  <option key={account.id} value={account.id}>
-                    {account.name} · {getPlatformLabel(account.platform)} · {account.isActive ? "bật" : "tắt"}
-                  </option>
-                ))}
+      {tab === "manual" ? (
+        <SectionCard title="Tạo thủ công">
+          <div className="form-grid">
+            <label>
+              <Label>Account đăng</Label>
+              <Select value={manual.targetId} onChange={(event) => setManual((current) => ({ ...current, targetId: event.target.value }))}>
+                <option value="">Chọn tài khoản</option>
+                {targets.map((target) => <option key={target.id} value={target.id}>{target.name} · {target.platform}</option>)}
               </Select>
-              {selectedAccount ? (
-                <div className="composer-meta-row">
-                  <Badge tone={PLATFORM_BADGE_TONE[selectedAccount.platform] ?? "neutral"}>{getPlatformLabel(selectedAccount.platform)}</Badge>
-                  <span className="actions-note">Health: {selectedAccount.health}</span>
-                </div>
-              ) : null}
-            </div>
-
-            <div className="field compact-field">
-              <Label htmlFor="post-type">Loại bài đăng</Label>
-              <Select
-                id="post-type"
-                value={form.type}
-                onChange={(event) => {
-                  setError(null);
-                  setMediaFiles([]);
-                  setForm((current) => ({ ...current, type: event.target.value }));
-                }}
-                disabled={!selectedAccount}
-              >
-                {postTypeOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
+            </label>
+            <label>
+              <Label>Loại bài</Label>
+              <Select value={manual.postType} onChange={(event) => setManual((current) => ({ ...current, postType: event.target.value }))}>
+                <option value="feed">Feed</option>
+                <option value="story">Story</option>
+                <option value="reel">Reel</option>
               </Select>
+            </label>
+            <label className="span-2">
+              <Label>Nội dung</Label>
+              <Textarea value={manual.content} onChange={(event) => setManual((current) => ({ ...current, content: event.target.value }))} placeholder="Nhập caption tiếng Việt có dấu..." />
+            </label>
+            <div className="span-2">
+              <FileUploadDropzone label="Upload media bài viết" accept="image/*,video/*" multiple onChange={(files) => files.forEach((file) => uploadMutation.mutate({ file, kind: "post" }))} />
+              <div className="file-list">{mediaFiles.map((file) => <Badge key={file.localPath}>{file.filename}</Badge>)}</div>
             </div>
-
-            <div className="field compact-field">
-              <Label>Rule media</Label>
-              <div className="selection-summary">
-                <span>{mediaHint(selectedPlatform, form.type)}</span>
-              </div>
-            </div>
-
-            <div className="field full">
-              <Label htmlFor="post-content">Nội dung</Label>
-              <Textarea id="post-content" value={form.content} onChange={(event) => setForm((current) => ({ ...current, content: event.target.value }))} placeholder="Nhập nội dung bài đăng..." rows={6} className="composer-textarea" />
-            </div>
-
-            <div className="field full">
-              <div className="inline-head">
-                <Label>File đính kèm</Label>
-                <Button type="button" variant="secondary" size="sm" icon={<Upload aria-hidden />} onClick={() => fileInputRef.current?.click()} disabled={uploadMutation.isPending}>
-                  Tải file lên
-                </Button>
-              </div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple={form.type === "feed"}
-                accept={form.type === "reel" ? "video/*" : "image/*,video/*"}
-                style={{ display: "none" }}
-                onChange={(event) => {
-                  const files = Array.from(event.target.files ?? []);
-                  for (const file of files) uploadMutation.mutate({ file, kind: "post" });
-                  event.currentTarget.value = "";
-                }}
-              />
-              <div className="upload-list compact-two-col">
-                {mediaFiles.length === 0 ? <div className="upload-empty">Chưa có file media.</div> : null}
-                {mediaFiles.map((file, index) => (
-                  <div key={`${file.localPath}-${index}`} className="upload-item">
-                    <div>
-                      <strong>{file.filename}</strong>
-                      <small>{file.mimeType}</small>
-                    </div>
-                    <Button type="button" variant="ghost" size="icon" onClick={() => setMediaFiles((current) => current.filter((item) => item.localPath !== file.localPath))}>
-                      <X aria-hidden />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="field full composer-checkbox-row">
-              <label className="target-toggle">
-                <input
-                  type="checkbox"
-                  checked={includeFirstComment}
-                  onChange={(event) => {
-                    setIncludeFirstComment(event.target.checked);
-                    if (!event.target.checked) {
-                      setForm((current) => ({ ...current, comment: "" }));
-                      setCommentMediaFiles([]);
-                    }
-                  }}
-                />
-                <span>Thêm comment đầu tiên</span>
-              </label>
-            </div>
-
-            {includeFirstComment ? (
-              <>
-                <div className="field full">
-                  <Label htmlFor="post-comment">Comment đầu tiên</Label>
-                  <Textarea id="post-comment" value={form.comment} onChange={(event) => setForm((current) => ({ ...current, comment: event.target.value }))} rows={3} className="composer-textarea composer-textarea-sm" />
-                </div>
-
-                <div className="field full">
-                  <div className="inline-head">
-                    <Label>File đính kèm comment</Label>
-                    <Button type="button" variant="secondary" size="sm" icon={<Upload aria-hidden />} onClick={() => commentFileInputRef.current?.click()} disabled={uploadMutation.isPending}>
-                      Tải file lên
-                    </Button>
-                  </div>
-                  <input
-                    ref={commentFileInputRef}
-                    type="file"
-                    multiple
-                    accept="image/*,video/*"
-                    style={{ display: "none" }}
-                    onChange={(event) => {
-                      const files = Array.from(event.target.files ?? []);
-                      for (const file of files) uploadMutation.mutate({ file, kind: "comment" });
-                      event.currentTarget.value = "";
-                    }}
-                  />
-                  <div className="upload-list compact-two-col compact">
-                    {commentMediaFiles.length === 0 ? <div className="upload-empty">Chưa có media comment.</div> : null}
-                    {commentMediaFiles.map((file, index) => (
-                      <div key={`${file.localPath}-${index}`} className="upload-item">
-                        <div>
-                          <strong>{file.filename}</strong>
-                          <small>{file.mimeType}</small>
-                        </div>
-                        <Button type="button" variant="ghost" size="icon" onClick={() => setCommentMediaFiles((current) => current.filter((item) => item.localPath !== file.localPath))}>
-                          <X aria-hidden />
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </>
-            ) : null}
-
-            <div className="field compact-field">
-              <Label htmlFor="publish-mode">Chế độ đăng bài</Label>
-              <Select id="publish-mode" value={publishConfig.mode} onChange={(event) => setPublishConfig((current) => ({ ...current, mode: event.target.value as "now" | "schedule" }))}>
+            <label>
+              <Label>Comment đầu tiên</Label>
+              <Select value={manual.includeFirstComment ? "yes" : "no"} onChange={(event) => setManual((current) => ({ ...current, includeFirstComment: event.target.value === "yes" }))}>
+                <option value="no">Không dùng</option>
+                <option value="yes">Có comment đầu tiên</option>
+              </Select>
+            </label>
+            <label>
+              <Label>Giờ đăng</Label>
+              <Select value={manual.mode} onChange={(event) => setManual((current) => ({ ...current, mode: event.target.value }))}>
                 <option value="now">Đăng ngay</option>
                 <option value="schedule">Hẹn lịch</option>
               </Select>
-            </div>
-
-            <div className="field compact-field">
-              <Label htmlFor="publish-time">Thời gian</Label>
-              <Input
-                id="publish-time"
-                type="datetime-local"
-                value={publishConfig.scheduledAt}
-                disabled={publishConfig.mode !== "schedule"}
-                onChange={(event) => setPublishConfig((current) => ({ ...current, scheduledAt: event.target.value }))}
-              />
-            </div>
-
-            <div className="actions composer-actions full" style={{ marginTop: 8 }}>
-              <Button icon={<Send aria-hidden />} onClick={() => { setError(null); submitMutation.mutate(); }} disabled={!publishConfig.targetId || submitMutation.isPending || uploadMutation.isPending}>
-                {submitMutation.isPending ? "Đang xử lý..." : "Áp dụng"}
-              </Button>
-            </div>
+            </label>
+            {manual.includeFirstComment ? (
+              <>
+                <label className="span-2">
+                  <Label>Nội dung comment</Label>
+                  <Textarea value={manual.comment} onChange={(event) => setManual((current) => ({ ...current, comment: event.target.value }))} />
+                </label>
+                <div className="span-2">
+                  <FileUploadDropzone label="Upload media comment" accept="image/*,video/*" multiple onChange={(files) => files.forEach((file) => uploadMutation.mutate({ file, kind: "comment" }))} />
+                  <div className="file-list">{commentMediaFiles.map((file) => <Badge key={file.localPath}>{file.filename}</Badge>)}</div>
+                </div>
+              </>
+            ) : null}
+            {manual.mode === "schedule" ? (
+              <label>
+                <Label>Thời gian đăng</Label>
+                <Input type="datetime-local" value={manual.scheduledAt} onChange={(event) => setManual((current) => ({ ...current, scheduledAt: event.target.value }))} />
+              </label>
+            ) : null}
           </div>
-        )}
-      </SectionCard>
+          <div className="actions" style={{ marginTop: 16 }}>
+            <Button onClick={() => submitManualMutation.mutate()} disabled={submitManualMutation.isPending}>
+              {manual.mode === "now" ? "Submit và đăng ngay" : "Submit lịch đăng"}
+            </Button>
+            {selectedTarget ? <Badge>{selectedTarget.platform} · {selectedTarget.health}</Badge> : null}
+          </div>
+        </SectionCard>
+      ) : (
+        <SectionCard title="Import hàng loạt" description="Upload Excel/CSV và media zip, mapping cột rồi commit import lịch.">
+          <div className="form-grid">
+            <div>
+              <FileUploadDropzone label="Upload Excel/CSV" accept=".xlsx,.xls,.csv" onChange={(files) => setBulkFile(files[0] ?? null)} />
+              {bulkFile ? <p className="table-subtle">Đã chọn: {bulkFile.name}</p> : null}
+            </div>
+            <div>
+              <FileUploadDropzone label="Upload media zip optional" accept=".zip" onChange={(files) => setMediaZip(files[0] ?? null)} />
+              {mediaZip ? <p className="table-subtle">Đã chọn: {mediaZip.name}</p> : null}
+            </div>
+            <label>
+              <Label>Account đăng</Label>
+              <Select value={bulk.targetId} onChange={(event) => setBulk((current) => ({ ...current, targetId: event.target.value }))}>
+                <option value="">Chọn tài khoản</option>
+                {targets.map((target) => <option key={target.id} value={target.id}>{target.name} · {target.platform}</option>)}
+              </Select>
+            </label>
+            <label>
+              <Label>Schedule mode</Label>
+              <Select value={bulk.scheduleMode} onChange={(event) => setBulk((current) => ({ ...current, scheduleMode: event.target.value }))}>
+                <option value="now">Đăng ngay</option>
+                <option value="fixed">Giờ cố định</option>
+                <option value="spread">Rải lịch theo khoảng</option>
+                <option value="random">Random trong khoảng</option>
+              </Select>
+            </label>
+            {bulk.scheduleMode === "fixed" ? (
+              <label>
+                <Label>Giờ cố định</Label>
+                <Input type="datetime-local" value={bulk.scheduledAt} onChange={(event) => setBulk((current) => ({ ...current, scheduledAt: event.target.value }))} />
+              </label>
+            ) : null}
+            {(["caption", "mediaPaths", "comments", "commentMediaPaths", "scheduleTime", "postType"] as const).map((key) => (
+              <label key={key}>
+                <Label>{key}</Label>
+                <Input value={bulk[key]} onChange={(event) => setBulk((current) => ({ ...current, [key]: event.target.value }))} />
+              </label>
+            ))}
+          </div>
+          <div className="actions" style={{ marginTop: 16 }}>
+            <Button onClick={() => submitBulkMutation.mutate()} disabled={submitBulkMutation.isPending || !bulkFile}>Hoàn thành import lịch</Button>
+          </div>
+        </SectionCard>
+      )}
     </>
   );
 }

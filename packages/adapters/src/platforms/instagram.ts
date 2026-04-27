@@ -97,6 +97,10 @@ export class InstagramAdapter implements SourceAdapter, PublishAdapter {
   }
 
   async comment(input: CommentInput): Promise<CommentResult> {
+    if ((input.media?.length ?? 0) > 0) {
+      throw new Error("Instagram web comment does not support media attachments.");
+    }
+
     const { browser, context } = await this.openContext(input.account);
     try {
       const page = await context.newPage();
