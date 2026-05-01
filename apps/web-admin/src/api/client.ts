@@ -1,7 +1,7 @@
 import { mockApiRequest } from "./mockApi";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
-const USE_MOCK_API = import.meta.env.VITE_USE_MOCK_API !== "false";
+const USE_MOCK_API = import.meta.env.VITE_USE_MOCK_API === "true";
 
 export type ApiResult<T> = {
   success: boolean;

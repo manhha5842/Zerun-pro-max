@@ -15,14 +15,14 @@ import { compare, hash } from "bcryptjs";
 import * as XLSX from "xlsx";
 import { detectLinks } from "@zerun/core";
 import type { BrowserContext } from "playwright";
-import { prisma } from "@zerun/db";
-import { buildPagination, fail, ok, realtimeBus, type Platform } from "@zerun/shared";
+import { ensureDatabaseReady, prisma } from "@zerun/db";
+import { buildPagination, fail, ok, readDesktopRuntime, realtimeBus, updateDesktopRuntimeConfig, type Platform } from "@zerun/shared";
 import { createWorkerCore, type WorkerCore } from "@zerun/worker-core";
 import { config } from "./config.js";
 
 type AnyBody = Record<string, any>;
 
-type BrowserLoginPlatform = "facebook" | "instagram" | "threads";
+type BrowserLoginPlatform = "facebook" | "instagram" | "threads" | "x";
 
 type BrowserLoginSession = {
   id: string;
@@ -110,6 +110,7 @@ declare module "fastify" {
 }
 
 export async function buildApp(): Promise<FastifyInstance> {
+  await ensureDatabaseReady();
   const app = Fastify({ logger: false });
   const workerCore = await createWorkerCore({ redisUrl: config.REDIS_URL });
 
@@ -233,12 +234,11 @@ async function registerProtectedRoutes(app: FastifyInstance) {
   app.get("/dashboard/stats", async () => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const [totalContents, pendingJobs, publishedToday, failedJobs, sources, targets] = await Promise.all([
+    const [totalContents, pendingJobs, publishedToday, failedJobs, targets] = await Promise.all([
       prisma.content.count(),
       prisma.content.count({ where: { status: { in: ["waiting_link_convert", "waiting_manual_convert", "ready_to_publish", "scheduled", "publishing"] } } }),
       prisma.content.count({ where: { status: "published", updatedAt: { gte: today } } }),
       prisma.content.count({ where: { status: "failed" } }),
-      prisma.sourceAccount.findMany({ select: { id: true, name: true, platform: true, health: true, isActive: true } }),
       prisma.targetAccount.findMany({ select: { id: true, name: true, platform: true, health: true, isActive: true } })
     ]);
     return ok({
@@ -246,7 +246,7 @@ async function registerProtectedRoutes(app: FastifyInstance) {
       pendingJobs,
       publishedToday,
       failedJobs,
-      platformHealth: [...sources, ...targets]
+      platformHealth: targets
     });
   });
 
@@ -580,6 +580,30 @@ function registerSettingSection(app: FastifyInstance, route: string, key: string
 }
 
 function registerExtendedSettingsRoutes(app: FastifyInstance) {
+  app.get("/settings/runtime", async () => ok({ runtime: formatRuntimeSettings(readDesktopRuntime()) }));
+
+  app.put("/settings/runtime", async (request) => {
+    const body = request.body as AnyBody;
+    const server = (body.server ?? {}) as AnyBody;
+    const tunnel = (body.tunnel ?? {}) as AnyBody;
+    const exposeLan = readRuntimeBoolean(server.exposeLan ?? server.expose_lan, false);
+    const port = Math.max(1, Math.min(65535, Number(server.port ?? 3000)));
+    const runtime = updateDesktopRuntimeConfig({
+      server: {
+        port,
+        exposeLan,
+        host: String(server.host ?? (exposeLan ? "0.0.0.0" : "127.0.0.1"))
+      },
+      tunnel: {
+        enabled: readRuntimeBoolean(tunnel.enabled, false),
+        provider: String(tunnel.provider ?? "cloudflare"),
+        token: String(tunnel.token ?? ""),
+        publicUrl: String(tunnel.publicUrl ?? tunnel.public_url ?? "")
+      }
+    });
+    return ok({ saved: true, restartRequired: true, runtime: formatRuntimeSettings(runtime) });
+  });
+
   registerSettingSection(app, "/settings/ai", "ai_settings", {
     provider: "",
     apiKey: "",
@@ -605,6 +629,26 @@ function registerExtendedSettingsRoutes(app: FastifyInstance) {
       provider: body.provider ?? "manual"
     });
   });
+}
+
+function formatRuntimeSettings(runtime: ReturnType<typeof readDesktopRuntime>) {
+  return {
+    appId: runtime.appId,
+    appDataDir: runtime.appDataDir,
+    configPath: runtime.configPath,
+    dbPath: runtime.dbPath,
+    databaseUrl: runtime.databaseUrl,
+    server: runtime.config.server,
+    tunnel: runtime.config.tunnel,
+    storage: runtime.config.storage
+  };
+}
+
+function readRuntimeBoolean(value: unknown, fallback: boolean) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") return value === "true" || value === "1" || value === "on";
+  if (typeof value === "number") return value !== 0;
+  return fallback;
 }
 
 function registerTelegramSettingsRoutes(app: FastifyInstance) {
@@ -699,6 +743,27 @@ function normalizePathList(value: unknown) {
   if (Array.isArray(value)) return uniqueStrings(value.map(String));
   if (typeof value === "string") return parseJsonArray(value);
   return [];
+}
+
+function normalizeThreadsMetadata(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const topicTag = typeof raw.topicTag === "string" ? raw.topicTag.trim().replace(/^#/, "") : "";
+  const linkPreviewMode = ["default", "remove_preview", "move_links_to_comment"].includes(String(raw.linkPreviewMode))
+    ? String(raw.linkPreviewMode)
+    : undefined;
+  const spoilerMode = ["none", "all_text"].includes(String(raw.spoilerMode)) ? String(raw.spoilerMode) : undefined;
+  const replyControl = ["everyone", "accounts_you_follow", "mentioned_only"].includes(String(raw.replyControl)) ? String(raw.replyControl) : undefined;
+  const normalized = {
+    ...(topicTag ? { topicTag } : {}),
+    ...(linkPreviewMode ? { linkPreviewMode } : {}),
+    ...(spoilerMode ? { spoilerMode } : {}),
+    ...(replyControl ? { replyControl } : {}),
+    ...(typeof raw.spoilerMedia === "boolean" ? { spoilerMedia: raw.spoilerMedia } : {}),
+    ...(typeof raw.ghostPost === "boolean" ? { ghostPost: raw.ghostPost } : {}),
+    ...(typeof raw.enableReplyApprovals === "boolean" ? { enableReplyApprovals: raw.enableReplyApprovals } : {})
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 function mediaAssetCreatesFromPaths(mediaPaths: string[], source: string, postType?: string) {
@@ -847,6 +912,7 @@ function registerContentRoutes(app: FastifyInstance) {
     const mediaPaths = normalizePathList(body.mediaPaths);
     const commentMedia = normalizePathList(body.commentMedia);
     const postType = body.type ? String(body.type) : "feed";
+    const threads = normalizeThreadsMetadata(body.threads);
     const scheduledAt = parseDateInput(body.scheduledAt);
     if (body.scheduledAt && !scheduledAt) {
       return { statusCode: 400, ...fail("INVALID_SCHEDULE", "Thời gian hẹn đăng không hợp lệ.") };
@@ -875,6 +941,7 @@ function registerContentRoutes(app: FastifyInstance) {
           comment: body.comment ? String(body.comment) : undefined,
           commentMedia,
           mediaPaths,
+          ...(threads ? { threads } : {}),
           fbPostId: body.fbPostId ? String(body.fbPostId) : undefined,
           manualMode: body.mode ? String(body.mode) : undefined
         },
@@ -989,7 +1056,11 @@ function registerContentRoutes(app: FastifyInstance) {
       comments: "comments",
       commentMediaPaths: "comment media paths",
       scheduleTime: "schedule time",
-      postType: "post type"
+      postType: "post type",
+      threadsTopic: "threads topic",
+      threadsLinkPreviewMode: "threads link preview mode",
+      threadsSpoilerMode: "threads spoiler mode",
+      threadsSpoilerMedia: "threads spoiler media"
     });
     const targetIds = parseJsonArray(payload.fields.targetIds);
     if (targetIds.length === 0) return reply.code(400).send(fail("TARGET_REQUIRED", "Cần chọn ít nhất một tài khoản đăng."));
@@ -1017,6 +1088,13 @@ function registerContentRoutes(app: FastifyInstance) {
         const comment = getRowValue(row, [String(mapping.comments ?? "comments"), "comments", "comment"]);
         const commentMedia = getRowValue(row, [String(mapping.commentMediaPaths ?? "comment media paths"), "comment media paths", "commentMedia"]).split(/[,\n;]/).map((item) => item.trim()).filter(Boolean);
         const postType = getRowValue(row, [String(mapping.postType ?? "post type"), "post type", "type"]) || "feed";
+        const threadsSpoilerMedia = getRowValue(row, [String(mapping.threadsSpoilerMedia ?? "threads spoiler media"), "threads spoiler media", "spoilerMedia"]);
+        const threads = normalizeThreadsMetadata({
+          topicTag: getRowValue(row, [String(mapping.threadsTopic ?? "threads topic"), "threads topic", "topic", "topicTag"]),
+          linkPreviewMode: getRowValue(row, [String(mapping.threadsLinkPreviewMode ?? "threads link preview mode"), "threads link preview mode", "linkPreviewMode"]),
+          spoilerMode: getRowValue(row, [String(mapping.threadsSpoilerMode ?? "threads spoiler mode"), "threads spoiler mode", "spoilerMode"]),
+          ...(threadsSpoilerMedia ? { spoilerMedia: parseBooleanInput(threadsSpoilerMedia) } : {})
+        });
 
         const content = await prisma.content.create({
           data: {
@@ -1031,6 +1109,7 @@ function registerContentRoutes(app: FastifyInstance) {
               mediaPaths,
               comment,
               commentMedia,
+              ...(threads ? { threads } : {}),
               bulkImport: true
             },
             ...(mediaPaths.length > 0 ? { media: { create: mediaAssetCreatesFromPaths(mediaPaths, "bulk_import", postType) } } : {})
@@ -1087,7 +1166,8 @@ function registerContentRoutes(app: FastifyInstance) {
       ...baseMetadata,
       ...(body.type !== undefined ? { type: String(body.type) } : {}),
       ...(body.comment !== undefined ? { comment: String(body.comment) } : {}),
-      ...(body.mediaPaths !== undefined ? { mediaPaths: normalizePathList(body.mediaPaths) } : {})
+      ...(body.mediaPaths !== undefined ? { mediaPaths: normalizePathList(body.mediaPaths) } : {}),
+      ...(body.threads !== undefined ? { threads: normalizeThreadsMetadata(body.threads) ?? {} } : {})
     };
     const nextTargetIds = Array.isArray(body.targetIds) ? body.targetIds.map(String) : current.scheduledTargets;
     const nextPostType = String(nextMetadata.type ?? "feed");
@@ -1309,6 +1389,105 @@ function parseJsonObject(value: unknown, fallback: Record<string, unknown> = {})
   }
 }
 
+function parseBooleanInput(value: unknown, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "string") return !["false", "0", "no", "off"].includes(value.trim().toLowerCase());
+  return Boolean(value);
+}
+
+function normalizeSourcePlatform(value: unknown) {
+  const platform = String(value ?? "").trim().toLowerCase();
+  return platform === "website" ? "web" : platform;
+}
+
+function crawlPlatformRequiresAccount(platform: string) {
+  return platform !== "web";
+}
+
+function readCrawlAccountId(body: AnyBody) {
+  const accountId = body.accountId ?? body.crawlAccountId ?? body.loginAccountId;
+  return accountId ? String(accountId).trim() : "";
+}
+
+async function resolveCrawlAccountId(sourcePlatform: string, body: AnyBody): Promise<{ accountId: string | null } | { error: { statusCode: number; code: string; message: string } }> {
+  if (!crawlPlatformRequiresAccount(sourcePlatform)) return { accountId: null };
+
+  const explicitAccountId = readCrawlAccountId(body);
+  if (explicitAccountId) {
+    const account = await prisma.targetAccount.findUnique({ where: { id: explicitAccountId } });
+    if (!account) {
+      return { error: { statusCode: 404, code: "ACCOUNT_NOT_FOUND", message: "Không tìm thấy tài khoản dùng để crawl." } };
+    }
+    if (account.platform !== sourcePlatform) {
+      return { error: { statusCode: 400, code: "ACCOUNT_PLATFORM_MISMATCH", message: `Tài khoản crawl phải cùng nền tảng ${sourcePlatform}.` } };
+    }
+    if (!account.isActive || ["paused", "failed"].includes(account.health)) {
+      return { error: { statusCode: 400, code: "ACCOUNT_NOT_READY", message: "Tài khoản dùng để crawl đang tắt, lỗi hoặc bị tạm dừng." } };
+    }
+    return { accountId: account.id };
+  }
+
+  const candidates = await prisma.targetAccount.findMany({
+    where: { platform: sourcePlatform, isActive: true },
+    orderBy: { updatedAt: "desc" }
+  });
+  const account = candidates.find((item) => !["paused", "failed"].includes(item.health));
+  if (!account) {
+    return {
+      error: {
+        statusCode: 400,
+        code: "NO_CRAWL_ACCOUNT",
+        message: `Cần có ít nhất một tài khoản ${sourcePlatform} đang hoạt động để crawl nguồn này.`
+      }
+    };
+  }
+  return { accountId: account.id };
+}
+
+function buildTargetAccountPayload(body: AnyBody, partial = false): Prisma.TargetAccountUncheckedCreateInput | Prisma.TargetAccountUncheckedUpdateInput {
+  const data: AnyBody = {};
+  const assign = (key: string, value: unknown) => {
+    if (!partial || value !== undefined) data[key] = value;
+  };
+  const requestedPlatform = String(body.platform ?? "").trim();
+
+  assign("platform", body.platform !== undefined ? String(body.platform).trim() : undefined);
+  assign("name", body.name !== undefined ? String(body.name).trim() : undefined);
+  assign("handle", body.handle !== undefined ? String(body.handle).trim() || null : undefined);
+  assign("isActive", body.isActive !== undefined ? parseBooleanInput(body.isActive, true) : undefined);
+  assign("health", body.health !== undefined ? String(body.health).trim() || "unknown" : undefined);
+  assign("credentials", body.credentials !== undefined ? parseJsonObject(body.credentials) : undefined);
+  assign("config", body.config !== undefined ? parseJsonObject(body.config) : undefined);
+
+  if (!partial) {
+    data.platform = String(body.platform ?? "facebook").trim();
+    data.name = String(body.name ?? "").trim();
+    data.handle = body.handle !== undefined ? String(body.handle).trim() || null : null;
+    data.isActive = parseBooleanInput(body.isActive, true);
+    data.health = String(body.health ?? "unknown").trim() || "unknown";
+    data.credentials = parseJsonObject(body.credentials);
+    data.config = parseJsonObject(body.config);
+  }
+
+  const resolvedPlatform = String(data.platform ?? requestedPlatform).trim();
+  if (["facebook", "instagram", "threads", "x"].includes(resolvedPlatform)) {
+    if (!partial || body.credentials !== undefined) data.credentials = {};
+    if (!partial || body.config !== undefined) data.config = {};
+  }
+
+  return data;
+}
+
+function omitSessionPathFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(omitSessionPathFields);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => key !== "authPath" && key !== "sessionDir" && key !== "cookiePath")
+      .map(([key, item]) => [key, omitSessionPathFields(item)])
+  );
+}
+
 function classifyLinkNetwork(url: string, detectedNetwork?: string) {
   const normalized = url.toLowerCase();
   if (normalized.includes("shopee.")) return "shopee";
@@ -1349,7 +1528,7 @@ function buildAutoRulePayload(body: AnyBody, partial = false): Prisma.AutoConver
   assign("description", body.description !== undefined ? String(body.description) : undefined);
   assign("enabled", body.enabled !== undefined ? Boolean(body.enabled) : undefined);
   assign("sourcePlatform", body.sourcePlatform !== undefined ? String(body.sourcePlatform) : undefined);
-  assign("sourceAccountId", body.sourceAccountId ? String(body.sourceAccountId) : null);
+  assign("sourceAccountId", body.sourceAccountId !== undefined ? null : undefined);
   assign("sourceRef", body.sourceRef !== undefined ? String(body.sourceRef) : undefined);
   assign("triggerMode", body.triggerMode !== undefined ? String(body.triggerMode) : undefined);
   assign("pollingIntervalMinutes", body.pollingIntervalMinutes !== undefined ? Number(body.pollingIntervalMinutes) : undefined);
@@ -1612,15 +1791,20 @@ function registerAutoConversionRoutes(app: FastifyInstance) {
 function registerCrawlRoutes(app: FastifyInstance) {
   app.post("/crawl-jobs", async (request, reply) => {
     const body = request.body as AnyBody;
-    const sourcePlatform = String(body.sourcePlatform ?? body.platform ?? "").trim();
+    const sourcePlatform = normalizeSourcePlatform(body.sourcePlatform ?? body.platform);
     const sourceRef = String(body.sourceRef ?? "").trim();
     if (!sourcePlatform || !sourceRef) return reply.code(400).send(fail("BAD_REQUEST", "Cần nhập nền tảng và nguồn crawl."));
+
+    const accountResolution = await resolveCrawlAccountId(sourcePlatform, body);
+    if ("error" in accountResolution) {
+      return reply.code(accountResolution.error.statusCode).send(fail(accountResolution.error.code, accountResolution.error.message));
+    }
 
     const job = await prisma.crawlJob.create({
       data: {
         sourcePlatform,
         sourceRef,
-        accountId: body.accountId ? String(body.accountId) : undefined,
+        accountId: accountResolution.accountId ?? undefined,
         status: "pending",
         options: parseJsonObject(body.options) as Prisma.InputJsonValue,
         storageConfig: parseJsonObject(body.storageConfig) as Prisma.InputJsonValue,
@@ -1628,7 +1812,16 @@ function registerCrawlRoutes(app: FastifyInstance) {
         createdBy: "admin"
       }
     });
-    await prisma.workerJobLog.create({ data: { queueName: "crawl", jobName: "crawl-job-run", jobId: job.id, status: "queued", payload: { crawlJobId: job.id } } });
+    await app.workerCore.runCrawlJob(job.id);
+    await prisma.workerJobLog.create({
+      data: {
+        queueName: "crawl",
+        jobName: "crawl-job-run",
+        jobId: job.id,
+        status: "queued",
+        payload: { crawlJobId: job.id, accountId: job.accountId }
+      }
+    });
     return ok({ crawlJob: job });
   });
 
@@ -1669,9 +1862,24 @@ function registerCrawlRoutes(app: FastifyInstance) {
 
   app.post("/crawl-jobs/:id/retry", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const crawlJob = await prisma.crawlJob.update({ where: { id }, data: { status: "pending", error: null } }).catch(() => null);
-    if (!crawlJob) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy lịch sử crawl."));
-    await prisma.workerJobLog.create({ data: { queueName: "crawl", jobName: "crawl-job-run", jobId: id, status: "queued", payload: { retry: true } } });
+    const current = await prisma.crawlJob.findUnique({ where: { id } });
+    if (!current) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy lịch sử crawl."));
+
+    let accountId = current.accountId;
+    if (!accountId) {
+      const accountResolution = await resolveCrawlAccountId(current.sourcePlatform, {});
+      if ("error" in accountResolution) {
+        return reply.code(accountResolution.error.statusCode).send(fail(accountResolution.error.code, accountResolution.error.message));
+      }
+      accountId = accountResolution.accountId;
+    }
+
+    const crawlJob = await prisma.crawlJob.update({
+      where: { id },
+      data: { status: "pending", error: null, startedAt: null, completedAt: null, accountId }
+    });
+    await app.workerCore.runCrawlJob(id);
+    await prisma.workerJobLog.create({ data: { queueName: "crawl", jobName: "crawl-job-run", jobId: id, status: "queued", payload: { retry: true, accountId } } });
     return ok({ queued: true });
   });
 
@@ -1786,17 +1994,16 @@ async function createContentFromCrawlResult(result: CrawlResult) {
 }
 
 function registerSourceRoutes(app: FastifyInstance) {
-  app.get("/sources", async () => ok({ sources: await prisma.sourceAccount.findMany({ orderBy: { createdAt: "desc" } }) }));
-  app.post("/sources", async (request) => ok({ source: await prisma.sourceAccount.create({ data: request.body as any }) }));
-  app.put("/sources/:id", async (request) => ok({ source: await prisma.sourceAccount.update({ where: request.params as { id: string }, data: request.body as any }) }));
-  app.delete("/sources/:id", async (request) => {
-    await prisma.sourceAccount.delete({ where: request.params as { id: string } });
-    return ok({ success: true });
+  const deprecatedMessage = "Nguồn crawl không phải tài khoản của user. Hãy nhập link nguồn ở /crawl-jobs hoặc cấu hình Auto-conversion.";
+
+  app.get("/sources", async () => ok({ sources: [], deprecated: true, message: deprecatedMessage }));
+  app.post("/sources", async (_request, reply) => reply.code(410).send(fail("SOURCE_ACCOUNTS_DEPRECATED", deprecatedMessage)));
+  app.put("/sources/:id", async (_request, reply) => reply.code(410).send(fail("SOURCE_ACCOUNTS_DEPRECATED", deprecatedMessage)));
+  app.delete("/sources/:id", async (_request, reply) => {
+    return reply.code(410).send(fail("SOURCE_ACCOUNTS_DEPRECATED", deprecatedMessage));
   });
-  app.post("/sources/:id/crawl", async (request) => {
-    const { id } = request.params as { id: string };
-    await app.workerCore.triggerCrawl(id, "admin");
-    return ok({ queued: true });
+  app.post("/sources/:id/crawl", async (_request, reply) => {
+    return reply.code(410).send(fail("SOURCE_ACCOUNTS_DEPRECATED", deprecatedMessage));
   });
   app.get("/sources/:id/logs", async (request) => {
     const { id } = request.params as { id: string };
@@ -1804,12 +2011,72 @@ function registerSourceRoutes(app: FastifyInstance) {
   });
 }
 
+async function deleteTargetAccountCascade(app: FastifyInstance, id: string) {
+  const target = await prisma.targetAccount.findUnique({ where: { id } });
+  if (!target) return null;
+
+  const schedules = await prisma.schedule.findMany({ where: { targetId: id }, select: { id: true, contentId: true } });
+  await Promise.all(schedules.map((schedule) => removeScheduleQueueJobs(app, schedule.id).catch(() => undefined)));
+
+  await Promise.all(
+    [...browserLoginSessions.entries()]
+      .filter(([, session]) => session.accountId === id)
+      .map(async ([sessionId, session]) => {
+        await session.browserContext?.close().catch(() => undefined);
+        browserLoginSessions.delete(sessionId);
+      })
+  );
+
+  const deleted = await prisma.$transaction(async (tx) => {
+    const fbTargets = await tx.fbPostTarget.findMany({ where: { targetAccountId: id }, select: { id: true } });
+    const fbTargetIds = fbTargets.map((item) => item.id);
+
+    if (fbTargetIds.length > 0) {
+      await tx.fbExecution.updateMany({ where: { targetId: { in: fbTargetIds } }, data: { targetId: null } });
+      await tx.fbPostTarget.deleteMany({ where: { id: { in: fbTargetIds } } });
+    }
+
+    await tx.platformSession.deleteMany({ where: { accountKind: "target", accountId: id } });
+    await tx.routingRule.deleteMany({ where: { targetId: id } });
+    await tx.schedule.deleteMany({ where: { targetId: id } });
+    await tx.commentQueue.deleteMany({ where: { targetId: id } });
+    await tx.publishAttempt.deleteMany({ where: { targetId: id } });
+
+    return tx.targetAccount.delete({ where: { id } });
+  });
+
+  await Promise.all([...new Set(schedules.map((schedule) => schedule.contentId))].map((contentId) => syncContentScheduleSummary(contentId).catch(() => undefined)));
+  return deleted;
+}
+
 function registerTargetRoutes(app: FastifyInstance) {
   app.get("/targets", async () => ok({ targets: await prisma.targetAccount.findMany({ orderBy: { createdAt: "desc" } }) }));
-  app.post("/targets", async (request) => ok({ target: await prisma.targetAccount.create({ data: request.body as any }) }));
-  app.put("/targets/:id", async (request) => ok({ target: await prisma.targetAccount.update({ where: request.params as { id: string }, data: request.body as any }) }));
-  app.delete("/targets/:id", async (request) => {
-    await prisma.targetAccount.delete({ where: request.params as { id: string } });
+  app.post("/targets", async (request, reply) => {
+    const data = buildTargetAccountPayload(request.body as AnyBody) as Prisma.TargetAccountUncheckedCreateInput;
+    if (!String(data.name ?? "").trim() || !String(data.platform ?? "").trim()) {
+      return reply.code(400).send(fail("BAD_REQUEST", "Cần nhập tên và nền tảng tài khoản."));
+    }
+    return ok({ target: await prisma.targetAccount.create({ data }) });
+  });
+  app.put("/targets/:id", async (request, reply) => {
+    const current = await prisma.targetAccount.findUnique({ where: request.params as { id: string }, select: { platform: true } });
+    if (!current) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy tài khoản đăng."));
+    const target = await prisma.targetAccount.update({
+      where: request.params as { id: string },
+      data: buildTargetAccountPayload({ ...(request.body as AnyBody), platform: (request.body as AnyBody).platform ?? current.platform }, true) as Prisma.TargetAccountUncheckedUpdateInput
+    }).catch(() => null);
+    if (!target) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy tài khoản đăng."));
+    return ok({ target });
+  });
+  app.delete("/targets/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    let target;
+    try {
+      target = await deleteTargetAccountCascade(app, id);
+    } catch {
+      return reply.code(500).send(fail("TARGET_DELETE_FAILED", "Không thể xóa tài khoản vì vẫn còn dữ liệu liên quan. Hãy thử tải lại trang rồi xóa lại."));
+    }
+    if (!target) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy tài khoản đăng."));
     return ok({ success: true });
   });
   app.get("/targets/:id/logs", async (request) => {
@@ -2062,12 +2329,13 @@ async function createSchedule(request: FastifyRequest, reply: FastifyReply, app:
   return ok({ schedules });
 }
 
-type BrowserPlatform = "facebook" | "instagram" | "threads";
+type BrowserPlatform = BrowserLoginPlatform;
 
 const PLATFORM_SESSION_ROOTS: Record<BrowserPlatform, string> = {
   facebook: config.FACEBOOK_SESSION_ROOT,
   instagram: config.INSTAGRAM_SESSION_ROOT,
-  threads: config.THREADS_SESSION_ROOT
+  threads: config.THREADS_SESSION_ROOT,
+  x: config.X_SESSION_ROOT
 };
 
 async function inspectPersistedBrowserAccountHealth(app: FastifyInstance, account: AnyBody, platform: BrowserPlatform) {
@@ -2077,7 +2345,7 @@ async function inspectPersistedBrowserAccountHealth(app: FastifyInstance, accoun
   const sessionDir = typeof credentials.sessionDir === "string" ? credentials.sessionDir : undefined;
   const hasSessionFile = existsSync(authPath);
 
-  const platformLabel = platform === "facebook" ? "Facebook" : platform === "instagram" ? "Instagram" : "Threads";
+  const platformLabel = platform === "facebook" ? "Facebook" : platform === "instagram" ? "Instagram" : platform === "threads" ? "Threads" : "X";
 
   if (!hasSessionFile) {
     return {
@@ -2132,36 +2400,44 @@ function inspectPersistedFacebookAccountHealth(app: FastifyInstance, account: An
 
 function registerAccountRoutes(app: FastifyInstance) {
   app.get("/accounts", async () => {
-    const [sources, targets, persistedSessions] = await Promise.all([
-      prisma.sourceAccount.findMany(),
-      prisma.targetAccount.findMany(),
-      prisma.platformSession.findMany({ where: { platform: { in: ["facebook", "instagram", "threads"] }, accountKind: "target" } })
+    const [targets, persistedSessions] = await Promise.all([
+      prisma.targetAccount.findMany({ orderBy: { createdAt: "desc" } }),
+      prisma.platformSession.findMany({ where: { platform: { in: ["facebook", "instagram", "threads", "x"] }, accountKind: "target" } })
     ]);
     const persistedByAccountId = new Map(persistedSessions.map((session) => [session.accountId, session]));
     return ok({
-      accounts: [
-        ...sources.map((account) => ({ ...account, kind: "source" })),
-        ...targets.map((account) => ({
-          ...account,
+      accounts: targets.map((account) => {
+        const { credentials: _credentials, config: _config, ...publicAccount } = account;
+        return {
+          ...publicAccount,
           kind: "target",
-          sessionState: ["facebook", "instagram", "threads"].includes(account.platform) ? persistedByAccountId.get(account.id)?.data ?? null : null
-        }))
-      ]
+          sessionState: ["facebook", "instagram", "threads", "x"].includes(account.platform) ? omitSessionPathFields(persistedByAccountId.get(account.id)?.data) ?? null : null
+        };
+      })
     });
   });
-  app.put("/accounts/:id", async (request) => {
+  app.put("/accounts/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = request.body as AnyBody;
-    const updated =
-      body.kind === "source"
-        ? await prisma.sourceAccount.update({ where: { id }, data: body })
-        : await prisma.targetAccount.update({ where: { id }, data: body });
-    return ok({ account: updated });
+    if (body.kind === "source") {
+      return reply.code(410).send(fail("SOURCE_ACCOUNTS_DEPRECATED", "Quản lý tài khoản chỉ áp dụng cho tài khoản đăng của user."));
+    }
+    const updated = await prisma.targetAccount.update({
+      where: { id },
+      data: buildTargetAccountPayload(body, true) as Prisma.TargetAccountUncheckedUpdateInput
+    }).catch(() => null);
+    if (!updated) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy tài khoản đăng."));
+    return ok({ account: { ...updated, kind: "target" } });
   });
-  app.post("/accounts/:id/test", async (request) => {
+  app.post("/accounts/:id/test", async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = request.body as AnyBody;
-    await app.workerCore.testAccount(id, body.kind === "source" ? "source" : "target");
+    if (body.kind === "source") {
+      return reply.code(410).send(fail("SOURCE_ACCOUNTS_DEPRECATED", "Không test tài khoản nguồn ở trang Quản lý tài khoản."));
+    }
+    const account = await prisma.targetAccount.findUnique({ where: { id }, select: { id: true } });
+    if (!account) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy tài khoản đăng."));
+    await app.workerCore.testAccount(id, "target");
     return ok({ queued: true });
   });
   app.get("/accounts/:id/facebook-session", async (request, reply) => {
@@ -2284,9 +2560,48 @@ function registerAccountRoutes(app: FastifyInstance) {
     });
     return ok({ health });
   });
+  app.get("/accounts/:id/x-session", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const account = await prisma.targetAccount.findUnique({ where: { id } });
+    if (!account || account.platform !== "x") {
+      return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy tài khoản X."));
+    }
+
+    const activeSession = Array.from(browserLoginSessions.values()).find((session) => session.accountId === id && session.platform === "x");
+    if (activeSession) {
+      return ok({ session: await buildBrowserLoginPayload(activeSession) });
+    }
+
+    const persisted = await getPersistedPlatformAccountSessionState("x", id);
+    const health = await inspectPersistedBrowserAccountHealth(app, account, "x");
+    return ok({ session: persisted?.data ?? null, health });
+  });
+  app.post("/accounts/:id/x-session/check", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const account = await prisma.targetAccount.findUnique({ where: { id } });
+    if (!account || account.platform !== "x") {
+      return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy tài khoản X."));
+    }
+
+    const health = await inspectPersistedBrowserAccountHealth(app, account, "x");
+    await persistPlatformAccountSessionState("x", id, {
+      ...(((await getPersistedPlatformAccountSessionState("x", id))?.data as Record<string, unknown> | null) ?? {}),
+      accountId: id,
+      status: health.status,
+      authState: health.authState,
+      authDetected: health.authState === "authenticated",
+      browserOpen: false,
+      authPath: health.authPath,
+      sessionDir: health.sessionDir,
+      lastCheckedAt: health.checkedAt,
+      lastError: health.status === "failed" ? health.message : undefined,
+      health
+    });
+    return ok({ health });
+  });
   app.get("/health/platforms", async () => {
-    const [sources, targets] = await Promise.all([prisma.sourceAccount.findMany(), prisma.targetAccount.findMany()]);
-    return ok({ platformHealth: [...sources, ...targets] });
+    const targets = await prisma.targetAccount.findMany({ select: { id: true, name: true, platform: true, health: true, isActive: true } });
+    return ok({ platformHealth: targets });
   });
 }
 
@@ -2680,6 +2995,7 @@ function registerFacebookBrowserLoginRoutes(app: FastifyInstance) {
 
   registerGenericBrowserLogin("instagram", "https://www.instagram.com/", config.INSTAGRAM_SESSION_ROOT);
   registerGenericBrowserLogin("threads", "https://www.threads.net/", config.THREADS_SESSION_ROOT);
+  registerGenericBrowserLogin("x", "https://x.com/home", config.X_SESSION_ROOT);
 }
 
 function registerFacebookRoutes(app: FastifyInstance) {

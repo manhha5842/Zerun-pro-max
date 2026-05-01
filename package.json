@@ -8,7 +8,7 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "npm run dev:api",
+    "dev": "npm run build:web && npm run dev:api",
     "dev:api": "npm run dev -w @zerun/api",
     "dev:web": "npm run dev -w @zerun/web-admin",
     "build": "npm run typecheck && npm run build -w @zerun/web-admin",
@@ -20,7 +20,10 @@
     "start:api": "node -e \"process.chdir('apps/api') || true\" && npm run start -w @zerun/api",
     "build:web": "npm run build -w @zerun/web-admin",
     "preview:web": "npm run preview -w @zerun/web-admin",
-    "start:local": "npm run build:web && echo === Build done. Run start:api and preview:web in separate terminals ==="
+    "start:local": "npm run desktop:start",
+    "desktop:build": "npm run prisma:generate && npm run build:web",
+    "desktop:start": "npm run desktop:build && npm run start:api",
+    "desktop:serve": "npm run start:api"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

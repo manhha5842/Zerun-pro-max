@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const QueueName = {
+  CrawlJob: "crawl",
   SourceCrawl: "source-crawl",
   ContentProcess: "content-process",
   LinkConvert: "link-convert",
@@ -13,6 +14,7 @@ export const QueueName = {
 } as const;
 
 export const JobName = {
+  CrawlJobRun: "crawl-job-run",
   SourceCrawl: "source.crawl",
   ContentProcess: "content.process",
   PublishExecute: "publish.execute",
@@ -33,6 +35,11 @@ export const sourceCrawlJobSchema = z.object({
       to: z.string().optional()
     })
     .optional()
+});
+
+export const crawlJobRunSchema = z.object({
+  version: z.literal(1),
+  crawlJobId: z.string().min(1)
 });
 
 export const contentProcessJobSchema = z.object({
@@ -73,6 +80,7 @@ export const commentExecuteJobSchema = z.object({
 });
 
 export type SourceCrawlJob = z.infer<typeof sourceCrawlJobSchema>;
+export type CrawlJobRunJob = z.infer<typeof crawlJobRunSchema>;
 export type ContentProcessJob = z.infer<typeof contentProcessJobSchema>;
 export type PublishExecuteJob = z.infer<typeof publishExecuteJobSchema>;
 export type ScheduleReleaseJob = z.infer<typeof scheduleReleaseJobSchema>;

@@ -1,9 +1,9 @@
-import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Play, RefreshCw } from "lucide-react";
 import { apiGet, apiPost } from "../api/client";
 import { StatusBadge } from "../components/common/StatusBadge";
 import { Button } from "../components/ui/Button";
+import { useToast } from "../components/ui/Toast";
 import { AccountForm, type AccountFormValues } from "./accountForms";
 
 type Source = {
@@ -18,24 +18,24 @@ type Source = {
 
 export function SourcesPage() {
   const queryClient = useQueryClient();
-  const [formFeedback, setFormFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const toast = useToast();
   const query = useQuery({ queryKey: ["sources"], queryFn: () => apiGet<{ sources: Source[] }>("/sources") });
   const create = useMutation({
     mutationFn: (values: AccountFormValues) => apiPost("/sources", values),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["sources"] });
       void queryClient.invalidateQueries({ queryKey: ["accounts"] });
-      setFormFeedback({ type: "success", message: "Đã thêm nguồn mới." });
+      toast.success("Đã thêm nguồn mới.");
     },
-    onError: (error: Error) => setFormFeedback({ type: "error", message: error.message })
+    onError: (error: Error) => toast.error(error.message)
   });
   const crawl = useMutation({
     mutationFn: (id: string) => apiPost(`/sources/${id}/crawl`),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["sources"] });
-      setFormFeedback({ type: "success", message: "Đã đưa nguồn vào hàng đợi crawl." });
+      toast.success("Đã đưa nguồn vào hàng đợi crawl.");
     },
-    onError: (error: Error) => setFormFeedback({ type: "error", message: error.message })
+    onError: (error: Error) => toast.error(error.message)
   });
 
   return (
@@ -49,7 +49,6 @@ export function SourcesPage() {
           {query.isFetching ? "Đang tải..." : "Làm mới"}
         </Button>
       </header>
-      {formFeedback ? <div className={`banner ${formFeedback.type}`}>{formFeedback.message}</div> : null}
       <section className="split">
         <div className="panel">
           <table className="table">
@@ -90,10 +89,7 @@ export function SourcesPage() {
           submitLabel="Thêm nguồn"
           fixedKind="source"
           isSubmitting={create.isPending}
-          submitError={create.error instanceof Error ? create.error.message : undefined}
-          submitSuccess={formFeedback?.type === "success" ? formFeedback.message : undefined}
           onSubmit={async (values) => {
-            setFormFeedback(null);
             await create.mutateAsync(values);
           }}
         />

@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Brain, Download, Play, RefreshCw, Sparkles, Wand2 } from "lucide-react";
 import { apiGet, apiPost } from "../api/client";
@@ -6,6 +5,7 @@ import { PageHeader } from "../components/common/PageHeader";
 import { SectionCard } from "../components/common/SectionCard";
 import { StatusBadge } from "../components/common/StatusBadge";
 import { Button } from "../components/ui/Button";
+import { useToast } from "../components/ui/Toast";
 import { AccountForm, type AccountFormValues } from "./accountForms";
 
 type Source = {
@@ -20,7 +20,7 @@ type Source = {
 
 export function CrawlDataPage() {
   const queryClient = useQueryClient();
-  const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const toast = useToast();
 
   const query = useQuery({ queryKey: ["sources"], queryFn: () => apiGet<{ sources: Source[] }>("/sources") });
 
@@ -28,18 +28,18 @@ export function CrawlDataPage() {
     mutationFn: (values: AccountFormValues) => apiPost("/sources", values),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["sources"] });
-      setFeedback({ type: "success", message: "Đã thêm tài khoản nguồn." });
+      toast.success("Đã thêm tài khoản nguồn.");
     },
-    onError: (error: Error) => setFeedback({ type: "error", message: error.message })
+    onError: (error: Error) => toast.error(error.message)
   });
 
   const crawl = useMutation({
     mutationFn: (id: string) => apiPost(`/sources/${id}/crawl`),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["sources"] });
-      setFeedback({ type: "success", message: "Đã đưa nguồn vào hàng chờ crawl." });
+      toast.success("Đã đưa nguồn vào hàng chờ crawl.");
     },
-    onError: (error: Error) => setFeedback({ type: "error", message: error.message })
+    onError: (error: Error) => toast.error(error.message)
   });
 
   return (
@@ -90,8 +90,6 @@ export function CrawlDataPage() {
         </div>
       </section>
 
-      {feedback ? <div className={`banner ${feedback.type}`}>{feedback.message}</div> : null}
-
       <section className="split split-wide">
         <SectionCard title="Tài khoản nguồn" description="Chỉ các tài khoản dùng để lấy dữ liệu đầu vào.">
           <table className="table table-compact">
@@ -141,10 +139,7 @@ export function CrawlDataPage() {
           submitLabel="Thêm nguồn"
           fixedKind="source"
           isSubmitting={create.isPending}
-          submitError={create.error instanceof Error ? create.error.message : undefined}
-          submitSuccess={feedback?.type === "success" ? feedback.message : undefined}
           onSubmit={async (values) => {
-            setFeedback(null);
             await create.mutateAsync(values);
           }}
         />

@@ -98,7 +98,7 @@ export function PendingCommentsPage() {
           <div>
             <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--color-text-muted)" }}>Trạng thái</label>
             <select
-              style={{ fontSize: 13, padding: "5px 8px", border: "1px solid var(--color-border)", borderRadius: 6, background: "#fff" }}
+              style={{ fontSize: 13, padding: "5px 8px", border: "1px solid var(--color-border)", borderRadius: 6, background: "var(--color-panel)", color: "var(--color-text)" }}
               value={statusFilter}
               onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
             >

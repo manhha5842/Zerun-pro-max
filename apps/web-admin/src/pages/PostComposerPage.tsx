@@ -5,6 +5,7 @@ import { apiGet, apiPost, apiPostForm } from "../api/client";
 import { FileUploadDropzone } from "../components/common/FileUploadDropzone";
 import { PageHeader } from "../components/common/PageHeader";
 import { SectionCard } from "../components/common/SectionCard";
+import { ThreadsPublishSettings, buildThreadsPublishPayload, defaultThreadsPublishSettings } from "../components/common/ThreadsPublishSettings";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
@@ -37,7 +38,8 @@ export function PostComposerPage() {
     includeFirstComment: false,
     comment: "",
     mode: "now",
-    scheduledAt: ""
+    scheduledAt: "",
+    threads: defaultThreadsPublishSettings
   });
   const [mediaFiles, setMediaFiles] = useState<UploadedFile[]>([]);
   const [commentMediaFiles, setCommentMediaFiles] = useState<UploadedFile[]>([]);
@@ -52,7 +54,11 @@ export function PostComposerPage() {
     comments: "comments",
     commentMediaPaths: "comment media paths",
     scheduleTime: "schedule time",
-    postType: "post type"
+    postType: "post type",
+    threadsTopic: "threads topic",
+    threadsLinkPreviewMode: "threads link preview mode",
+    threadsSpoilerMode: "threads spoiler mode",
+    threadsSpoilerMedia: "threads spoiler media"
   });
 
   const accountsQuery = useQuery({
@@ -61,6 +67,7 @@ export function PostComposerPage() {
   });
   const targets = useMemo(() => (accountsQuery.data?.accounts ?? []).filter((account) => account.kind === "target"), [accountsQuery.data]);
   const selectedTarget = targets.find((target) => target.id === manual.targetId);
+  const selectedBulkTarget = targets.find((target) => target.id === bulk.targetId);
 
   const uploadMutation = useMutation({
     mutationFn: async ({ file, kind }: { file: File; kind: "post" | "comment" }) => {
@@ -87,6 +94,7 @@ export function PostComposerPage() {
         comment: manual.includeFirstComment ? manual.comment : undefined,
         mediaPaths: mediaFiles.map((file) => file.localPath),
         commentMedia: manual.includeFirstComment ? commentMediaFiles.map((file) => file.localPath) : [],
+        threads: target?.platform === "threads" ? buildThreadsPublishPayload(manual.threads) : undefined,
         targetIds: [manual.targetId],
         scheduledAt: manual.mode === "schedule" ? manual.scheduledAt : undefined,
         status: manual.mode === "schedule" ? "scheduled" : "ready_to_publish",
@@ -116,7 +124,11 @@ export function PostComposerPage() {
         comments: bulk.comments,
         commentMediaPaths: bulk.commentMediaPaths,
         scheduleTime: bulk.scheduleTime,
-        postType: bulk.postType
+        postType: bulk.postType,
+        threadsTopic: bulk.threadsTopic,
+        threadsLinkPreviewMode: bulk.threadsLinkPreviewMode,
+        threadsSpoilerMode: bulk.threadsSpoilerMode,
+        threadsSpoilerMedia: bulk.threadsSpoilerMedia
       }));
       return apiPostForm<{ created: unknown[]; failed: unknown[]; total: number }>("/contents/bulk-import", body);
     },
@@ -158,6 +170,15 @@ export function PostComposerPage() {
               <Label>Nội dung</Label>
               <Textarea value={manual.content} onChange={(event) => setManual((current) => ({ ...current, content: event.target.value }))} placeholder="Nhập caption tiếng Việt có dấu..." />
             </label>
+            {selectedTarget?.platform === "threads" ? (
+              <div className="span-2">
+                <Label>Tuỳ chọn Threads</Label>
+                <ThreadsPublishSettings
+                  value={manual.threads}
+                  onChange={(threads) => setManual((current) => ({ ...current, threads }))}
+                />
+              </div>
+            ) : null}
             <div className="span-2">
               <FileUploadDropzone label="Upload media bài viết" accept="image/*,video/*" multiple onChange={(files) => files.forEach((file) => uploadMutation.mutate({ file, kind: "post" }))} />
               <div className="file-list">{mediaFiles.map((file) => <Badge key={file.localPath}>{file.filename}</Badge>)}</div>
@@ -241,6 +262,16 @@ export function PostComposerPage() {
                 <Input value={bulk[key]} onChange={(event) => setBulk((current) => ({ ...current, [key]: event.target.value }))} />
               </label>
             ))}
+            {selectedBulkTarget?.platform === "threads" ? (
+              <>
+                {(["threadsTopic", "threadsLinkPreviewMode", "threadsSpoilerMode", "threadsSpoilerMedia"] as const).map((key) => (
+                  <label key={key}>
+                    <Label>{key}</Label>
+                    <Input value={bulk[key]} onChange={(event) => setBulk((current) => ({ ...current, [key]: event.target.value }))} />
+                  </label>
+                ))}
+              </>
+            ) : null}
           </div>
           <div className="actions" style={{ marginTop: 16 }}>
             <Button onClick={() => submitBulkMutation.mutate()} disabled={submitBulkMutation.isPending || !bulkFile}>Hoàn thành import lịch</Button>

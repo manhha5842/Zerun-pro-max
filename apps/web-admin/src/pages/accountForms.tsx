@@ -1,14 +1,10 @@
-import { AlertCircle, CheckCircle2, Facebook, Instagram, MessageCircle, Send, Shield, Sparkles, Twitter } from "lucide-react";
+import { AlertCircle, Facebook, Instagram, MessageCircle, Send, Shield, Sparkles, Twitter } from "lucide-react";
 import { ReactNode, useEffect, useMemo, useState } from "react";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Label } from "../components/ui/Label";
 import { Select } from "../components/ui/Select";
-import { Textarea } from "../components/ui/Textarea";
-import { FacebookAccountForm } from "../components/accounts/FacebookAccountForm";
-import { InstagramAccountForm } from "../components/accounts/InstagramAccountForm";
 import { TelegramAccountForm } from "../components/accounts/TelegramAccountForm";
-import { ThreadsAccountForm } from "../components/accounts/ThreadsAccountForm";
 import { XAccountForm } from "../components/accounts/XAccountForm";
 
 export type AccountKind = "source" | "target";
@@ -35,6 +31,7 @@ export type AccountDraft = {
   threadsSessionDir: string;
   threadsUsername: string;
   threadsPassword: string;
+  threadsAccessToken: string;
   instagramUsername: string;
   instagramPassword: string;
 };
@@ -56,12 +53,16 @@ export const ACCOUNT_KIND_OPTIONS: Array<{ value: AccountKind; label: string; de
 ];
 
 export const PLATFORM_OPTIONS: Array<{ value: AccountPlatform; label: string; description: string; icon: ReactNode }> = [
-  { value: "facebook", label: "Facebook", description: "Dùng cho page hoặc profile đăng bài.", icon: <Facebook aria-hidden size={16} /> },
-  { value: "telegram", label: "Telegram", description: "Dùng session MTProto để đọc hoặc đăng vào channel/group.", icon: <Send aria-hidden size={16} /> },
-  { value: "x", label: "X / Twitter", description: "Dùng username, password, email và 2FA khi cần.", icon: <Twitter aria-hidden size={16} /> },
-  { value: "threads", label: "Threads", description: "Dùng sessionDir hoặc credential Instagram liên kết.", icon: <MessageCircle aria-hidden size={16} /> },
-  { value: "instagram", label: "Instagram", description: "Tài khoản Instagram cơ bản bằng username và password.", icon: <Instagram aria-hidden size={16} /> }
+  { value: "facebook", label: "Facebook", description: "Lưu tài khoản rồi đăng nhập bằng cửa sổ trình duyệt.", icon: <Facebook aria-hidden size={16} /> },
+  { value: "instagram", label: "Instagram", description: "Lưu tài khoản rồi đăng nhập bằng cửa sổ trình duyệt.", icon: <Instagram aria-hidden size={16} /> },
+  { value: "threads", label: "Threads", description: "Lưu tài khoản rồi đăng nhập bằng cửa sổ trình duyệt.", icon: <MessageCircle aria-hidden size={16} /> },
+  { value: "x", label: "X / Twitter", description: "Lưu tài khoản rồi đăng nhập bằng cửa sổ trình duyệt.", icon: <Twitter aria-hidden size={16} /> },
+  { value: "telegram", label: "Telegram", description: "Dùng API ID, API Hash và session string MTProto.", icon: <Send aria-hidden size={16} /> },
 ];
+
+export function isBrowserLoginPlatform(platform: string): platform is "facebook" | "instagram" | "threads" | "x" {
+  return platform === "facebook" || platform === "instagram" || platform === "threads" || platform === "x";
+}
 
 export function createEmptyDraft(kind: AccountKind = "target", platform: AccountPlatform = "facebook"): AccountDraft {
   return {
@@ -85,6 +86,7 @@ export function createEmptyDraft(kind: AccountKind = "target", platform: Account
     threadsSessionDir: "",
     threadsUsername: "",
     threadsPassword: "",
+    threadsAccessToken: "",
     instagramUsername: "",
     instagramPassword: ""
   };
@@ -119,17 +121,12 @@ export function validateDraft(draft: AccountDraft): FormErrors {
   if (!draft.name.trim()) errors.name = "Vui lòng nhập tên hiển thị.";
   if (draft.handle.trim() && draft.handle.trim().length < 2) errors.handle = "Handle hoặc URL quá ngắn.";
 
-  const configResult = parseJsonObject(draft.configText, "Config JSON");
-  if (configResult.error) errors.configText = configResult.error;
+  if (!isBrowserLoginPlatform(draft.platform)) {
+    const configResult = parseJsonObject(draft.configText, "Config JSON");
+    if (configResult.error) errors.configText = configResult.error;
 
-  const credentialsResult = parseJsonObject(draft.credentialsText, "Credentials JSON");
-  if (credentialsResult.error) errors.credentialsText = credentialsResult.error;
-
-  if (draft.platform === "facebook") {
-    const authPathError = validatePath(draft.authPath);
-    const sessionDirError = validatePath(draft.sessionDir);
-    if (authPathError) errors.authPath = authPathError;
-    if (sessionDirError) errors.sessionDir = sessionDirError;
+    const credentialsResult = parseJsonObject(draft.credentialsText, "Credentials JSON");
+    if (credentialsResult.error) errors.credentialsText = credentialsResult.error;
   }
 
   if (draft.platform === "telegram") {
@@ -138,42 +135,17 @@ export function validateDraft(draft: AccountDraft): FormErrors {
     if (!draft.telegramSession.trim()) errors.telegramSession = "Session string là bắt buộc.";
   }
 
-  if (draft.platform === "x") {
-    if (!draft.xUsername.trim()) errors.xUsername = "Username là bắt buộc.";
-    if (!draft.xPassword.trim()) errors.xPassword = "Password là bắt buộc.";
-    if (!draft.xEmail.trim()) errors.xEmail = "Email xác thực là bắt buộc.";
-  }
-
-  if (draft.platform === "threads") {
-    if (!draft.threadsSessionDir.trim() && (!draft.threadsUsername.trim() || !draft.threadsPassword.trim())) {
-      errors.threadsSessionDir = "Nhập sessionDir hoặc cung cấp username/password Instagram.";
-      if (!draft.threadsUsername.trim()) errors.threadsUsername = "Username Instagram là bắt buộc khi không có sessionDir.";
-      if (!draft.threadsPassword.trim()) errors.threadsPassword = "Password Instagram là bắt buộc khi không có sessionDir.";
-    }
-    const threadsPathError = validatePath(draft.threadsSessionDir);
-    if (threadsPathError) errors.threadsSessionDir = threadsPathError;
-  }
-
-  if (draft.platform === "instagram") {
-    if (!draft.instagramUsername.trim()) errors.instagramUsername = "Username Instagram là bắt buộc.";
-    if (!draft.instagramPassword.trim()) errors.instagramPassword = "Password Instagram là bắt buộc.";
-  }
-
   return errors;
 }
 
 export function buildAccountPayload(draft: AccountDraft): AccountFormValues {
-  const config = parseJsonObject(draft.configText, "Config JSON").value ?? {};
-  const extraCredentials = parseJsonObject(draft.credentialsText, "Credentials JSON").value ?? {};
+  const config = isBrowserLoginPlatform(draft.platform) ? {} : parseJsonObject(draft.configText, "Config JSON").value ?? {};
+  const extraCredentials = isBrowserLoginPlatform(draft.platform) ? {} : parseJsonObject(draft.credentialsText, "Credentials JSON").value ?? {};
 
   let platformCredentials: Record<string, unknown> = {};
 
-  if (draft.platform === "facebook") {
-    platformCredentials = {
-      accountType: draft.facebookAccountType,
-      ...(draft.authPath.trim() ? { authPath: draft.authPath.trim() } : {}),
-      ...(draft.sessionDir.trim() ? { sessionDir: draft.sessionDir.trim() } : {})
-    };
+  if (isBrowserLoginPlatform(draft.platform)) {
+    platformCredentials = {};
   }
 
   if (draft.platform === "telegram") {
@@ -182,30 +154,6 @@ export function buildAccountPayload(draft: AccountDraft): AccountFormValues {
       apiHash: draft.telegramApiHash.trim(),
       session: draft.telegramSession.trim(),
       ...(draft.telegramPhone.trim() ? { phone: draft.telegramPhone.trim() } : {})
-    };
-  }
-
-  if (draft.platform === "x") {
-    platformCredentials = {
-      username: draft.xUsername.trim(),
-      password: draft.xPassword.trim(),
-      email: draft.xEmail.trim(),
-      ...(draft.xTwoFactorSecret.trim() ? { twoFactorSecret: draft.xTwoFactorSecret.trim() } : {})
-    };
-  }
-
-  if (draft.platform === "threads") {
-    platformCredentials = {
-      ...(draft.threadsSessionDir.trim() ? { sessionDir: draft.threadsSessionDir.trim() } : {}),
-      ...(draft.threadsUsername.trim() ? { username: draft.threadsUsername.trim() } : {}),
-      ...(draft.threadsPassword.trim() ? { password: draft.threadsPassword.trim() } : {})
-    };
-  }
-
-  if (draft.platform === "instagram") {
-    platformCredentials = {
-      username: draft.instagramUsername.trim(),
-      password: draft.instagramPassword.trim()
     };
   }
 
@@ -220,11 +168,15 @@ export function buildAccountPayload(draft: AccountDraft): AccountFormValues {
 }
 
 function PlatformSpecificFields({ draft, errors, setDraft }: PlatformFieldsProps) {
-  if (draft.platform === "facebook") return <FacebookAccountForm draft={draft} errors={errors} setDraft={setDraft} />;
   if (draft.platform === "telegram") return <TelegramAccountForm draft={draft} errors={errors} setDraft={setDraft} />;
   if (draft.platform === "x") return <XAccountForm draft={draft} errors={errors} setDraft={setDraft} />;
-  if (draft.platform === "threads") return <ThreadsAccountForm draft={draft} errors={errors} setDraft={setDraft} />;
-  return <InstagramAccountForm draft={draft} errors={errors} setDraft={setDraft} />;
+  return (
+    <InlineNote tone="info">
+      <span>
+        Tài khoản {draft.platform} đăng nhập qua trình duyệt riêng sau khi lưu. Không cần nhập thêm thông tin.
+      </span>
+    </InlineNote>
+  );
 }
 
 export type PlatformFieldsProps = {
@@ -254,8 +206,6 @@ export function AccountForm({
   fixedKind,
   defaultPlatform = "facebook",
   isSubmitting = false,
-  submitError,
-  submitSuccess,
   onSubmit
 }: {
   label: string;
@@ -264,8 +214,6 @@ export function AccountForm({
   fixedKind: AccountKind;
   defaultPlatform?: AccountPlatform;
   isSubmitting?: boolean;
-  submitError?: string;
-  submitSuccess?: string;
   onSubmit: (values: AccountFormValues) => Promise<void> | void;
 }) {
   const [draft, setDraft] = useState<AccountDraft>(() => createEmptyDraft(fixedKind, defaultPlatform));
@@ -285,9 +233,13 @@ export function AccountForm({
     const nextErrors = validateDraft(draft);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
-    await onSubmit(buildAccountPayload(draft));
-    setDraft(createEmptyDraft(fixedKind, draft.platform));
-    setErrors({});
+    try {
+      await onSubmit(buildAccountPayload(draft));
+      setDraft(createEmptyDraft(fixedKind, draft.platform));
+      setErrors({});
+    } catch {
+      // Submit errors are shown through toast notifications by the caller.
+    }
   }
 
   return (
@@ -304,16 +256,8 @@ export function AccountForm({
       </div>
 
       <InlineNote>
-        <strong>{helpTitle}.</strong> Nếu cần tạo theo nhiều bước, dùng trang <em>Tài khoản đăng</em> để thao tác tập trung hơn.
+        <strong>{helpTitle}.</strong> Nếu cần tạo theo nhiều bước, dùng trang <em>Quản lý tài khoản</em> để thao tác tập trung hơn.
       </InlineNote>
-
-      {submitError ? <FormError message={submitError} /> : null}
-      {submitSuccess ? (
-        <div className="field-success" role="status">
-          <CheckCircle2 aria-hidden size={14} />
-          <span>{submitSuccess}</span>
-        </div>
-      ) : null}
 
       <div className="form-grid" style={{ marginTop: 14 }}>
         <div className="field">
@@ -351,19 +295,6 @@ export function AccountForm({
       </div>
 
       <PlatformSpecificFields draft={draft} errors={errors} setDraft={setDraft} />
-
-      <div className="form-grid" style={{ marginTop: 12 }}>
-        <div className="field full">
-          <Label htmlFor={`${fixedKind}-credentials`}>Credentials JSON bổ sung</Label>
-          <Textarea id={`${fixedKind}-credentials`} value={draft.credentialsText} onChange={(event) => setDraft((current) => ({ ...current, credentialsText: event.target.value }))} placeholder={'{\n  "proxy": "http://127.0.0.1:8080"\n}'} />
-          <FormError message={errors.credentialsText} />
-        </div>
-        <div className="field full">
-          <Label htmlFor={`${fixedKind}-config`}>Config JSON</Label>
-          <Textarea id={`${fixedKind}-config`} value={draft.configText} onChange={(event) => setDraft((current) => ({ ...current, configText: event.target.value }))} placeholder={'{\n  "campaignId": "sample_id"\n}'} />
-          <FormError message={errors.configText} />
-        </div>
-      </div>
 
       <div className="actions" style={{ marginTop: 16 }}>
         <Button disabled={isSubmitting}>{isSubmitting ? "Đang lưu..." : submitLabel ?? "Lưu"}</Button>

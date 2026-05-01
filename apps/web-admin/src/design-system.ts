@@ -54,27 +54,34 @@ export const designSystem = {
     }
   },
   colors: {
-    bg: "#f6f7f9",
-    bgMuted: "#f2f4f3",
-    panel: "#ffffff",
-    text: "#17201b",
-    textMuted: "#68746d",
-    textSoft: "#536159",
-    border: "#dfe4dd",
-    primary: "#0f6f5c",
-    primaryHover: "#0b5c4c",
-    primarySoft: "#dff3ec",
-    successBg: "#edf9f2",
-    successBorder: "#b6e3cf",
-    warningBg: "#fff7e7",
-    warningBorder: "#f2d49b",
-    danger: "#b42318",
-    dangerBg: "#fff1ef",
-    dangerBorder: "#f0c4bf"
+    bg: "var(--color-bg)",
+    bgMuted: "var(--color-bg-muted)",
+    panel: "var(--color-panel)",
+    text: "var(--color-text)",
+    textMuted: "var(--color-text-muted)",
+    textSoft: "var(--color-text-soft)",
+    border: "var(--color-border)",
+    primary: "var(--color-primary)",
+    onPrimary: "var(--color-on-primary)",
+    primaryHover: "var(--color-primary-hover)",
+    primarySoft: "var(--color-primary-soft)",
+    successBg: "var(--color-success-bg)",
+    successBorder: "var(--color-success-border)",
+    warningBg: "var(--color-warning-bg)",
+    warningBorder: "var(--color-warning-border)",
+    danger: "var(--color-danger)",
+    onDanger: "var(--color-on-danger)",
+    dangerBg: "var(--color-danger-bg)",
+    dangerBorder: "var(--color-danger-border)",
+    overlay: "var(--color-overlay)",
+    focusRing: "var(--color-focus-ring)",
+    loginHero: "var(--color-login-hero)"
   },
   shadow: {
-    soft: "0 18px 50px rgba(23, 32, 27, 0.08)",
-    card: "0 12px 24px rgba(15, 111, 92, 0.08)"
+    soft: "var(--shadow-soft)",
+    card: "var(--shadow-card)",
+    panel: "var(--shadow-panel)",
+    insetAccent: "var(--shadow-inset-accent)"
   }
 } as const;
 

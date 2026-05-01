@@ -16,7 +16,6 @@ type Account = {
   sessionState?: {
     authState?: string;
     lastCheckedAt?: string;
-    authPath?: string;
   } | null;
 };
 
@@ -31,19 +30,18 @@ export function AccountSessionsPage() {
     <>
       <PageHeader
         title="Session / Health"
-        subtitle="Tổng hợp trạng thái session, checkpoint và health của tài khoản đăng Facebook/Threads/Instagram."
+        subtitle="Tổng hợp trạng thái session, checkpoint và health của tài khoản đăng Facebook/Instagram/Threads/X."
       />
       <SectionCard>
         <AdminDataTable
           rows={rows}
           getRowKey={(row) => row.id}
-          empty={<EmptyState title="Chưa có tài khoản đăng" description="Tạo tài khoản đăng ở trang Tài khoản đăng trước khi kiểm tra session." />}
+          empty={<EmptyState title="Chưa có tài khoản" description="Tạo tài khoản ở trang Quản lý tài khoản trước khi kiểm tra session." />}
           columns={[
             { key: "name", header: "Tài khoản", render: (row) => <div><strong>{row.name}</strong><div className="table-subtle">{row.platform}</div></div> },
             { key: "health", header: "Health", render: (row) => <StatusBadge status={row.health} /> },
             { key: "session", header: "Auth state", render: (row) => row.sessionState?.authState ? <StatusBadge status={row.sessionState.authState} /> : "Chưa kiểm tra" },
-            { key: "checked", header: "Kiểm tra gần nhất", render: (row) => row.sessionState?.lastCheckedAt ? new Date(row.sessionState.lastCheckedAt).toLocaleString("vi-VN") : "-" },
-            { key: "path", header: "Session path", render: (row) => row.sessionState?.authPath ?? "-" }
+            { key: "checked", header: "Kiểm tra gần nhất", render: (row) => row.sessionState?.lastCheckedAt ? new Date(row.sessionState.lastCheckedAt).toLocaleString("vi-VN") : "-" }
           ]}
         />
       </SectionCard>

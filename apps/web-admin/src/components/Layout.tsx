@@ -47,7 +47,7 @@ const navSections: NavSection[] = [
   },
   {
     label: "Tài khoản",
-    items: [{ to: "/accounts", label: "Tài khoản đăng", icon: "account" }]
+    items: [{ to: "/accounts", label: "Quản lý tài khoản", icon: "account" }]
   },
   {
     label: "Hệ thống",
@@ -66,7 +66,7 @@ export function Layout() {
       <aside className="sidebar auto-style-sidebar">
         <div className="brand auto-style-brand">
           <div className="brand-mark">
-            <Icon name="activity" size={18} tone="primary" />
+            <Icon name="activity" size={18} weight="fill" tone="default" />
           </div>
           <div>
             <span>Zerun</span>
@@ -83,7 +83,7 @@ export function Layout() {
                   const active = item.match ? item.match.test(location.pathname) : location.pathname === item.to;
                   return (
                     <NavLink key={item.to} to={item.to} end className={`nav-item auto-style-nav ${active ? "active" : ""}`}>
-                      <Icon name={item.icon} size={18} tone={active ? "primary" : "muted"} />
+                      <Icon name={item.icon} size={18} weight={active ? "fill" : "regular"} tone="default" />
                       <span>{item.label}</span>
                     </NavLink>
                   );

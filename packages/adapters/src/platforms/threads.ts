@@ -1,8 +1,10 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { AdapterAuthError, AdapterCheckpointError, RetryableNetworkError, type Platform } from "@zerun/shared";
-import type { AdapterAccount, AdapterHealth, CommentInput, CommentResult, CrawlInput, CrawlResult, PublishAdapter, PublishInput, PublishResult, SourceAdapter } from "../contracts.js";
-import { readString } from "../utils/credentials.js";
+import type { AdapterAccount, AdapterHealth, CommentInput, CommentResult, CrawlInput, CrawlResult, PublishAdapter, PublishInput, PublishResult, SourceAdapter, ThreadsPublishOptions } from "../contracts.js";
+import { readOptionalString, readString } from "../utils/credentials.js";
+
+const THREADS_GRAPH_API_BASE = "https://graph.threads.net/v1.0";
 
 export class ThreadsAdapter implements SourceAdapter, PublishAdapter {
   readonly platform: Platform = "threads";
@@ -73,7 +75,13 @@ export class ThreadsAdapter implements SourceAdapter, PublishAdapter {
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
+    if (canPublishViaThreadsApi(input)) {
+      return this.publishViaThreadsApi(input);
+    }
+
     const mediaPaths = input.media.map((m) => m.localPath ?? m.url ?? "").filter(Boolean);
+    const threadsOptions = input.options?.threads;
+    const text = applyBrowserThreadsFallbacks(input.text, threadsOptions);
     const context = await this.openContext(input.account);
 
     try {
@@ -108,8 +116,12 @@ export class ThreadsAdapter implements SourceAdapter, PublishAdapter {
 
       const textbox = page.locator('[role="dialog"] [role="textbox"], [role="textbox"], [contenteditable="true"], textarea').first();
       await textbox.click({ timeout: 10_000 });
-      await textbox.fill(input.text);
+      await textbox.fill(text);
       await page.waitForTimeout(500);
+
+      if (threadsOptions?.linkPreviewMode === "remove_preview") {
+        await tryRemoveLinkPreview(page);
+      }
 
       if (mediaPaths.length > 0) {
         const fileInput = page.locator('input[type="file"][accept*="image"], input[type="file"][accept*="video"], input[type="file"]');
@@ -174,7 +186,15 @@ export class ThreadsAdapter implements SourceAdapter, PublishAdapter {
       });
       if (successState.hasError) throw new Error("Threads post may have failed");
 
-      return { url: successState.url, metadata: { platform: this.platform, mediaCount: mediaPaths.length } };
+      return {
+        url: successState.url,
+        metadata: {
+          platform: this.platform,
+          mode: "browser",
+          mediaCount: mediaPaths.length,
+          threadsOptions
+        }
+      };
     } catch (error) {
       await captureScreenshot(context, "storage/screenshots", `threads-error-${Date.now()}`).catch(() => undefined);
       throw normalizeThreadsError(error);
@@ -240,6 +260,42 @@ export class ThreadsAdapter implements SourceAdapter, PublishAdapter {
     ], { timeout: 10_000 });
   }
 
+  private async publishViaThreadsApi(input: PublishInput): Promise<PublishResult> {
+    const accessToken = readThreadsAccessToken(input.account);
+    const options = input.options?.threads;
+    const media = input.media.find((item) => typeof item.url === "string" && /^https?:\/\//i.test(item.url));
+    const mediaType = !media ? "TEXT" : media.type === "video" ? "VIDEO" : "IMAGE";
+    const containerParams = new URLSearchParams();
+
+    containerParams.set("media_type", mediaType);
+    containerParams.set("text", input.text);
+
+    if (mediaType === "TEXT") {
+      containerParams.set("auto_publish_text", "true");
+    } else if (media?.url) {
+      containerParams.set(mediaType === "VIDEO" ? "video_url" : "image_url", media.url);
+    }
+
+    applyThreadsApiOptions(containerParams, input.text, options, Boolean(media));
+
+    const container = await threadsApiRequest<{ id: string }>("/me/threads", accessToken, containerParams);
+    if (mediaType === "TEXT") {
+      return {
+        externalId: container.id,
+        url: buildThreadsPostUrl(input.account, container.id),
+        metadata: { platform: this.platform, mode: "api", mediaType, threadsOptions: options }
+      };
+    }
+
+    const publishParams = new URLSearchParams({ creation_id: container.id });
+    const published = await threadsApiRequest<{ id: string }>("/me/threads_publish", accessToken, publishParams);
+    return {
+      externalId: published.id,
+      url: buildThreadsPostUrl(input.account, published.id),
+      metadata: { platform: this.platform, mode: "api", mediaType, containerId: container.id, threadsOptions: options }
+    };
+  }
+
   private async openContext(account: AdapterAccount): Promise<any> {
     const sessionDir = readString(account.credentials, "sessionDir", `storage/sessions/threads/${account.id}`);
     const { chromium } = await import("playwright");
@@ -300,6 +356,67 @@ async function clickFirstVisible(page: any, selectors: string[], options: { time
     }
   }
   return false;
+}
+
+function canPublishViaThreadsApi(input: PublishInput): boolean {
+  const accessToken = readOptionalString(input.account.credentials, "threadsAccessToken") ?? readOptionalString(input.account.credentials, "accessToken");
+  if (!accessToken) return false;
+  if (input.media.length > 1) return false;
+  return input.media.every((item) => !item.localPath && (!item.url || /^https?:\/\//i.test(item.url)));
+}
+
+function readThreadsAccessToken(account: AdapterAccount): string {
+  return readOptionalString(account.credentials, "threadsAccessToken") ?? readString(account.credentials, "accessToken");
+}
+
+function applyThreadsApiOptions(params: URLSearchParams, text: string, options: ThreadsPublishOptions | undefined, hasMedia: boolean): void {
+  if (!options) return;
+  if (options.topicTag) params.set("topic_tag", options.topicTag.replace(/^#/, ""));
+  if (options.replyControl) params.set("reply_control", options.replyControl);
+  if (options.ghostPost) params.set("is_ghost_post", "true");
+  if (options.enableReplyApprovals) params.set("enable_reply_approvals", "true");
+  if (hasMedia && options.spoilerMedia) params.set("is_spoiler_media", "true");
+  if (options.spoilerMode === "all_text" && text.length > 0) {
+    params.set("text_entities", JSON.stringify([{ entity_type: "SPOILER", offset: 0, length: text.length }]));
+  }
+}
+
+function applyBrowserThreadsFallbacks(text: string, options?: ThreadsPublishOptions): string {
+  if (!options?.topicTag) return text;
+  const normalizedTopic = options.topicTag.trim().replace(/^#/, "");
+  if (!normalizedTopic) return text;
+  const topicText = `#${normalizedTopic.replace(/\s+/g, "")}`;
+  return text.includes(topicText) ? text : `${text.trim()}\n\n${topicText}`;
+}
+
+async function tryRemoveLinkPreview(page: any): Promise<void> {
+  await page.waitForTimeout(1_500);
+  await clickFirstVisible(page, [
+    '[role="dialog"] [aria-label*="Remove" i]',
+    '[role="dialog"] [aria-label*="Dismiss" i]',
+    '[role="dialog"] [aria-label*="Close preview" i]',
+    '[role="dialog"] [aria-label*="Delete link" i]',
+    '[role="dialog"] [aria-label*="Gỡ" i]',
+    '[role="dialog"] [aria-label*="Xóa liên kết" i]'
+  ], { timeout: 2_000 }).catch(() => false);
+}
+
+async function threadsApiRequest<T>(pathName: string, accessToken: string, params: URLSearchParams): Promise<T> {
+  const response = await fetch(`${THREADS_GRAPH_API_BASE}${pathName}?${params.toString()}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = typeof payload?.error?.message === "string" ? payload.error.message : `Threads API request failed with status ${response.status}`;
+    throw new Error(message);
+  }
+  return payload as T;
+}
+
+function buildThreadsPostUrl(account: AdapterAccount, postId: string): string | undefined {
+  const handle = account.handle?.replace(/^@/, "");
+  return handle ? `https://www.threads.net/@${handle}/post/${postId}` : undefined;
 }
 
 function normalizeThreadsError(error: unknown): Error {

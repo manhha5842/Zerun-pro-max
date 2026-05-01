@@ -45,12 +45,30 @@ export type PublishInput = {
   contentId: string;
   text: string;
   media: RawMedia[];
+  options?: PublishOptions;
 };
 
 export type PublishResult = {
   externalId?: string;
   url?: string;
   metadata?: Record<string, unknown>;
+};
+
+export type ThreadsLinkPreviewMode = "default" | "remove_preview" | "move_links_to_comment";
+export type ThreadsSpoilerMode = "none" | "all_text";
+
+export type ThreadsPublishOptions = {
+  topicTag?: string;
+  linkPreviewMode?: ThreadsLinkPreviewMode;
+  spoilerMode?: ThreadsSpoilerMode;
+  spoilerMedia?: boolean;
+  ghostPost?: boolean;
+  replyControl?: "everyone" | "accounts_you_follow" | "mentioned_only";
+  enableReplyApprovals?: boolean;
+};
+
+export type PublishOptions = {
+  threads?: ThreadsPublishOptions;
 };
 
 export type AdapterHealth = {

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, LogIn, PlayCircle, Plus, RefreshCw, ShieldCheck, Square, Trash2 } from "lucide-react";
+import { CheckCircle2, LogIn, PlayCircle, Plus, RefreshCw, ShieldCheck, Square, Trash2, XCircle } from "lucide-react";
 import { apiDelete, apiGet, apiPost, apiPut } from "../api/client";
 import { AddAccountDialog } from "../components/accounts/AddAccountDialog";
 import { AdminDataTable } from "../components/common/AdminDataTable";
@@ -13,9 +13,10 @@ import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Select } from "../components/ui/Select";
+import { useToast } from "../components/ui/Toast";
 
 type AccountKind = "source" | "target";
-type BrowserLoginPlatform = "facebook" | "instagram" | "threads";
+type BrowserLoginPlatform = "facebook" | "instagram" | "threads" | "x";
 
 type BrowserLoginSession = {
   sessionId?: string;
@@ -28,8 +29,6 @@ type BrowserLoginSession = {
   currentUrl?: string;
   lastCheckedAt?: string;
   createdAt?: string;
-  authPath?: string;
-  sessionDir?: string;
   lastError?: string;
   message?: string;
   health?: {
@@ -67,7 +66,7 @@ const platformLabels: Record<string, string> = {
 };
 
 function isBrowserLoginPlatform(platform: string): platform is BrowserLoginPlatform {
-  return platform === "facebook" || platform === "instagram" || platform === "threads";
+  return platform === "facebook" || platform === "instagram" || platform === "threads" || platform === "x";
 }
 
 function authStateOf(account: Account) {
@@ -102,35 +101,19 @@ function sessionCheckedAt(account: Account) {
   return account.sessionState?.lastCheckedAt ?? account.sessionState?.health?.checkedAt;
 }
 
-function sessionPath(account: Account) {
-  return account.sessionState?.authPath ?? account.sessionState?.sessionDir ?? "-";
-}
-
 function platformLabel(platform: string) {
   return platformLabels[platform] ?? platform;
 }
 
-function connectionSummary(account: Account) {
-  if (!isBrowserLoginPlatform(account.platform)) {
-    return account.kind === "target" ? "Kết nối bằng credentials/config." : "Dùng để crawl hoặc lấy dữ liệu nguồn.";
-  }
-  const state = authStateOf(account);
-  if (state === "authenticated") return "Session đã sẵn sàng để worker dùng khi đăng bài.";
-  if (state === "checkpoint") return "Tài khoản đang cần xác minh checkpoint.";
-  if (state === "login_required") return "Cần mở trình duyệt và đăng nhập lại.";
-  return "Chưa có trạng thái session, hãy kiểm tra hoặc đăng nhập.";
-}
-
 export function AccountsPage() {
   const queryClient = useQueryClient();
+  const toast = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [kind, setKind] = useState<"all" | AccountKind>("target");
   const [keyword, setKeyword] = useState("");
   const [platform, setPlatform] = useState("all");
   const [health, setHealth] = useState("all");
   const [authState, setAuthState] = useState("all");
   const [active, setActive] = useState("all");
-  const [feedback, setFeedback] = useState<string | null>(null);
   const [browserLogin, setBrowserLogin] = useState<BrowserLoginSession | null>(null);
 
   const query = useQuery({
@@ -142,94 +125,102 @@ export function AccountsPage() {
     await queryClient.invalidateQueries({ queryKey: ["accounts"] });
   };
 
-  const createSource = useMutation({
-    mutationFn: (values: unknown) => apiPost("/sources", values),
-    onSuccess: async () => {
-      setFeedback("Đã thêm tài khoản nguồn.");
+  const startBrowserLogin = useMutation({
+    mutationFn: (account: Account) => apiPost<BrowserLoginSession>(`/${account.platform}/accounts/${account.id}/browser-login/start`, {}),
+    onSuccess: async (data, account) => {
+      setBrowserLogin({ ...data, platform: account.platform as BrowserLoginPlatform, accountId: account.id });
+      toast.success(data.message ?? "Đã mở trình duyệt đăng nhập.");
       await invalidateAccounts();
-    }
+    },
+    onError: (error) => toast.error(error.message)
   });
 
   const createTarget = useMutation({
-    mutationFn: (values: unknown) => apiPost("/targets", values),
-    onSuccess: async () => {
-      setFeedback("Đã thêm tài khoản đăng. Nếu là Facebook, Instagram hoặc Threads, hãy bấm Login để lưu session trình duyệt.");
+    mutationFn: (values: unknown) => apiPost<{ target: Account }>("/targets", values),
+    onSuccess: async (data) => {
       await invalidateAccounts();
-    }
+      if (data.target && isBrowserLoginPlatform(data.target.platform)) {
+        toast.info(`Đã tạo tài khoản ${platformLabel(data.target.platform)}. Đang mở trình duyệt đăng nhập.`);
+        startBrowserLogin.mutate(data.target);
+        return;
+      }
+      toast.success("Đã thêm tài khoản.");
+    },
+    onError: (error) => toast.error(error.message)
   });
 
   const remove = useMutation({
-    mutationFn: (account: Account) => apiDelete(`/${account.kind === "source" ? "sources" : "targets"}/${account.id}`),
-    onSuccess: async (_, account) => {
-      setFeedback(`Đã xóa ${account.kind === "source" ? "tài khoản nguồn" : "tài khoản đăng"}.`);
+    mutationFn: (account: Account) => apiDelete(`/targets/${account.id}`),
+    onSuccess: async () => {
+      toast.success("Đã xóa tài khoản.");
       await invalidateAccounts();
-    }
+    },
+    onError: (error) => toast.error(error.message)
   });
 
   const toggleActive = useMutation({
-    mutationFn: ({ account, value }: AccountAction) => apiPut(`/${account.kind === "source" ? "sources" : "targets"}/${account.id}`, { isActive: value }),
+    mutationFn: ({ account, value }: AccountAction) => apiPut(`/targets/${account.id}`, { isActive: value }),
     onSuccess: async (_, action) => {
-      setFeedback(action.value ? "Đã bật tài khoản." : "Đã tắt tài khoản.");
+      toast.success(action.value ? "Đã bật tài khoản." : "Đã tắt tài khoản.");
       await invalidateAccounts();
-    }
+    },
+    onError: (error) => toast.error(error.message)
   });
 
   const test = useMutation({
     mutationFn: (account: Account) => apiPost(`/accounts/${account.id}/test`, { kind: account.kind }),
     onSuccess: async () => {
-      setFeedback("Đã gửi yêu cầu kiểm tra tài khoản vào worker.");
+      toast.success("Đã gửi yêu cầu kiểm tra. Trạng thái sẽ cập nhật sau vài giây.");
       await invalidateAccounts();
-    }
+      window.setTimeout(() => void invalidateAccounts(), 1800);
+      window.setTimeout(() => void invalidateAccounts(), 5000);
+    },
+    onError: (error) => toast.error(error.message)
   });
 
   const checkSession = useMutation({
     mutationFn: (account: Account) => apiPost<{ health?: BrowserLoginSession["health"] }>(`/accounts/${account.id}/${account.platform}-session/check`, {}),
     onSuccess: async (data) => {
-      setFeedback(data.health?.message ?? "Đã kiểm tra session.");
+      toast.success(data.health?.message ?? "Đã kiểm tra session.");
       await invalidateAccounts();
-    }
-  });
-
-  const startBrowserLogin = useMutation({
-    mutationFn: (account: Account) => apiPost<BrowserLoginSession>(`/${account.platform}/accounts/${account.id}/browser-login/start`, {}),
-    onSuccess: async (data, account) => {
-      setBrowserLogin({ ...data, platform: account.platform as BrowserLoginPlatform, accountId: account.id });
-      setFeedback(data.message ?? "Đã mở phiên đăng nhập trình duyệt.");
-      await invalidateAccounts();
-    }
+    },
+    onError: (error) => toast.error(error.message)
   });
 
   const refreshBrowserLogin = useMutation({
     mutationFn: (session: BrowserLoginSession) => apiGet<BrowserLoginSession>(`/${session.platform ?? "facebook"}/browser-login/${session.sessionId}`),
     onSuccess: (data, session) => {
       setBrowserLogin({ ...session, ...data });
-      setFeedback("Đã cập nhật trạng thái phiên đăng nhập.");
-    }
+      toast.success("Đã cập nhật trạng thái phiên đăng nhập.");
+    },
+    onError: (error) => toast.error(error.message)
   });
 
   const completeBrowserLogin = useMutation({
     mutationFn: (session: BrowserLoginSession) => apiPost<BrowserLoginSession>(`/${session.platform ?? "facebook"}/browser-login/${session.sessionId}/complete`, {}),
     onSuccess: async (data, session) => {
-      setBrowserLogin({ ...session, ...data });
-      setFeedback(data.message ?? "Đã lưu session vào tài khoản.");
+      setBrowserLogin(null);
+      toast.success(data.message ?? "Đã lưu session vào tài khoản.");
       await invalidateAccounts();
-    }
+    },
+    onError: (error) => toast.error(error.message)
   });
 
   const cancelBrowserLogin = useMutation({
     mutationFn: (session: BrowserLoginSession) => apiPost<BrowserLoginSession>(`/${session.platform ?? "facebook"}/browser-login/${session.sessionId}/cancel`, {}),
-    onSuccess: async (data, session) => {
-      setBrowserLogin({ ...session, ...data });
-      setFeedback("Đã hủy phiên đăng nhập.");
+    onSuccess: async () => {
+      setBrowserLogin(null);
+      toast.success("Đã hủy phiên đăng nhập.");
       await invalidateAccounts();
-    }
+    },
+    onError: (error) => toast.error(error.message)
   });
 
   const accounts = query.data?.accounts ?? [];
   const rows = useMemo(() => {
     return accounts.filter((account) => {
       const text = [account.name, account.handle, account.platform, account.health, authStateOf(account)].join(" ").toLowerCase();
-      if (kind !== "all" && account.kind !== kind) return false;
+      if (account.kind !== "target") return false;
       if (keyword.trim() && !text.includes(keyword.trim().toLowerCase())) return false;
       if (platform !== "all" && account.platform !== platform) return false;
       if (health !== "all" && account.health !== health) return false;
@@ -237,16 +228,16 @@ export function AccountsPage() {
       if (active !== "all" && String(account.isActive) !== active) return false;
       return true;
     });
-  }, [accounts, active, authState, health, keyword, kind, platform]);
+  }, [accounts, active, authState, health, keyword, platform]);
 
   const targetAccounts = useMemo(() => accounts.filter((account) => account.kind === "target"), [accounts]);
   const connectableTargets = useMemo(() => targetAccounts.filter((account) => isBrowserLoginPlatform(account.platform)), [targetAccounts]);
 
   const stats = useMemo(() => ({
     targets: targetAccounts.length,
-    sources: accounts.filter((account) => account.kind === "source").length,
     connected: connectableTargets.filter((account) => authStateOf(account) === "authenticated").length,
-    needsLogin: connectableTargets.filter((account) => ["login_required", "checkpoint", "unknown"].includes(authStateOf(account))).length
+    needsLogin: connectableTargets.filter((account) => ["login_required", "checkpoint", "unknown"].includes(authStateOf(account))).length,
+    active: targetAccounts.filter((account) => account.isActive).length
   }), [accounts, connectableTargets, targetAccounts]);
 
   const actionBusy =
@@ -260,10 +251,10 @@ export function AccountsPage() {
     cancelBrowserLogin.isPending;
 
   return (
-    <>
+    <div className="page-stack">
       <PageHeader
-        title="Tài khoản"
-        subtitle="Kết nối tài khoản đăng, lưu session trình duyệt và kiểm tra session health trước khi worker publish nội dung."
+        title="Quản lý tài khoản"
+        subtitle="Quản lý tài khoản của user dùng để đăng bài, làm phiên đăng nhập lấy dữ liệu và kiểm tra session health. Nguồn crawl là link page, group, profile hoặc channel của người khác và nhập ở màn Crawl/Chuyển đổi tự động."
         actions={
           <>
             <Button variant="secondary" icon={<RefreshCw aria-hidden />} onClick={() => query.refetch()} disabled={query.isFetching}>
@@ -277,18 +268,16 @@ export function AccountsPage() {
       />
 
       <div className="metric-grid">
-        <SectionCard title="Tài khoản đăng"><strong>{stats.targets}</strong></SectionCard>
-        <SectionCard title="Tài khoản nguồn"><strong>{stats.sources}</strong></SectionCard>
+        <SectionCard title="Tài khoản đăng của user"><strong>{stats.targets}</strong></SectionCard>
+        <SectionCard title="Đang bật"><strong>{stats.active}</strong></SectionCard>
         <SectionCard title="Session đã kết nối"><strong>{stats.connected}</strong></SectionCard>
         <SectionCard title="Cần xử lý login"><strong>{stats.needsLogin}</strong></SectionCard>
       </div>
 
-      {feedback ? <div className="inline-alert">{feedback}</div> : null}
-
-      {browserLogin?.sessionId ? (
+      {browserLogin?.sessionId && browserLogin.status !== "cancelled" && browserLogin.status !== "completed" ? (
         <SectionCard
           title="Phiên đăng nhập đang mở"
-          description="Đăng nhập trong cửa sổ trình duyệt vừa mở, sau đó quay lại đây để lưu session vào tài khoản."
+          description="Làm theo 3 bước bên dưới. Khi đăng nhập xong trong cửa sổ trình duyệt, quay lại đây và bấm Lưu session."
           actions={
             <>
               <Button size="sm" variant="secondary" icon={<RefreshCw aria-hidden />} onClick={() => refreshBrowserLogin.mutate(browserLogin)} disabled={actionBusy}>
@@ -297,12 +286,26 @@ export function AccountsPage() {
               <Button size="sm" icon={<ShieldCheck aria-hidden />} onClick={() => completeBrowserLogin.mutate(browserLogin)} disabled={actionBusy || browserLogin.status !== "pending"}>
                 Lưu session
               </Button>
-              <Button size="sm" variant="ghost" icon={<Square aria-hidden />} onClick={() => cancelBrowserLogin.mutate(browserLogin)} disabled={actionBusy || browserLogin.status !== "pending"}>
+              <Button size="sm" variant="ghost" icon={<XCircle aria-hidden />} onClick={() => cancelBrowserLogin.mutate(browserLogin)} disabled={actionBusy || browserLogin.status !== "pending"}>
                 Hủy
               </Button>
             </>
           }
         >
+          <div className="account-flow-steps session-flow">
+            <div>
+              <LogIn aria-hidden size={16} />
+              <span>Đăng nhập trong browser</span>
+            </div>
+            <div>
+              <RefreshCw aria-hidden size={16} />
+              <span>Cập nhật trạng thái</span>
+            </div>
+            <div>
+              <ShieldCheck aria-hidden size={16} />
+              <span>Lưu session</span>
+            </div>
+          </div>
           <div className="account-session-grid">
             <div>
               <span>Trạng thái</span>
@@ -320,10 +323,6 @@ export function AccountsPage() {
               <span>Kiểm tra gần nhất</span>
               <strong>{formatDate(browserLogin.lastCheckedAt)}</strong>
             </div>
-            <div className="full">
-              <span>Session path</span>
-              <code className="code-inline">{browserLogin.authPath ?? browserLogin.sessionDir ?? "-"}</code>
-            </div>
             {browserLogin.currentUrl ? (
               <div className="full">
                 <span>URL hiện tại</span>
@@ -339,50 +338,9 @@ export function AccountsPage() {
         </SectionCard>
       ) : null}
 
-      <SectionCard
-        title="Kết nối nhanh"
-        description="Facebook, Instagram và Threads dùng browser session. Telegram/X dùng credentials đã lưu trong tài khoản."
-      >
-        {connectableTargets.length > 0 ? (
-          <div className="account-connect-grid">
-            {connectableTargets.slice(0, 6).map((account) => {
-              const state = authStateOf(account);
-              return (
-                <div className="account-connect-card" key={account.id}>
-                  <div className="account-connect-head">
-                    <div className="account-avatar" aria-hidden>{platformLabel(account.platform).slice(0, 2).toUpperCase()}</div>
-                    <div className="account-meta-stack">
-                      <strong>{account.name}</strong>
-                      <span>{platformLabel(account.platform)} · {account.handle ?? "chưa có handle"}</span>
-                    </div>
-                    <Badge tone={authTone(state)}>{authLabel(state)}</Badge>
-                  </div>
-                  <p>{connectionSummary(account)}</p>
-                  <div className="row-actions">
-                    <Button size="sm" icon={<LogIn aria-hidden />} onClick={() => startBrowserLogin.mutate(account)} disabled={actionBusy}>
-                      Login
-                    </Button>
-                    <Button size="sm" variant="secondary" icon={<ShieldCheck aria-hidden />} onClick={() => checkSession.mutate(account)} disabled={actionBusy}>
-                      Check
-                    </Button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <EmptyState title="Chưa có tài khoản hỗ trợ browser login" description="Thêm tài khoản Facebook, Instagram hoặc Threads để bắt đầu kết nối session." />
-        )}
-      </SectionCard>
-
       <SectionCard>
         <FilterToolbar actions={<Button variant="secondary" onClick={() => query.refetch()} disabled={query.isFetching}>Áp dụng</Button>}>
           <Input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="Tìm tên, handle, platform..." />
-          <Select value={kind} onChange={(event) => setKind(event.target.value as "all" | AccountKind)}>
-            <option value="all">Tất cả loại</option>
-            <option value="target">Tài khoản đăng</option>
-            <option value="source">Tài khoản nguồn</option>
-          </Select>
           <Select value={platform} onChange={(event) => setPlatform(event.target.value)}>
             <option value="all">Tất cả nền tảng</option>
             <option value="facebook">Facebook</option>
@@ -430,7 +388,6 @@ export function AccountsPage() {
                 </div>
               )
             },
-            { key: "kind", header: "Loại", render: (row) => row.kind === "source" ? "Nguồn" : "Đăng bài" },
             { key: "platform", header: "Nền tảng", render: (row) => platformLabel(row.platform) },
             { key: "active", header: "Kích hoạt", render: (row) => <Badge tone={row.isActive ? "good" : "neutral"}>{row.isActive ? "Đang bật" : "Đang tắt"}</Badge> },
             { key: "health", header: "Health", render: (row) => <StatusBadge status={row.health} /> },
@@ -442,7 +399,6 @@ export function AccountsPage() {
                 : <Badge tone="neutral">Credentials</Badge>
             },
             { key: "checked", header: "Kiểm tra gần nhất", render: (row) => formatDate(sessionCheckedAt(row)) },
-            { key: "path", header: "Session path", render: (row) => <code className="code-inline">{sessionPath(row)}</code> },
             {
               key: "actions",
               header: "Thao tác",
@@ -452,7 +408,7 @@ export function AccountsPage() {
                   {isBrowserLoginPlatform(row.platform) && row.kind === "target" ? (
                     <>
                       <Button size="sm" variant="secondary" icon={<ShieldCheck aria-hidden />} onClick={() => checkSession.mutate(row)} disabled={actionBusy}>Check</Button>
-                      <Button size="sm" icon={<LogIn aria-hidden />} onClick={() => startBrowserLogin.mutate(row)} disabled={actionBusy}>Login</Button>
+                      <Button size="sm" icon={<LogIn aria-hidden />} onClick={() => startBrowserLogin.mutate(row)} disabled={actionBusy}>Mở trình duyệt đăng nhập</Button>
                     </>
                   ) : null}
                   <Button
@@ -477,9 +433,9 @@ export function AccountsPage() {
       <AddAccountDialog
         open={dialogOpen}
         onClose={() => setDialogOpen(false)}
-        sourceMutation={createSource}
         targetMutation={createTarget}
+        targetOnly
       />
-    </>
+    </div>
   );
 }

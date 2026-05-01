@@ -6,7 +6,7 @@ export class XAdapter implements SourceAdapter, PublishAdapter {
   readonly platform: Platform = "x";
 
   async testConnection(account: AdapterAccount): Promise<AdapterHealth> {
-    if ((account.config as Record<string, unknown>)?.usePlaywright === true) {
+    if (this.shouldUseBrowserSession(account)) {
       return this.testConnectionPlaywright(account);
     }
 
@@ -17,6 +17,10 @@ export class XAdapter implements SourceAdapter, PublishAdapter {
   }
 
   async crawl(input: CrawlInput): Promise<CrawlResult> {
+    if (this.shouldUseBrowserSession(input.account)) {
+      return this.crawlViaPlaywright(input);
+    }
+
     const scraper = await this.login(input.account);
     const sourceUsername = readString(input.account.credentials, "sourceUsername", input.account.handle ?? undefined);
     const limit = input.limit ?? Number(input.account.config.limit ?? 20);
@@ -49,8 +53,7 @@ export class XAdapter implements SourceAdapter, PublishAdapter {
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
-    // TODO: not yet implemented - X/Twitter publish is scaffold only; needs runtime validation before production use
-    if ((input.account.config as Record<string, unknown>)?.usePlaywright === true) {
+    if (this.shouldUseBrowserSession(input.account)) {
       return this.publishViaPlaywright(input);
     }
 
@@ -66,6 +69,57 @@ export class XAdapter implements SourceAdapter, PublishAdapter {
       };
     } catch (error) {
       throw normalizeXError(error);
+    }
+  }
+
+  private async crawlViaPlaywright(input: CrawlInput): Promise<CrawlResult> {
+    const context = await this.openContext(input.account);
+    const sourceUsername = readString(input.account.credentials, "sourceUsername", input.account.handle ?? undefined).replace(/^@/, "");
+    const limit = input.limit ?? Number(input.account.config.limit ?? 20);
+
+    try {
+      const page = await context.newPage();
+      await page.goto(`https://x.com/${sourceUsername}`, { waitUntil: "domcontentloaded", timeout: 40_000 });
+      const state = await page.evaluate(() => {
+        const bodyText = document.body?.innerText?.toLowerCase() ?? "";
+        return {
+          hasLoginWall: bodyText.includes("sign in") || bodyText.includes("login") || bodyText.includes("đăng nhập"),
+          url: window.location.href
+        };
+      });
+      if (state.hasLoginWall || state.url.includes("/login")) {
+        throw new AdapterAuthError("X browser session chưa đăng nhập");
+      }
+
+      await page.waitForSelector('article [data-testid="tweetText"], article', { timeout: 20_000 }).catch(() => undefined);
+      type BrowserTweet = { id: string; text: string; link?: string };
+      const tweets = await page.$$eval("article", (articles: Element[], maxItems: number) => articles.slice(0, Number(maxItems)).map((article: Element, index: number) => {
+        const text = (article.querySelector('[data-testid="tweetText"]')?.textContent ?? article.textContent ?? "").trim();
+        const link = Array.from(article.querySelectorAll("a") as NodeListOf<HTMLAnchorElement>)
+          .map((anchor) => anchor.getAttribute("href") ?? "")
+          .find((href) => /\/status\/\d+/.test(href));
+        const id = link?.match(/\/status\/(\d+)/)?.[1] ?? `${Date.now()}-${index}`;
+        return { id, text, link };
+      }), limit) as BrowserTweet[];
+
+      return {
+        items: tweets
+          .filter((tweet) => tweet.text.length > 0)
+          .map((tweet) => ({
+            platform: this.platform,
+            sourceId: input.account.id,
+            externalId: tweet.id,
+            author: sourceUsername,
+            text: tweet.text,
+            media: [],
+            originalUrl: tweet.link ? `https://x.com${tweet.link}` : `https://x.com/${sourceUsername}`,
+            metadata: { mode: "playwright" }
+          }))
+      };
+    } catch (error) {
+      throw normalizeXError(error);
+    } finally {
+      await context.close();
     }
   }
 
@@ -148,6 +202,13 @@ export class XAdapter implements SourceAdapter, PublishAdapter {
       viewport: { width: 1366, height: 900 },
       args: ["--no-sandbox"]
     });
+  }
+
+  private shouldUseBrowserSession(account: AdapterAccount): boolean {
+    return (account.config as Record<string, unknown>)?.usePlaywright === true
+      || typeof account.credentials.sessionDir === "string"
+      || typeof account.credentials.authPath === "string"
+      || typeof account.credentials.username !== "string";
   }
 
   private async login(account: AdapterAccount): Promise<any> {

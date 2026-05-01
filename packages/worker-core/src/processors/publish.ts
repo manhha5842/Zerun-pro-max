@@ -1,4 +1,5 @@
 import { AdapterAuthError, AdapterCheckpointError, classifyError, logger, realtimeBus } from "@zerun/shared";
+import type { ThreadsLinkPreviewMode, ThreadsPublishOptions, ThreadsSpoilerMode } from "@zerun/adapters";
 import { publishExecuteJobSchema, type PublishExecuteJob } from "../types.js";
 import type { ProcessorContext } from "./context.js";
 import { mapMediaAssets, normalizeMediaPaths, toAdapterAccount } from "./helpers.js";
@@ -7,6 +8,57 @@ import { mapMediaAssets, normalizeMediaPaths, toAdapterAccount } from "./helpers
 // - attempts: 3 (max 3 total attempts)
 // - backoff: exponential, starting at 5_000ms (approx 5s, 10s, 20s for attempts 1-3)
 // If you need finer control (1s/2s/4s), set per-job options when enqueuing.
+
+const URL_PATTERN = /https?:\/\/[^\s<>"')]+/gi;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function normalizeThreadsPublishOptions(value: unknown): ThreadsPublishOptions | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const linkPreviewMode = normalizeEnum<ThreadsLinkPreviewMode>(value.linkPreviewMode, ["default", "remove_preview", "move_links_to_comment"]);
+  const spoilerMode = normalizeEnum<ThreadsSpoilerMode>(value.spoilerMode, ["none", "all_text"]);
+  const replyControl = normalizeEnum<NonNullable<ThreadsPublishOptions["replyControl"]>>(value.replyControl, ["everyone", "accounts_you_follow", "mentioned_only"]);
+  const topicTag = typeof value.topicTag === "string" ? value.topicTag.trim().replace(/^#/, "") : undefined;
+
+  const options: ThreadsPublishOptions = {
+    ...(topicTag ? { topicTag } : {}),
+    ...(linkPreviewMode ? { linkPreviewMode } : {}),
+    ...(spoilerMode ? { spoilerMode } : {}),
+    ...(replyControl ? { replyControl } : {}),
+    ...(typeof value.spoilerMedia === "boolean" ? { spoilerMedia: value.spoilerMedia } : {}),
+    ...(typeof value.ghostPost === "boolean" ? { ghostPost: value.ghostPost } : {}),
+    ...(typeof value.enableReplyApprovals === "boolean" ? { enableReplyApprovals: value.enableReplyApprovals } : {})
+  };
+
+  return Object.keys(options).length > 0 ? options : undefined;
+}
+
+function normalizeEnum<T extends string>(value: unknown, allowed: T[]): T | undefined {
+  return typeof value === "string" && allowed.includes(value as T) ? value as T : undefined;
+}
+
+function prepareThreadsPublishText(text: string, comment: string, options?: ThreadsPublishOptions) {
+  if (options?.linkPreviewMode !== "move_links_to_comment") {
+    return { text, commentText: comment };
+  }
+
+  const links = text.match(URL_PATTERN) ?? [];
+  if (links.length === 0) return { text, commentText: comment };
+
+  const strippedText = text
+    .replace(URL_PATTERN, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  const linkComment = `Link: ${links.join("\n")}`;
+  return {
+    text: strippedText,
+    commentText: [comment.trim(), linkComment].filter(Boolean).join("\n\n")
+  };
+}
 
 export async function processPublish(rawJob: unknown, context: ProcessorContext) {
   const job = publishExecuteJobSchema.parse(rawJob) satisfies PublishExecuteJob;
@@ -49,6 +101,12 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
     // The adapter registry resolves the correct adapter for each platform automatically.
     const metadata = (content.metadata ?? {}) as Record<string, unknown>;
     const postType = typeof metadata.type === "string" ? metadata.type : undefined;
+    const threadsOptions = target.platform === "threads" ? normalizeThreadsPublishOptions(metadata.threads) : undefined;
+    const preparedPublish = prepareThreadsPublishText(
+      content.finalText ?? content.draftText ?? content.originalText,
+      typeof metadata.comment === "string" ? metadata.comment : "",
+      threadsOptions
+    );
     const storedMedia = mapMediaAssets(content.media);
     const mediaSource = storedMedia.length > 0 ? storedMedia : normalizeMediaPaths(metadata.mediaPaths);
     const media = mediaSource.map((asset) => ({
@@ -63,8 +121,9 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
     const result = await adapter.publish({
       account: toAdapterAccount(target),
       contentId: content.id,
-      text: content.finalText ?? content.draftText ?? content.originalText,
-      media
+      text: preparedPublish.text,
+      media,
+      options: threadsOptions ? { threads: threadsOptions } : undefined
     });
 
     await context.prisma.publishAttempt.update({
@@ -109,7 +168,7 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
     });
 
     // Auto-enqueue first comment if defined in content metadata
-    const commentText = typeof metadata.comment === "string" ? metadata.comment.trim() : "";
+    const commentText = preparedPublish.commentText.trim();
     if (commentText && result.url) {
       const commentMedia = Array.isArray(metadata.commentMedia) ? metadata.commentMedia : [];
       const commentDelayMs = typeof metadata.commentDelayMinutes === "number" ? metadata.commentDelayMinutes * 60 * 1000 : 60_000;

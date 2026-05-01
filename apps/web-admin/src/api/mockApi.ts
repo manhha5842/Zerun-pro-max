@@ -13,7 +13,8 @@ const sourceAccounts: AnyRecord[] = [
 const targetAccounts: AnyRecord[] = [
   { id: "acc-fb-main", kind: "target", platform: "facebook", name: "Facebook Page Zerun Deals", handle: "zerun.deals", isActive: true, health: "healthy", credentials: {}, config: {}, sessionState: { authState: "authenticated", lastCheckedAt: hoursAgo(1), authPath: "sessions/facebook/zerun-deals/auth.json" }, createdAt: hoursAgo(500), updatedAt: hoursAgo(1) },
   { id: "acc-ig-shop", kind: "target", platform: "instagram", name: "Instagram Shop Review", handle: "@shop.review", isActive: true, health: "checkpoint", credentials: {}, config: {}, sessionState: { authState: "checkpoint", lastCheckedAt: hoursAgo(5), authPath: "sessions/instagram/shop-review/auth.json" }, createdAt: hoursAgo(420), updatedAt: hoursAgo(5) },
-  { id: "acc-thread-daily", kind: "target", platform: "threads", name: "Threads Daily Finds", handle: "@daily.finds", isActive: true, health: "healthy", credentials: {}, config: {}, sessionState: { authState: "authenticated", lastCheckedAt: hoursAgo(3), authPath: "sessions/threads/daily-finds/auth.json" }, createdAt: hoursAgo(390), updatedAt: hoursAgo(3) }
+  { id: "acc-thread-daily", kind: "target", platform: "threads", name: "Threads Daily Finds", handle: "@daily.finds", isActive: true, health: "healthy", credentials: {}, config: {}, sessionState: { authState: "authenticated", lastCheckedAt: hoursAgo(3), authPath: "sessions/threads/daily-finds/auth.json" }, createdAt: hoursAgo(390), updatedAt: hoursAgo(3) },
+  { id: "acc-x-main", kind: "target", platform: "x", name: "X Deal Updates", handle: "@zerun_deals", isActive: true, health: "healthy", credentials: {}, config: {}, sessionState: { authState: "authenticated", lastCheckedAt: hoursAgo(2), authPath: "sessions/x/zerun-deals/auth.json" }, createdAt: hoursAgo(380), updatedAt: hoursAgo(2) }
 ];
 
 sourceAccounts.push(
@@ -567,7 +568,7 @@ function createMockAccount(kind: "source" | "target", body: AnyRecord) {
     isActive: body.isActive ?? true,
     credentials: body.credentials ?? {},
     config: body.config ?? {},
-    sessionState: ["facebook", "instagram", "threads"].includes(String(body.platform)) ? { authState: "unknown" } : undefined,
+    sessionState: ["facebook", "instagram", "threads", "x"].includes(String(body.platform)) ? { authState: "unknown" } : undefined,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -597,7 +598,7 @@ function makeMockSession(platform: string, account: AnyRecord, status: string = 
     authState: status === "completed" ? "authenticated" : "login_required",
     authDetected: status === "completed",
     browserOpen: status === "pending",
-    currentUrl: platform === "facebook" ? "https://www.facebook.com/" : platform === "instagram" ? "https://www.instagram.com/" : "https://www.threads.net/",
+    currentUrl: platform === "facebook" ? "https://www.facebook.com/" : platform === "instagram" ? "https://www.instagram.com/" : platform === "x" ? "https://x.com/home" : "https://www.threads.net/",
     authPath: `sessions/${platform}/${account.id}/auth.json`,
     sessionDir: `sessions/${platform}/${account.id}`,
     lastCheckedAt: new Date().toISOString(),
@@ -617,13 +618,13 @@ export async function mockApiRequest<T>(path: string, init: RequestInit = {}): P
   const pathname = url.pathname;
 
   if (pathname === "/auth/login") return clone({ accessToken: "mock-token", refreshToken: "mock-refresh", user: { id: "admin-mock", username: "admin", displayName: "Admin Demo", role: "admin" } }) as T;
-  if (pathname === "/dashboard/stats") return clone({ totalContents: contents.length, pendingJobs: contents.filter((item) => ["ready_to_publish", "scheduled", "publishing", "saved"].includes(item.status)).length, publishedToday: contents.filter((item) => item.status === "published").length, failedJobs: contents.filter((item) => item.status === "failed" || item.lastError).length, platformHealth: [...sourceAccounts, ...targetAccounts] }) as T;
+  if (pathname === "/dashboard/stats") return clone({ totalContents: contents.length, pendingJobs: contents.filter((item) => ["ready_to_publish", "scheduled", "publishing", "saved"].includes(item.status)).length, publishedToday: contents.filter((item) => item.status === "published").length, failedJobs: contents.filter((item) => item.status === "failed" || item.lastError).length, platformHealth: targetAccounts }) as T;
   if (pathname === "/dashboard/activity") return clone({ activities: [{ id: "act-001", type: "auto_conversion", message: "Rule Facebook deal mẹ và bé đã tạo bài AUTO-0001.", platform: "facebook", createdAt: hoursAgo(1) }, { id: "act-002", type: "saved", message: "Bài AUTO-SAVED-0002 được đưa vào Kho lưu trữ vì link Google Form.", platform: "telegram", createdAt: hoursAgo(2) }, { id: "act-003", type: "crawl", message: "Crawl Facebook hoàn tất: 42 bài mới, 71 bài trùng.", platform: "facebook", createdAt: hoursAgo(19) }] }) as T;
 
-  if (pathname === "/accounts") return clone({ accounts: [...sourceAccounts, ...targetAccounts] }) as T;
+  if (pathname === "/accounts") return clone({ accounts: targetAccounts }) as T;
   if (pathname === "/sources") {
-    if (method === "POST") return clone({ source: createMockAccount("source", body) }) as T;
-    return clone({ sources: sourceAccounts }) as T;
+    if (method !== "GET") throw new Error("Nguồn crawl không phải tài khoản của user. Hãy nhập link nguồn ở trang Crawl dữ liệu.");
+    return clone({ sources: [], deprecated: true, message: "Nguồn crawl được nhập bằng link, không tạo tài khoản nguồn trong Quản lý tài khoản." }) as T;
   }
   if (pathname === "/targets") {
     if (method === "POST") return clone({ target: createMockAccount("target", body) }) as T;
@@ -631,15 +632,14 @@ export async function mockApiRequest<T>(path: string, init: RequestInit = {}): P
   }
   const sourceMatch = pathname.match(/^\/sources\/([^/]+)$/);
   if (sourceMatch) {
-    if (method === "DELETE") return clone({ success: deleteMockAccount(sourceAccounts, sourceMatch[1]) }) as T;
-    return clone({ source: updateMockAccount(sourceAccounts, sourceMatch[1], body) }) as T;
+    throw new Error("Nguồn crawl không phải tài khoản của user. Hãy nhập link nguồn ở trang Crawl dữ liệu.");
   }
   const targetMatch = pathname.match(/^\/targets\/([^/]+)$/);
   if (targetMatch) {
     if (method === "DELETE") return clone({ success: deleteMockAccount(targetAccounts, targetMatch[1]) }) as T;
     return clone({ target: updateMockAccount(targetAccounts, targetMatch[1], body) }) as T;
   }
-  const sessionCheckMatch = pathname.match(/^\/accounts\/([^/]+)\/(facebook|instagram|threads)-session\/check$/);
+  const sessionCheckMatch = pathname.match(/^\/accounts\/([^/]+)\/(facebook|instagram|threads|x)-session\/check$/);
   if (sessionCheckMatch) {
     const account = targetAccounts.find((item) => item.id === sessionCheckMatch[1]);
     const platform = sessionCheckMatch[2];
@@ -650,14 +650,14 @@ export async function mockApiRequest<T>(path: string, init: RequestInit = {}): P
     }
     return clone({ health }) as T;
   }
-  const browserStartMatch = pathname.match(/^\/(facebook|instagram|threads)\/accounts\/([^/]+)\/browser-login\/start$/);
+  const browserStartMatch = pathname.match(/^\/(facebook|instagram|threads|x)\/accounts\/([^/]+)\/browser-login\/start$/);
   if (browserStartMatch) {
     const account = targetAccounts.find((item) => item.id === browserStartMatch[2]);
     if (!account) return clone({}) as T;
     const existing = browserSessions.find((session) => session.accountId === account.id && session.platform === browserStartMatch[1] && session.status === "pending");
     return clone(existing ?? makeMockSession(browserStartMatch[1], account)) as T;
   }
-  const browserActionMatch = pathname.match(/^\/(facebook|instagram|threads)\/browser-login\/([^/]+)(?:\/(complete|cancel))?$/);
+  const browserActionMatch = pathname.match(/^\/(facebook|instagram|threads|x)\/browser-login\/([^/]+)(?:\/(complete|cancel))?$/);
   if (browserActionMatch) {
     const session = browserSessions.find((item) => item.sessionId === browserActionMatch[2]) ?? browserSessions[0];
     if (!session) return clone({}) as T;
@@ -687,7 +687,7 @@ export async function mockApiRequest<T>(path: string, init: RequestInit = {}): P
     return clone({ contents: page.rows, pagination: page.pagination }) as T;
   }
   if (pathname === "/contents/manual" && method === "POST") {
-    const content = { id: id("content"), code: `MAN-${Date.now()}`, platform: body.platform ?? "manual", source: null, originalText: body.originalText ?? body.text ?? "", draftText: body.draftText ?? body.originalText ?? "", status: body.status ?? "ready_to_publish", scheduledAt: body.scheduledAt ?? null, scheduledTargets: body.targetIds ?? [], metadata: { type: body.type ?? "feed", mediaPaths: body.mediaPaths ?? [], comment: body.comment ?? "" }, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), links: [], media: [], publishAttempts: [] };
+    const content = { id: id("content"), code: `MAN-${Date.now()}`, platform: body.platform ?? "manual", source: null, originalText: body.originalText ?? body.text ?? "", draftText: body.draftText ?? body.originalText ?? "", status: body.status ?? "ready_to_publish", scheduledAt: body.scheduledAt ?? null, scheduledTargets: body.targetIds ?? [], metadata: { type: body.type ?? "feed", mediaPaths: body.mediaPaths ?? [], comment: body.comment ?? "", threads: body.threads ?? undefined }, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), links: [], media: [], publishAttempts: [] };
     contents.unshift(content);
     return clone({ content }) as T;
   }

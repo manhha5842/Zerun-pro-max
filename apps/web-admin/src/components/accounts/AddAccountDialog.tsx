@@ -1,60 +1,86 @@
-import { CheckCircle2, ChevronDown, Layers3, ShieldAlert } from "lucide-react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  Facebook,
+  Globe,
+  Instagram,
+  KeyRound,
+  Layers3,
+  MessageCircle,
+  ShieldAlert,
+  Twitter,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 import type { UseMutationResult } from "@tanstack/react-query";
 import { Dialog } from "../ui/Dialog";
 import { Button } from "../ui/Button";
+import { Input } from "../ui/Input";
+import { Label } from "../ui/Label";
+import { Textarea } from "../ui/Textarea";
+import { useToast } from "../ui/Toast";
 import {
   ACCOUNT_KIND_OPTIONS,
   PLATFORM_OPTIONS,
   buildAccountPayload,
   createEmptyDraft,
   FormError,
+  InlineNote,
   type AccountDraft,
   type AccountKind,
   type AccountPlatform,
   type FormErrors,
-  validateDraft
+  isBrowserLoginPlatform,
+  validateDraft,
 } from "../../pages/accountForms";
-import { Input } from "../ui/Input";
-import { Label } from "../ui/Label";
-import { FacebookAccountForm } from "./FacebookAccountForm";
-import { TelegramAccountForm } from "./TelegramAccountForm";
-import { XAccountForm } from "./XAccountForm";
-import { ThreadsAccountForm } from "./ThreadsAccountForm";
-import { InstagramAccountForm } from "./InstagramAccountForm";
-import { Textarea } from "../ui/Textarea";
+
+type WizardStep = "kind" | "platform" | "connect" | "test" | "name";
 
 type Props = {
   open: boolean;
   onClose: () => void;
-  sourceMutation: UseMutationResult<any, Error, any, unknown>;
+  sourceMutation?: UseMutationResult<any, Error, any, unknown>;
   targetMutation: UseMutationResult<any, Error, any, unknown>;
   targetOnly?: boolean;
 };
 
+const PLATFORM_LABELS: Record<AccountPlatform, string> = {
+  facebook: "Facebook",
+  instagram: "Instagram",
+  threads: "Threads",
+  x: "X / Twitter",
+  telegram: "Telegram",
+};
+
+const STEP_LABELS: Record<WizardStep, string> = {
+  kind: "Loại",
+  platform: "Nền tảng",
+  connect: "Kết nối",
+  test: "Xác nhận",
+  name: "Đặt tên",
+};
+
+function makeSteps(targetOnly: boolean): WizardStep[] {
+  return targetOnly
+    ? ["platform", "connect", "test", "name"]
+    : ["kind", "platform", "connect", "test", "name"];
+}
+
 export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation, targetOnly = false }: Props) {
-  const [step, setStep] = useState(targetOnly ? 2 : 1);
+  const toast = useToast();
+  const steps = useMemo(() => makeSteps(targetOnly), [targetOnly]);
+  const [stepIndex, setStepIndex] = useState(0);
   const [draft, setDraft] = useState<AccountDraft>(() => createEmptyDraft("target", "facebook"));
   const [errors, setErrors] = useState<FormErrors>({});
-  const [successMessage, setSuccessMessage] = useState("");
-  const [showAdvanced, setShowAdvanced] = useState(false);
 
-  const activeMutation = draft.kind === "source" ? sourceMutation : targetMutation;
-  const isSubmitting = sourceMutation?.isPending || targetMutation?.isPending;
-  const kindChoices = targetOnly ? ACCOUNT_KIND_OPTIONS.filter((option) => option.value === "target") : ACCOUNT_KIND_OPTIONS;
+  const currentStep = steps[stepIndex];
+  const activeMutation = !targetOnly && draft.kind === "source" && sourceMutation ? sourceMutation : targetMutation;
+  const isSubmitting = Boolean(sourceMutation?.isPending || targetMutation?.isPending);
+  const platformLabel = PLATFORM_LABELS[draft.platform];
 
-  const stepTitle = useMemo(() => {
-    if (!targetOnly && step === 1) return "Bước 1 · Chọn loại tài khoản";
-    if ((targetOnly && step === 2) || (!targetOnly && step === 2)) return "Bước 2 · Chọn nền tảng";
-    return "Bước 3 · Nhập thông tin";
-  }, [step, targetOnly]);
-
-  function resetWizard(kind: AccountKind = "target", platform: AccountPlatform = "facebook") {
-    setStep(targetOnly ? 2 : 1);
-    setDraft(createEmptyDraft(kind, platform));
+  function resetWizard() {
+    setStepIndex(0);
+    setDraft(createEmptyDraft("target", "facebook"));
     setErrors({});
-    setSuccessMessage("");
-    setShowAdvanced(false);
   }
 
   function closeDialog() {
@@ -64,184 +90,351 @@ export function AddAccountDialog({ open, onClose, sourceMutation, targetMutation
     }
   }
 
+  function goNext() {
+    setStepIndex((i) => Math.min(steps.length - 1, i + 1));
+  }
+
+  function goBack() {
+    if (stepIndex === 0) closeDialog();
+    else setStepIndex((i) => i - 1);
+  }
+
   async function submit() {
     const nextErrors = validateDraft(draft);
     setErrors(nextErrors);
-    if (Object.keys(nextErrors).length > 0) {
-      setStep(3);
-      return;
-    }
-
+    if (Object.keys(nextErrors).length > 0) return;
     try {
       await activeMutation.mutateAsync(buildAccountPayload(draft));
-      setSuccessMessage(`Đã tạo tài khoản ${draft.kind === "source" ? "nguồn" : "đăng"} cho ${draft.platform}.`);
-      setErrors({});
-      setDraft(createEmptyDraft(draft.kind, draft.platform));
-      setStep(targetOnly ? 2 : 1);
-      setShowAdvanced(false);
-    } catch {
-      // handled by mutation.error
+      toast.success(`Đã tạo tài khoản ${platformLabel}.`);
+      resetWizard();
+      onClose();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Không thể tạo tài khoản.");
     }
   }
 
-  function renderPlatformForm() {
-    if (draft.platform === "facebook") return <FacebookAccountForm draft={draft} errors={errors} setDraft={setDraft} />;
-    if (draft.platform === "telegram") return <TelegramAccountForm draft={draft} errors={errors} setDraft={setDraft} />;
-    if (draft.platform === "x") return <XAccountForm draft={draft} errors={errors} setDraft={setDraft} />;
-    if (draft.platform === "threads") return <ThreadsAccountForm draft={draft} errors={errors} setDraft={setDraft} />;
-    return <InstagramAccountForm draft={draft} errors={errors} setDraft={setDraft} />;
-  }
+  const stepCountClass = steps.length === 4 ? "four" : steps.length === 5 ? "five" : "";
 
   return (
-    <Dialog open={open} onClose={closeDialog} title={targetOnly ? "Thêm tài khoản đăng" : "Thêm tài khoản"}>
+    <Dialog open={open} onClose={closeDialog} title="Thêm tài khoản">
       <div className="wizard-shell">
-        <div className="wizard-steps">
-          {!targetOnly ? (
-            <div className={`wizard-step ${1 <= step ? "active" : ""}`}>
-              <span>1</span>
-              <strong>Loại</strong>
-            </div>
-          ) : null}
-          <div className={`wizard-step ${2 <= step ? "active" : ""}`}>
-            <span>{targetOnly ? 1 : 2}</span>
-            <strong>Nền tảng</strong>
-          </div>
-          <div className={`wizard-step ${3 <= step ? "active" : ""}`}>
-            <span>{targetOnly ? 2 : 3}</span>
-            <strong>Chi tiết</strong>
-          </div>
+        <div className={`wizard-steps ${stepCountClass}`}>
+          {steps.map((step, index) => (
+            <button
+              key={step}
+              type="button"
+              className={`wizard-step ${index <= stepIndex ? "active" : ""}`}
+              onClick={() => { if (index < stepIndex && !isSubmitting) setStepIndex(index); }}
+              disabled={isSubmitting || index >= stepIndex}
+            >
+              <span>{index + 1}</span>
+              <strong>{STEP_LABELS[step]}</strong>
+            </button>
+          ))}
         </div>
 
         <div className="panel panel-pad wizard-body">
-          <div className="wizard-headline">
-            <div>
-              <h3>{stepTitle}</h3>
-              <p className="muted-copy">Điền đủ thông tin tối thiểu để lưu tài khoản. Phần nâng cao có thể mở thêm khi cần.</p>
-            </div>
-            <Layers3 aria-hidden size={18} />
-          </div>
-
-          {successMessage ? (
-            <div className="field-success" role="status">
-              <CheckCircle2 aria-hidden size={14} />
-              <span>{successMessage}</span>
-            </div>
-          ) : null}
-
-          {activeMutation?.error?.message ? <FormError message={activeMutation.error.message} /> : null}
-
-          {!targetOnly && step === 1 ? (
-            <div className="choice-grid">
-              {kindChoices.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`choice-card ${draft.kind === option.value ? "active" : ""}`}
-                  onClick={() => {
-                    setDraft((current) => ({ ...current, kind: option.value }));
-                    setStep(2);
-                  }}
-                >
-                  <div className="choice-title">
-                    <ShieldAlert aria-hidden size={16} />
-                    <span>{option.label}</span>
-                  </div>
-                  <small>{option.description}</small>
-                </button>
-              ))}
-            </div>
-          ) : null}
-
-          {step === 2 ? (
-            <div className="choice-grid">
-              {PLATFORM_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`choice-card ${draft.platform === option.value ? "active" : ""}`}
-                  onClick={() => {
-                    setDraft((current) => ({ ...current, kind: targetOnly ? "target" : current.kind, platform: option.value }));
-                    setStep(3);
-                  }}
-                >
-                  <div className="choice-title">
-                    {option.icon}
-                    <span>{option.label}</span>
-                  </div>
-                  <small>{option.description}</small>
-                </button>
-              ))}
-            </div>
-          ) : null}
-
-          {step === 3 ? (
-            <div className="wizard-form-stack">
-              <div className="form-grid">
-                <div className={draft.platform === "facebook" ? "field full" : "field"}>
-                  <Label htmlFor="dialog-name">Tên hiển thị</Label>
-                  <Input id="dialog-name" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Ví dụ: Page bán hàng" />
-                  <FormError message={errors.name} />
-                </div>
-                {draft.platform !== "facebook" ? (
-                  <div className="field">
-                    <Label htmlFor="dialog-handle">Handle hoặc URL</Label>
-                    <Input id="dialog-handle" value={draft.handle} onChange={(event) => setDraft((current) => ({ ...current, handle: event.target.value }))} placeholder="@username hoặc URL" />
-                    <FormError message={errors.handle} />
-                  </div>
-                ) : null}
-              </div>
-
-              {renderPlatformForm()}
-
-              <div className="panel" style={{ padding: 12 }}>
-                <button
-                  type="button"
-                  className="nav-item auto-style-nav"
-                  style={{ width: "100%", justifyContent: "space-between" }}
-                  onClick={() => setShowAdvanced((current) => !current)}
-                >
-                  <span>Cấu hình nâng cao</span>
-                  <ChevronDown aria-hidden size={16} style={{ transform: showAdvanced ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s ease" }} />
-                </button>
-                {showAdvanced ? (
-                  <div className="form-grid" style={{ marginTop: 12 }}>
-                    <div className="field full">
-                      <Label htmlFor="dialog-credentials">Credentials JSON bổ sung</Label>
-                      <Textarea id="dialog-credentials" value={draft.credentialsText} onChange={(event) => setDraft((current) => ({ ...current, credentialsText: event.target.value }))} />
-                      <FormError message={errors.credentialsText} />
-                    </div>
-                    <div className="field full">
-                      <Label htmlFor="dialog-config">Config JSON</Label>
-                      <Textarea id="dialog-config" value={draft.configText} onChange={(event) => setDraft((current) => ({ ...current, configText: event.target.value }))} />
-                      <FormError message={errors.configText} />
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
+          {currentStep === "kind" && (
+            <KindStep
+              draft={draft}
+              onSelect={(kind) => {
+                setDraft((c) => ({ ...c, kind }));
+                goNext();
+              }}
+            />
+          )}
+          {currentStep === "platform" && (
+            <PlatformStep
+              draft={draft}
+              onSelect={(platform) => {
+                setDraft((c) => ({ ...c, platform, kind: targetOnly ? "target" : c.kind }));
+                goNext();
+              }}
+            />
+          )}
+          {currentStep === "connect" && (
+            isBrowserLoginPlatform(draft.platform)
+              ? <BrowserConnectStep platform={draft.platform} platformLabel={platformLabel} />
+              : <TelegramConnectStep draft={draft} errors={errors} setDraft={setDraft} />
+          )}
+          {currentStep === "test" && (
+            <TestStep platform={draft.platform} platformLabel={platformLabel} draft={draft} />
+          )}
+          {currentStep === "name" && (
+            <NameStep draft={draft} errors={errors} setDraft={setDraft} />
+          )}
         </div>
 
         <div className="actions wizard-actions">
-          <Button type="button" variant="ghost" onClick={() => (step <= (targetOnly ? 2 : 1) ? closeDialog() : setStep((current) => Math.max(targetOnly ? 2 : 1, current - 1)))} disabled={isSubmitting}>
-            {step <= (targetOnly ? 2 : 1) ? "Đóng" : "Quay lại"}
+          <Button type="button" variant="ghost" onClick={goBack} disabled={isSubmitting}>
+            {stepIndex === 0 ? "Đóng" : "Quay lại"}
           </Button>
-          {step < 3 ? (
-            <Button type="button" onClick={() => setStep((current) => Math.min(3, current + 1))}>
+          {currentStep !== "kind" && currentStep !== "platform" && currentStep !== "name" && (
+            <Button type="button" onClick={goNext}>
               Tiếp tục
             </Button>
-          ) : (
-            <>
-              <Button type="button" variant="ghost" onClick={() => resetWizard(draft.kind, draft.platform)} disabled={isSubmitting}>
-                Làm lại
-              </Button>
-              <Button type="button" onClick={submit} disabled={isSubmitting}>
-                {isSubmitting ? "Đang lưu..." : "Lưu tài khoản"}
-              </Button>
-            </>
+          )}
+          {currentStep === "name" && (
+            <Button type="button" onClick={submit} disabled={isSubmitting}>
+              {isSubmitting ? "Đang lưu..." : "Lưu tài khoản"}
+            </Button>
           )}
         </div>
       </div>
     </Dialog>
+  );
+}
+
+function KindStep({ draft, onSelect }: { draft: AccountDraft; onSelect: (kind: AccountKind) => void }) {
+  return (
+    <>
+      <div className="wizard-headline">
+        <div>
+          <h3>Loại tài khoản</h3>
+          <p className="muted-copy">Chọn mục đích sử dụng tài khoản này.</p>
+        </div>
+        <ShieldAlert aria-hidden size={18} />
+      </div>
+      <div className="choice-grid">
+        {ACCOUNT_KIND_OPTIONS.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className={`choice-card ${draft.kind === option.value ? "active" : ""}`}
+            onClick={() => onSelect(option.value)}
+          >
+            <div className="choice-title">
+              <ShieldAlert aria-hidden size={16} />
+              <span>{option.label}</span>
+            </div>
+            <small>{option.description}</small>
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function PlatformStep({ draft, onSelect }: { draft: AccountDraft; onSelect: (platform: AccountPlatform) => void }) {
+  return (
+    <>
+      <div className="wizard-headline">
+        <div>
+          <h3>Chọn nền tảng</h3>
+          <p className="muted-copy">
+            Facebook, Instagram, Threads và X đăng nhập qua trình duyệt. Telegram dùng API key và session string.
+          </p>
+        </div>
+        <Layers3 aria-hidden size={18} />
+      </div>
+      <div className="choice-grid">
+        {PLATFORM_OPTIONS.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className={`choice-card ${draft.platform === option.value ? "active" : ""}`}
+            onClick={() => onSelect(option.value)}
+          >
+            <div className="choice-title">
+              {option.icon}
+              <span>{option.label}</span>
+            </div>
+            <small>{option.description}</small>
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+const BROWSER_PLATFORM_ICONS: Record<string, React.ReactNode> = {
+  facebook: <Facebook size={28} />,
+  instagram: <Instagram size={28} />,
+  threads: <MessageCircle size={28} />,
+  x: <Twitter size={28} />,
+};
+
+function BrowserConnectStep({ platform, platformLabel }: { platform: AccountPlatform; platformLabel: string }) {
+  return (
+    <div className="wizard-connect">
+      <div className="wizard-connect-icon">{BROWSER_PLATFORM_ICONS[platform]}</div>
+      <h3>Đăng nhập {platformLabel} qua trình duyệt</h3>
+      <p className="muted-copy">
+        Sau khi lưu tài khoản, Zerun tự động mở cửa sổ {platformLabel} riêng. Bạn đăng nhập trong cửa sổ đó —
+        Zerun không lưu mật khẩu.
+      </p>
+      <ol className="browser-flow-steps">
+        <li>Đặt tên và lưu tài khoản ở bước tiếp theo</li>
+        <li>Zerun mở cửa sổ {platformLabel} riêng</li>
+        <li>Đăng nhập bình thường trong cửa sổ đó</li>
+        <li>Session được lưu tự động</li>
+      </ol>
+      <InlineNote tone="info">
+        <Globe aria-hidden size={14} />
+        <span>Mật khẩu không bao giờ đi qua Zerun. App chỉ lưu cookie/session sau khi bạn đăng nhập thành công.</span>
+      </InlineNote>
+    </div>
+  );
+}
+
+function TelegramConnectStep({
+  draft,
+  errors,
+  setDraft,
+}: {
+  draft: AccountDraft;
+  errors: FormErrors;
+  setDraft: React.Dispatch<React.SetStateAction<AccountDraft>>;
+}) {
+  return (
+    <div className="wizard-connect">
+      <h3>Nhập thông tin Telegram MTProto</h3>
+      <p className="muted-copy">Dùng API ID, API Hash và session string để crawl hoặc publish.</p>
+      <InlineNote tone="info">
+        <KeyRound aria-hidden size={14} />
+        <span>
+          Vào <code>my.telegram.org</code>, đăng nhập số điện thoại, mở <strong>API development tools</strong> để
+          lấy API ID và API Hash.
+        </span>
+      </InlineNote>
+      <div className="form-grid">
+        <div className="field">
+          <Label htmlFor="tg-api-id">API ID</Label>
+          <Input
+            id="tg-api-id"
+            value={draft.telegramApiId}
+            onChange={(e) => setDraft((c) => ({ ...c, telegramApiId: e.target.value }))}
+            placeholder="123456"
+          />
+          <FormError message={errors.telegramApiId} />
+        </div>
+        <div className="field">
+          <Label htmlFor="tg-api-hash">API Hash</Label>
+          <Input
+            id="tg-api-hash"
+            value={draft.telegramApiHash}
+            onChange={(e) => setDraft((c) => ({ ...c, telegramApiHash: e.target.value }))}
+            placeholder="0123456789abcdef"
+          />
+          <FormError message={errors.telegramApiHash} />
+        </div>
+        <div className="field full">
+          <Label htmlFor="tg-phone">
+            Số điện thoại <span className="muted-copy">(tuỳ chọn)</span>
+          </Label>
+          <Input
+            id="tg-phone"
+            value={draft.telegramPhone}
+            onChange={(e) => setDraft((c) => ({ ...c, telegramPhone: e.target.value }))}
+            placeholder="+8490xxxxxxx"
+          />
+        </div>
+        <div className="field full">
+          <Label htmlFor="tg-session">Session string</Label>
+          <Textarea
+            id="tg-session"
+            value={draft.telegramSession}
+            onChange={(e) => setDraft((c) => ({ ...c, telegramSession: e.target.value }))}
+            placeholder="1AQA..."
+          />
+          <FormError message={errors.telegramSession} />
+        </div>
+      </div>
+      <InlineNote tone="warning">
+        <KeyRound aria-hidden size={14} />
+        <span>Không nhập mật khẩu Telegram vào đây. App chỉ cần API ID, API Hash và session string đã đăng nhập.</span>
+      </InlineNote>
+    </div>
+  );
+}
+
+function TestStep({
+  platform,
+  platformLabel,
+  draft,
+}: {
+  platform: AccountPlatform;
+  platformLabel: string;
+  draft: AccountDraft;
+}) {
+  if (isBrowserLoginPlatform(platform)) {
+    return (
+      <div className="wizard-test">
+        <CheckCircle2 className="test-status-icon ok" aria-hidden size={40} />
+        <h3>Sẵn sàng kết nối</h3>
+        <p className="muted-copy">
+          Tài khoản {platformLabel} sẽ mở trình duyệt để đăng nhập ngay sau khi lưu.
+          <br />
+          Bấm <strong>Tiếp tục</strong> để đặt tên và lưu tài khoản.
+        </p>
+      </div>
+    );
+  }
+
+  const telegramReady =
+    draft.telegramApiId.trim() && draft.telegramApiHash.trim() && draft.telegramSession.trim();
+
+  return (
+    <div className="wizard-test">
+      {telegramReady ? (
+        <>
+          <CheckCircle2 className="test-status-icon ok" aria-hidden size={40} />
+          <h3>Thông tin hợp lệ</h3>
+          <p className="muted-copy">
+            API ID, API Hash và session string đã nhập. Bấm <strong>Tiếp tục</strong> để đặt tên tài khoản.
+          </p>
+        </>
+      ) : (
+        <>
+          <AlertCircle className="test-status-icon warn" aria-hidden size={40} />
+          <h3>Thiếu thông tin</h3>
+          <p className="muted-copy">
+            Quay lại bước trước để nhập đầy đủ API ID, API Hash và session string.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+function NameStep({
+  draft,
+  errors,
+  setDraft,
+}: {
+  draft: AccountDraft;
+  errors: FormErrors;
+  setDraft: React.Dispatch<React.SetStateAction<AccountDraft>>;
+}) {
+  return (
+    <div className="wizard-name">
+      <h3>Đặt tên tài khoản</h3>
+      <p className="muted-copy">Tên giúp bạn nhận ra tài khoản trong danh sách.</p>
+      <div className="form-grid">
+        <div className="field full">
+          <Label htmlFor="account-name">Tên hiển thị</Label>
+          <Input
+            id="account-name"
+            value={draft.name}
+            onChange={(e) => setDraft((c) => ({ ...c, name: e.target.value }))}
+            placeholder="Ví dụ: Page bán hàng"
+            autoFocus
+          />
+          <FormError message={errors.name} />
+        </div>
+        <div className="field full">
+          <Label htmlFor="account-handle">
+            Handle hoặc URL <span className="muted-copy">(tuỳ chọn)</span>
+          </Label>
+          <Input
+            id="account-handle"
+            value={draft.handle}
+            onChange={(e) => setDraft((c) => ({ ...c, handle: e.target.value }))}
+            placeholder="@username hoặc URL"
+          />
+          <FormError message={errors.handle} />
+        </div>
+      </div>
+    </div>
   );
 }

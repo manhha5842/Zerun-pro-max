@@ -1,11 +1,20 @@
 import type { Config } from "tailwindcss";
 
 export default {
+  darkMode: ["class"],
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'sans-serif']
+        sans: [
+          "Inter",
+          "ui-sans-serif",
+          "system-ui",
+          "-apple-system",
+          "BlinkMacSystemFont",
+          '"Segoe UI"',
+          "sans-serif",
+        ],
       },
       colors: {
         background: "var(--color-bg)",
@@ -16,12 +25,13 @@ export default {
         primary: "var(--color-primary)",
         primarySoft: "var(--color-primary-soft)",
         danger: "var(--color-danger)",
-        warning: "var(--color-warning)"
+        warning: "var(--color-warning)",
       },
       borderRadius: {
         sm: "var(--radius-sm)",
         md: "var(--radius-md)",
-        lg: "var(--radius-lg)"
+        lg: "var(--radius-lg)",
+        DEFAULT: "var(--radius-md)",
       },
       spacing: {
         1: "var(--space-1)",
@@ -32,13 +42,13 @@ export default {
         6: "var(--space-6)",
         7: "var(--space-7)",
         8: "var(--space-8)",
-        10: "var(--space-10)"
+        10: "var(--space-10)",
       },
       boxShadow: {
         soft: "var(--shadow-soft)",
-        card: "var(--shadow-card)"
-      }
-    }
+        card: "var(--shadow-card)",
+      },
+    },
   },
-  plugins: []
+  plugins: [],
 } satisfies Config;

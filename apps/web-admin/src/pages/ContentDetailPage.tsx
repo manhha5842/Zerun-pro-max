@@ -8,8 +8,10 @@ import { Button } from "../components/ui/Button";
 import { Label } from "../components/ui/Label";
 import { Select } from "../components/ui/Select";
 import { Textarea } from "../components/ui/Textarea";
+import { useToast } from "../components/ui/Toast";
 import { SectionCard } from "../components/common/SectionCard";
 import { PageHeader } from "../components/common/PageHeader";
+import { ThreadsPublishSettings, buildThreadsPublishPayload, normalizeThreadsPublishSettings, type ThreadsPublishSettingsValue } from "../components/common/ThreadsPublishSettings";
 import { getPlatformLabel, isSupportedTargetPlatform } from "../utils/platforms";
 
 type ContentDetail = {
@@ -40,9 +42,9 @@ type AccountsData = {
   accounts: Array<{ id: string; name: string; platform: string; kind: string }>;
 };
 
-function getMetadata(content: ContentDetail): { type?: string; comment?: string; mediaPaths?: string[] } {
+function getMetadata(content: ContentDetail): { type?: string; comment?: string; mediaPaths?: string[]; threads?: Partial<ThreadsPublishSettingsValue> } {
   const raw = (content as unknown as { metadata?: unknown }).metadata;
-  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as { type?: string; comment?: string; mediaPaths?: string[] };
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as { type?: string; comment?: string; mediaPaths?: string[]; threads?: Partial<ThreadsPublishSettingsValue> };
   return {};
 }
 
@@ -58,6 +60,7 @@ function postTypesForPlatform(platform: string): Array<{ value: string; label: s
 export function ContentDetailPage() {
   const { code } = useParams();
   const queryClient = useQueryClient();
+  const toast = useToast();
 
   const detail = useQuery({
     queryKey: ["content", code],
@@ -81,18 +84,19 @@ export function ContentDetailPage() {
   const [postType, setPostType] = useState<string | undefined>(undefined);
   const [comment, setComment] = useState<string | undefined>(undefined);
   const [mediaPaths, setMediaPaths] = useState<string[] | undefined>(undefined);
+  const [threads, setThreads] = useState<ThreadsPublishSettingsValue | undefined>(undefined);
   const [selectedTargetId, setSelectedTargetId] = useState<string | undefined>(undefined);
-  const [saveResult, setSaveResult] = useState<{ success: boolean; message: string } | null>(null);
-  const [publishResult, setPublishResult] = useState<{ success: boolean; message: string } | null>(null);
 
   const effectiveDraftText = draftText ?? content?.draftText ?? content?.originalText ?? "";
   const effectivePostType = postType ?? metadata.type ?? "feed";
   const effectiveComment = comment ?? metadata.comment ?? "";
   const effectiveMediaPaths = mediaPaths ?? metadata.mediaPaths ?? [];
+  const effectiveThreads = threads ?? normalizeThreadsPublishSettings(metadata.threads);
   const defaultTargetId = content?.scheduledTargets?.[0] ?? relevantTargets[0]?.id ?? "";
   const effectiveTargetId = selectedTargetId ?? defaultTargetId;
   const platformLabel = getPlatformLabel(content?.platform ?? "facebook");
   const postTypeOptions = postTypesForPlatform(content?.platform ?? "facebook");
+  const isThreadsContent = content?.platform === "threads" || relevantTargets.find((account) => account.id === effectiveTargetId)?.platform === "threads";
 
   const saveMutation = useMutation({
     mutationFn: () => apiPut(`/contents/${code}/edit`, {
@@ -100,15 +104,15 @@ export function ContentDetailPage() {
       type: effectivePostType,
       comment: effectiveComment,
       mediaPaths: effectiveMediaPaths,
+      threads: isThreadsContent ? buildThreadsPublishPayload(effectiveThreads) : undefined,
       targetIds: effectiveTargetId ? [effectiveTargetId] : []
     }),
     onSuccess: () => {
-      setSaveResult({ success: true, message: "Đã lưu thay đổi." });
+      toast.success("Đã lưu thay đổi.");
       void queryClient.invalidateQueries({ queryKey: ["content", code] });
-      setTimeout(() => setSaveResult(null), 3000);
     },
     onError: (error) => {
-      setSaveResult({ success: false, message: error instanceof Error ? error.message : "Không thể lưu." });
+      toast.error(error instanceof Error ? error.message : "Không thể lưu.");
     }
   });
 
@@ -117,12 +121,12 @@ export function ContentDetailPage() {
       targetIds: effectiveTargetId ? [effectiveTargetId] : []
     }),
     onSuccess: (data) => {
-      setPublishResult({ success: true, message: `Đã đưa vào hàng chờ đăng cho ${data.targetCount} tài khoản.` });
+      toast.success(`Đã đưa vào hàng chờ đăng cho ${data.targetCount} tài khoản.`);
       void queryClient.invalidateQueries({ queryKey: ["content", code] });
       setTimeout(() => void queryClient.invalidateQueries({ queryKey: ["content", code] }), 2000);
     },
     onError: (error) => {
-      setPublishResult({ success: false, message: error instanceof Error ? error.message : "Không thể đăng bài." });
+      toast.error(error instanceof Error ? error.message : "Không thể đăng bài.");
     }
   });
 
@@ -164,24 +168,6 @@ export function ContentDetailPage() {
         }
       />
 
-      {saveResult ? (
-        <SectionCard style={{ marginBottom: 16 }}>
-          <div className={saveResult.success ? "field-success" : "field-error"} role={saveResult.success ? "status" : "alert"}>
-            {saveResult.success ? <CheckCircle2 aria-hidden size={14} /> : <XCircle aria-hidden size={14} />}
-            <span>{saveResult.message}</span>
-          </div>
-        </SectionCard>
-      ) : null}
-
-      {publishResult ? (
-        <SectionCard style={{ marginBottom: 16 }}>
-          <div className={publishResult.success ? "field-success" : "field-error"} role={publishResult.success ? "status" : "alert"}>
-            {publishResult.success ? <CheckCircle2 aria-hidden size={14} /> : <XCircle aria-hidden size={14} />}
-            <span>{publishResult.message}</span>
-          </div>
-        </SectionCard>
-      ) : null}
-
       <div className="composer-single-card" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <SectionCard title="Thiết lập bài đăng">
           <div className="composer-flow-grid">
@@ -214,6 +200,13 @@ export function ContentDetailPage() {
               <Textarea id="draft-text" value={effectiveDraftText} onChange={(e) => setDraftText(e.target.value)} rows={6} className="composer-textarea" />
             </div>
 
+            {isThreadsContent ? (
+              <div className="field full">
+                <Label>Tuỳ chọn Threads</Label>
+                <ThreadsPublishSettings value={effectiveThreads} onChange={setThreads} />
+              </div>
+            ) : null}
+
             <div className="field full">
               <Label htmlFor="first-comment">Comment đầu tiên</Label>
               <Textarea id="first-comment" value={effectiveComment} onChange={(e) => setComment(e.target.value)} rows={3} className="composer-textarea composer-textarea-sm" placeholder="Để trống nếu không cần comment." />
@@ -223,7 +216,7 @@ export function ContentDetailPage() {
 
         <SectionCard title="Media hiện có">
           {effectiveMediaPaths.length === 0 ? (
-            <p style={{ color: "#68746d", fontSize: 14 }}>Chưa có media nào.</p>
+            <p style={{ color: "var(--color-text-muted)", fontSize: 14 }}>Chưa có media nào.</p>
           ) : (
             <div className="upload-list compact-two-col">
               {effectiveMediaPaths.map((path, index) => (
@@ -250,9 +243,9 @@ export function ContentDetailPage() {
                 return (
                   <div key={attempt.id} className="publish-attempt-row">
                     <div className="publish-attempt-status">
-                      {attempt.status === "success" ? <CheckCircle2 aria-hidden size={14} style={{ color: "#0f6f5c" }} /> : attempt.status === "failed" ? <XCircle aria-hidden size={14} style={{ color: "#b42318" }} /> : <span style={{ fontSize: 12, color: "#68746d" }}>-</span>}
+                      {attempt.status === "success" ? <CheckCircle2 aria-hidden size={14} style={{ color: "var(--color-primary)" }} /> : attempt.status === "failed" ? <XCircle aria-hidden size={14} style={{ color: "var(--color-danger)" }} /> : <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>-</span>}
                       <span>{attempt.status}</span>
-                      {platformTag ? <span style={{ fontSize: 11, color: "#68746d", marginLeft: 4 }}>({platformTag})</span> : null}
+                      {platformTag ? <span style={{ fontSize: 11, color: "var(--color-text-muted)", marginLeft: 4 }}>({platformTag})</span> : null}
                     </div>
                     {attempt.resultUrl ? <a href={attempt.resultUrl} target="_blank" rel="noopener noreferrer" className="publish-attempt-link">Xem bài đăng</a> : null}
                     {attempt.error ? <div className="publish-attempt-error">{attempt.error}</div> : null}

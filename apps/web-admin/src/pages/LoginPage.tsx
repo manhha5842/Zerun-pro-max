@@ -1,12 +1,13 @@
-import { FormEvent, useState } from "react";
+import { FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { LogIn } from "lucide-react";
 import { apiPost } from "../api/client";
 import { Button } from "../components/ui/Button";
+import { useToast } from "../components/ui/Toast";
 
 export function LoginPage() {
   const navigate = useNavigate();
-  const [error, setError] = useState("");
+  const toast = useToast();
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -18,7 +19,7 @@ export function LoginPage() {
       });
       navigate("/dashboard");
     } catch (loginError) {
-      setError(loginError instanceof Error ? loginError.message : "Đăng nhập thất bại");
+      toast.error(loginError instanceof Error ? loginError.message : "Đăng nhập thất bại");
     }
   }
 
@@ -37,7 +38,6 @@ export function LoginPage() {
             <input name="password" type="password" autoComplete="current-password" required />
           </label>
         </div>
-        {error ? <p className="text-danger">{error}</p> : null}
         <div className="actions" style={{ marginTop: 18 }}>
           <Button icon={<LogIn aria-hidden />}>Đăng nhập</Button>
         </div>

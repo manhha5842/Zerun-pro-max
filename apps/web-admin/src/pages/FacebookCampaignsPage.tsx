@@ -13,6 +13,7 @@ import { Dialog } from "../components/ui/Dialog";
 import { Input } from "../components/ui/Input";
 import { Label } from "../components/ui/Label";
 import { Textarea } from "../components/ui/Textarea";
+import { useToast } from "../components/ui/Toast";
 
 type Campaign = {
   id: string;
@@ -28,6 +29,7 @@ type Campaign = {
 export function FacebookCampaignsPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const toast = useToast();
   const [showDialog, setShowDialog] = useState(false);
   const [form, setForm] = useState({ name: "", description: "", postsPerDay: 5, startDate: "" });
 
@@ -51,18 +53,28 @@ export function FacebookCampaignsPage() {
       qc.invalidateQueries({ queryKey: ["fb-campaigns-list"] });
       setShowDialog(false);
       setForm({ name: "", description: "", postsPerDay: 5, startDate: "" });
+      toast.success("Đã tạo lô đăng.");
       navigate(`/facebook/campaigns/${data.campaign.id}`);
-    }
+    },
+    onError: (error: Error) => toast.error(error.message)
   });
 
   const scheduleMutation = useMutation({
     mutationFn: (id: string) => apiPost<{ scheduled: number }>(`/facebook/campaigns/${id}/schedule`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["fb-campaigns-list"] })
+    onSuccess: () => {
+      toast.success("Đã lên lịch lô đăng.");
+      qc.invalidateQueries({ queryKey: ["fb-campaigns-list"] });
+    },
+    onError: (error: Error) => toast.error(error.message)
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => apiDelete<{ success: boolean }>(`/facebook/campaigns/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["fb-campaigns-list"] })
+    onSuccess: () => {
+      toast.success("Đã xoá lô đăng.");
+      qc.invalidateQueries({ queryKey: ["fb-campaigns-list"] });
+    },
+    onError: (error: Error) => toast.error(error.message)
   });
 
   const rows = campaigns ?? [];
@@ -213,10 +225,6 @@ export function FacebookCampaignsPage() {
               {createMutation.isPending ? "Đang tạo..." : "Tạo lô đăng"}
             </Button>
           </div>
-
-          {createMutation.isError && (
-            <p className="text-sm text-danger">{String(createMutation.error)}</p>
-          )}
         </form>
       </Dialog>
     </>

@@ -1,9 +1,9 @@
-import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { apiGet, apiPost } from "../api/client";
 import { StatusBadge } from "../components/common/StatusBadge";
 import { Button } from "../components/ui/Button";
+import { useToast } from "../components/ui/Toast";
 import { AccountForm, type AccountFormValues } from "./accountForms";
 
 type Target = {
@@ -17,16 +17,16 @@ type Target = {
 
 export function TargetsPage() {
   const queryClient = useQueryClient();
-  const [formFeedback, setFormFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const toast = useToast();
   const query = useQuery({ queryKey: ["targets"], queryFn: () => apiGet<{ targets: Target[] }>("/targets") });
   const create = useMutation({
     mutationFn: (values: AccountFormValues) => apiPost("/targets", values),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["targets"] });
       void queryClient.invalidateQueries({ queryKey: ["accounts"] });
-      setFormFeedback({ type: "success", message: "Đã thêm đích đăng mới." });
+      toast.success("Đã thêm đích đăng mới.");
     },
-    onError: (error: Error) => setFormFeedback({ type: "error", message: error.message })
+    onError: (error: Error) => toast.error(error.message)
   });
 
   return (
@@ -34,13 +34,12 @@ export function TargetsPage() {
       <header className="page-head">
         <div>
           <h1 className="page-title">Đích đăng</h1>
-          <p className="page-subtitle">Mỗi target là một tài khoản, channel, profile hoặc group dùng để publish thật. Với Facebook, bạn có thể nhập authPath/sessionDir ngay tại đây.</p>
+          <p className="page-subtitle">Mỗi target là một tài khoản, channel, profile hoặc group dùng để publish thật. Với Facebook, hãy tạo tài khoản rồi đăng nhập qua browser để backend tự lưu cookie/session.</p>
         </div>
         <Button variant="secondary" icon={<RefreshCw aria-hidden />} onClick={() => query.refetch()} disabled={query.isFetching}>
           {query.isFetching ? "Đang tải..." : "Làm mới"}
         </Button>
       </header>
-      {formFeedback ? <div className={`banner ${formFeedback.type}`}>{formFeedback.message}</div> : null}
       <section className="split">
         <div className="panel">
           <table className="table">
@@ -76,10 +75,7 @@ export function TargetsPage() {
           fixedKind="target"
           defaultPlatform="facebook"
           isSubmitting={create.isPending}
-          submitError={create.error instanceof Error ? create.error.message : undefined}
-          submitSuccess={formFeedback?.type === "success" ? formFeedback.message : undefined}
           onSubmit={async (values) => {
-            setFormFeedback(null);
             await create.mutateAsync(values);
           }}
         />
