@@ -46,6 +46,7 @@ CREATE TABLE "TargetAccount" (
     "health" TEXT NOT NULL DEFAULT 'unknown',
     "credentials" JSONB NOT NULL DEFAULT '{}',
     "config" JSONB NOT NULL DEFAULT '{}',
+    "linkedSourceAccountId" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL
 );
@@ -80,11 +81,63 @@ CREATE TABLE "RoutingRule" (
 );
 
 -- CreateTable
+CREATE TABLE "PlatformChannel" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "accountKind" TEXT NOT NULL,
+    "accountId" TEXT NOT NULL,
+    "platform" TEXT NOT NULL,
+    "externalId" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "channelType" TEXT NOT NULL DEFAULT 'group',
+    "isSource" BOOLEAN NOT NULL DEFAULT false,
+    "isTarget" BOOLEAN NOT NULL DEFAULT false,
+    "filterMode" TEXT NOT NULL DEFAULT 'all',
+    "acceptedCategories" JSONB NOT NULL DEFAULT '[]',
+    "allowGeneralContent" BOOLEAN NOT NULL DEFAULT true,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "metadata" JSONB NOT NULL DEFAULT '{}',
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "RepostFlow" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "name" TEXT NOT NULL,
+    "description" TEXT,
+    "useAI" BOOLEAN NOT NULL DEFAULT true,
+    "autoPublish" BOOLEAN NOT NULL DEFAULT false,
+    "requireReview" BOOLEAN NOT NULL DEFAULT true,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "RepostFlowSource" (
+    "flowId" TEXT NOT NULL,
+    "channelId" TEXT NOT NULL,
+    PRIMARY KEY ("flowId", "channelId"),
+    CONSTRAINT "RepostFlowSource_flowId_fkey" FOREIGN KEY ("flowId") REFERENCES "RepostFlow" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "RepostFlowSource_channelId_fkey" FOREIGN KEY ("channelId") REFERENCES "PlatformChannel" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+-- CreateTable
+CREATE TABLE "RepostFlowTarget" (
+    "flowId" TEXT NOT NULL,
+    "channelId" TEXT NOT NULL,
+    PRIMARY KEY ("flowId", "channelId"),
+    CONSTRAINT "RepostFlowTarget_flowId_fkey" FOREIGN KEY ("flowId") REFERENCES "RepostFlow" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "RepostFlowTarget_channelId_fkey" FOREIGN KEY ("channelId") REFERENCES "PlatformChannel" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+-- CreateTable
 CREATE TABLE "Content" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "code" TEXT NOT NULL,
     "platform" TEXT NOT NULL,
     "sourceId" TEXT,
+    "sourceChannelId" TEXT,
     "externalId" TEXT,
     "sourceUrl" TEXT,
     "author" TEXT,
@@ -103,6 +156,8 @@ CREATE TABLE "Content" (
     "cancelledAt" DATETIME,
     "cancelReason" TEXT,
     "postedAt" DATETIME,
+    "contentHash" TEXT,
+    "duplicateOfId" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
     CONSTRAINT "Content_sourceId_fkey" FOREIGN KEY ("sourceId") REFERENCES "SourceAccount" ("id") ON DELETE SET NULL ON UPDATE CASCADE
@@ -265,6 +320,7 @@ CREATE TABLE "PublishAttempt" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "contentId" TEXT NOT NULL,
     "targetId" TEXT NOT NULL,
+    "targetChannelId" TEXT,
     "attemptNo" INTEGER NOT NULL DEFAULT 1,
     "status" TEXT NOT NULL DEFAULT 'pending',
     "resultUrl" TEXT,
@@ -489,6 +545,9 @@ CREATE INDEX "Content_createdAt_idx" ON "Content"("createdAt");
 CREATE INDEX "Content_deletedAt_idx" ON "Content"("deletedAt");
 
 -- CreateIndex
+CREATE INDEX "Content_contentHash_idx" ON "Content"("contentHash");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "Content_platform_sourceId_externalId_key" ON "Content"("platform", "sourceId", "externalId");
 
 -- CreateIndex
@@ -567,6 +626,9 @@ CREATE INDEX "PublishAttempt_contentId_idx" ON "PublishAttempt"("contentId");
 CREATE INDEX "PublishAttempt_targetId_idx" ON "PublishAttempt"("targetId");
 
 -- CreateIndex
+CREATE INDEX "PublishAttempt_targetChannelId_idx" ON "PublishAttempt"("targetChannelId");
+
+-- CreateIndex
 CREATE INDEX "PublishAttempt_status_idx" ON "PublishAttempt"("status");
 
 -- CreateIndex
@@ -634,5 +696,32 @@ CREATE INDEX "FbExecution_postId_idx" ON "FbExecution"("postId");
 
 -- CreateIndex
 CREATE INDEX "FbExecution_targetId_idx" ON "FbExecution"("targetId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PlatformChannel_accountKind_accountId_externalId_key" ON "PlatformChannel"("accountKind", "accountId", "externalId");
+
+-- CreateIndex
+CREATE INDEX "PlatformChannel_accountKind_accountId_idx" ON "PlatformChannel"("accountKind", "accountId");
+
+-- CreateIndex
+CREATE INDEX "PlatformChannel_isSource_isActive_idx" ON "PlatformChannel"("isSource", "isActive");
+
+-- CreateIndex
+CREATE INDEX "PlatformChannel_isTarget_isActive_idx" ON "PlatformChannel"("isTarget", "isActive");
+
+-- CreateIndex
+CREATE INDEX "RepostFlow_isActive_idx" ON "RepostFlow"("isActive");
+
+-- CreateIndex
+CREATE INDEX "RepostFlowSource_channelId_idx" ON "RepostFlowSource"("channelId");
+
+-- CreateIndex
+CREATE INDEX "RepostFlowTarget_channelId_idx" ON "RepostFlowTarget"("channelId");
+
+-- CreateIndex
+CREATE INDEX "TargetAccount_linkedSourceAccountId_idx" ON "TargetAccount"("linkedSourceAccountId");
+
+-- CreateIndex
+CREATE INDEX "Content_sourceChannelId_idx" ON "Content"("sourceChannelId");
 
 

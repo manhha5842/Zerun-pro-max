@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { Icon, type ZerunIconName } from "./ui/Icon";
 
@@ -14,55 +15,63 @@ type NavSection = {
 const navSections: NavSection[] = [
   {
     label: "Tổng quan",
-    items: [{ to: "/dashboard", label: "Dashboard", icon: "dashboard" }]
+    items: [
+      { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
+      { to: "/worker-jobs", label: "Worker jobs / Logs", icon: "activity" }
+    ]
   },
   {
     label: "Đăng bài",
     items: [
       { to: "/contents/new", label: "Tạo bài đăng", icon: "compose" },
-      { to: "/contents", label: "Quản lý bài đăng", icon: "calendar", match: /^\/contents$/ },
+      { to: "/contents", label: "Quản lý bài đăng", icon: "content", match: /^\/contents$/ },
       { to: "/history", label: "Lịch sử", icon: "history" },
-      { to: "/contents/archive", label: "Kho lưu trữ", icon: "archive" },
-      { to: "/contents/trash", label: "Thùng rác", icon: "trash" }
+      { to: "/contents/archive", label: "Kho lưu trữ", icon: "archive", match: /^\/contents\/archive/ },
+      { to: "/contents/trash", label: "Thùng rác", icon: "trash", match: /^\/contents\/trash/ }
     ]
   },
   {
     label: "Chuyển đổi tự động",
     items: [
-      { to: "/auto-conversion/rules", label: "Cấu hình chuyển đổi tự động", icon: "automation", match: /^\/auto-conversion\/rules/ },
-      { to: "/auto-conversion/history", label: "Lịch sử chuyển đổi tự động", icon: "history", match: /^\/auto-conversion\/history/ }
+      { to: "/auto-conversion/rules", label: "Cấu hình chuyển đổi", icon: "automation", match: /^\/auto-conversion\/rules/ },
+      { to: "/auto-conversion/history", label: "Lịch sử chuyển đổi", icon: "history", match: /^\/auto-conversion\/history/ }
     ]
   },
   {
     label: "Crawl dữ liệu",
     items: [
-      { to: "/crawl", label: "Crawl dữ liệu", icon: "crawl" },
-      { to: "/crawl/history", label: "Lịch sử crawl", icon: "history" },
-      { to: "/crawl/results", label: "Kết quả crawl", icon: "content" }
+      { to: "/crawl", label: "Crawl dữ liệu", icon: "crawl", match: /^\/crawl$/ },
+      { to: "/crawl/history", label: "Lịch sử crawl", icon: "history", match: /^\/crawl\/history/ },
+      { to: "/crawl/results", label: "Kết quả crawl", icon: "content", match: /^\/crawl\/results/ }
+    ]
+  },
+  {
+    label: "Tài khoản",
+    items: [
+      { to: "/accounts", label: "Tài khoản đăng", icon: "account", match: /^\/accounts/ }
+    ]
+  },
+  {
+    label: "Cài đặt",
+    items: [
+      { to: "/settings/ai", label: "AI", icon: "settings", match: /^\/settings\/ai/ },
+      { to: "/settings/affiliate", label: "Affiliate", icon: "settings", match: /^\/settings\/affiliate/ },
+      { to: "/settings/telegram-alert", label: "Cảnh báo Telegram", icon: "settings", match: /^\/settings\/telegram-alert/ },
+      { to: "/settings/auto-publish", label: "Auto-publish", icon: "settings", match: /^\/settings\/auto-publish/ }
     ]
   },
   {
     label: "Công cụ",
-    items: [{ to: "/tools/convert-link", label: "Convert link affiliate", icon: "tool" }]
-  },
-  {
-    label: "Tài khoản",
-    items: [{ to: "/accounts", label: "Quản lý tài khoản", icon: "account" }]
-  },
-  {
-    label: "Hệ thống",
-    items: [
-      { to: "/settings", label: "Cài đặt", icon: "settings" },
-      { to: "/worker-jobs", label: "Worker jobs / Logs", icon: "activity" }
-    ]
+    items: [{ to: "/tools/convert-link", label: "Convert link nhanh", icon: "tool" }]
   }
 ];
 
 export function Layout() {
   const location = useLocation();
+  const [collapsed, setCollapsed] = useState(false);
 
   return (
-    <div className="app-shell auto-style-shell">
+    <div className={`app-shell auto-style-shell ${collapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="sidebar auto-style-sidebar">
         <div className="brand auto-style-brand">
           <div className="brand-mark">
@@ -70,8 +79,16 @@ export function Layout() {
           </div>
           <div>
             <span>Zerun</span>
-            <p className="text-xs text-muted m-0">Quản trị đăng bài</p>
+            <p className="text-xs text-muted m-0">Đăng lại theo ngành</p>
           </div>
+          <button
+            type="button"
+            className="sidebar-collapse-button"
+            aria-label={collapsed ? "Mở rộng sidebar" : "Thu gọn sidebar"}
+            onClick={() => setCollapsed((current) => !current)}
+          >
+            {collapsed ? "›" : "‹"}
+          </button>
         </div>
 
         <nav className="nav-sections" aria-label="Điều hướng chính">
@@ -98,7 +115,7 @@ export function Layout() {
             <div className="footer-avatar">Z</div>
             <div>
               <div className="footer-title">Zerun</div>
-              <div className="footer-subtitle">Giao diện quản trị nội bộ</div>
+              <div className="footer-subtitle">Routing AI theo ngành hàng</div>
             </div>
           </div>
         </div>

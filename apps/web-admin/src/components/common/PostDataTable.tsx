@@ -2,6 +2,7 @@ import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Dialog } from "../ui/Dialog";
 import { StatusBadge } from "./StatusBadge";
+import { isImageMedia, isVideoMedia, mediaPathOf, mediaUrlOf } from "../../utils/media";
 
 export type PostCommentRow = {
   id: string;
@@ -86,6 +87,11 @@ function shorten(value: string | null | undefined, max = 120) {
   return value.length > max ? `${value.slice(0, max).trimEnd()}...` : value;
 }
 
+function fileBasename(p: string | null | undefined) {
+  if (!p) return "";
+  return p.split(/[\\/]/).pop() ?? p;
+}
+
 export function postCommentsOf(post: PostRow): PostCommentRow[] {
   const rows = post.commentQueues ?? post.comments ?? [];
   if (rows.length > 0) return rows;
@@ -121,10 +127,6 @@ function formatDate(value?: string | null) {
   return value ? new Date(value).toLocaleString("vi-VN") : "-";
 }
 
-function mediaSrc(media: PostMediaRow) {
-  return media.cloudinaryUrl ?? media.sourceUrl ?? media.localPath ?? "";
-}
-
 function normalizeCommentMedia(comment: PostCommentRow): PostMediaRow[] {
   return (comment.commentMedia ?? []).map((item, index) => {
     if (typeof item === "string") {
@@ -132,6 +134,26 @@ function normalizeCommentMedia(comment: PostCommentRow): PostMediaRow[] {
     }
     return item;
   });
+}
+
+function MediaPreview({
+  media,
+  alt
+}: {
+  media: PostMediaRow;
+  alt: string;
+}) {
+  const src = mediaUrlOf(media);
+
+  if (isVideoMedia(media)) {
+    return <video src={src} muted playsInline preload="metadata" />;
+  }
+
+  if (isImageMedia(media)) {
+    return <img src={src} alt={alt} />;
+  }
+
+  return <div className="media-preview-fallback">{mediaPathOf(media)}</div>;
 }
 
 export function PostDataTable({
@@ -270,15 +292,17 @@ export function PostDataTable({
       {previewMedia ? (
         <Dialog open onClose={() => setPreviewMedia(null)} title={`Chi tiết media ${previewMedia.index + 1} · ${previewMedia.post.code}`}>
           <div className="media-modal-body">
-            {mediaSrc(previewMedia.media).startsWith("http") ? (
-              <img src={mediaSrc(previewMedia.media)} alt={`Media ${previewMedia.index + 1} của ${previewMedia.post.code}`} />
+            {isVideoMedia(previewMedia.media) ? (
+              <video controls preload="metadata" src={mediaUrlOf(previewMedia.media)} className="media-modal-player" />
+            ) : isImageMedia(previewMedia.media) ? (
+              <img src={mediaUrlOf(previewMedia.media)} alt={`Media ${previewMedia.index + 1} của ${previewMedia.post.code}`} />
             ) : (
-              <div className="media-preview-fallback">{mediaSrc(previewMedia.media)}</div>
+              <div className="media-preview-fallback media-preview-fallback-large">{mediaPathOf(previewMedia.media)}</div>
             )}
             <div className="detail-grid">
               <span>Loại</span><strong>{previewMedia.media.mimeType ?? previewMedia.media.type ?? "media"}</strong>
               <span>Trạng thái</span><StatusBadge status={previewMedia.media.status ?? "completed"} />
-              <span>Nguồn</span><strong>{mediaSrc(previewMedia.media) || "-"}</strong>
+              <span>Nguồn</span><strong className="detail-breakable" title={mediaPathOf(previewMedia.media)}>{fileBasename(mediaPathOf(previewMedia.media)) || "-"}</strong>
               {previewMedia.media.error ? <><span>Lỗi</span><strong className="text-danger">{previewMedia.media.error}</strong></> : null}
             </div>
           </div>
@@ -305,7 +329,7 @@ function PostExpandedDetail({
     <div className="expanded-content post-expanded-content">
       <section>
         <h3>Nội dung đầy đủ</h3>
-        <p>{post.finalText ?? post.draftText ?? post.originalText}</p>
+        <p className="detail-body-copy">{post.finalText ?? post.draftText ?? post.originalText}</p>
         {detailNote ? <div className="inline-note warning detail-note">{detailNote}</div> : null}
 
         <h3 className="detail-section-title">Media</h3>
@@ -313,15 +337,12 @@ function PostExpandedDetail({
           <p className="table-subtle">Bài viết chưa có media.</p>
         ) : (
           <div className="media-preview-grid media-preview-grid-compact">
-            {media.map((item, index) => {
-              const src = mediaSrc(item);
-              return (
-                <button key={item.id ?? `${post.id}-media-${index}`} className="media-preview-card media-preview-card-button" type="button" onClick={() => onPreviewMedia(item, index)}>
-                  {src.startsWith("http") ? <img src={src} alt={`Media ${index + 1} của ${post.code}`} /> : <div className="media-preview-fallback">{src}</div>}
-                  <small>{item.mimeType ?? item.type ?? "media"} · {index + 1}</small>
-                </button>
-              );
-            })}
+            {media.map((item, index) => (
+              <button key={item.id ?? `${post.id}-media-${index}`} className="media-preview-card media-preview-card-button" type="button" onClick={() => onPreviewMedia(item, index)}>
+                <MediaPreview media={item} alt={`Media ${index + 1} của ${post.code}`} />
+                <small>{item.mimeType ?? item.type ?? "media"} · {index + 1}</small>
+              </button>
+            ))}
           </div>
         )}
 
@@ -332,8 +353,8 @@ function PostExpandedDetail({
               <div key={link.id ?? `${post.id}-link-${index}`} className="detail-list-item">
                 <div>
                   <strong>{link.network ?? "link"}</strong>
-                  <p>{link.originalUrl}</p>
-                  {link.convertedUrl ? <p className="table-subtle">{link.convertedUrl}</p> : null}
+                  <p className="detail-breakable">{link.originalUrl}</p>
+                  {link.convertedUrl ? <p className="table-subtle detail-breakable">{link.convertedUrl}</p> : null}
                   {link.error ? <p className="text-danger">{link.error}</p> : null}
                 </div>
                 <StatusBadge status={link.status ?? link.action ?? "pending"} />
@@ -353,21 +374,18 @@ function PostExpandedDetail({
               <div key={comment.id} className="comment-item">
                 <div>
                   <strong>Nội dung bình luận</strong>
-                  <p>{comment.commentText}</p>
+                  <p className="detail-body-copy">{comment.commentText}</p>
                   {comment.error ? <p className="text-danger">{comment.error}</p> : null}
                   {comment.scheduledAt ? <p className="table-subtle">Hẹn: {formatDate(comment.scheduledAt)}</p> : null}
                   {comment.resultUrl ? <a href={comment.resultUrl} target="_blank" rel="noreferrer">Xem comment</a> : null}
                   {normalizeCommentMedia(comment).length > 0 ? (
                     <div className="media-preview-grid media-preview-grid-compact comment-media-grid">
-                      {normalizeCommentMedia(comment).map((item, index) => {
-                        const src = mediaSrc(item);
-                        return (
-                          <button key={item.id ?? `${comment.id}-media-${index}`} className="media-preview-card media-preview-card-button" type="button" onClick={() => onPreviewMedia(item, index)}>
-                            {src.startsWith("http") ? <img src={src} alt={`Media bình luận ${index + 1}`} /> : <div className="media-preview-fallback">{src}</div>}
-                            <small>{item.mimeType ?? item.type ?? "media"} · {index + 1}</small>
-                          </button>
-                        );
-                      })}
+                      {normalizeCommentMedia(comment).map((item, index) => (
+                        <button key={item.id ?? `${comment.id}-media-${index}`} className="media-preview-card media-preview-card-button" type="button" onClick={() => onPreviewMedia(item, index)}>
+                          <MediaPreview media={item} alt={`Media bình luận ${index + 1}`} />
+                          <small>{item.mimeType ?? item.type ?? "media"} · {index + 1}</small>
+                        </button>
+                      ))}
                     </div>
                   ) : null}
                 </div>
@@ -383,10 +401,10 @@ function PostExpandedDetail({
             {post.publishAttempts.map((attempt, index) => (
               <div key={attempt.id ?? `${post.id}-attempt-${index}`} className="detail-line-item">
                 <div>
-                  <strong>{attempt.target?.name ?? attempt.targetId ?? "Tài khoản"}</strong>
+                  <strong className="detail-breakable">{attempt.target?.name ?? attempt.targetId ?? "Tài khoản"}</strong>
                   <p className="table-subtle">{attempt.target?.platform ?? post.platform} · {formatDate(attempt.createdAt)}</p>
                   {attempt.resultUrl ? <a href={attempt.resultUrl} target="_blank" rel="noreferrer">Xem bài</a> : null}
-                  {attempt.error ? <p className="text-danger">{attempt.error}</p> : null}
+                  {attempt.error ? <p className="text-danger detail-breakable">{attempt.error}</p> : null}
                 </div>
                 <StatusBadge status={attempt.status} />
               </div>

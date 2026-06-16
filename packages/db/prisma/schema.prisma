@@ -46,6 +46,7 @@ model SourceAccount {
   updatedAt   DateTime      @updatedAt
   routingRules RoutingRule[]
   contents    Content[]
+  linkedTargets TargetAccount[] @relation("SharedSourceConnection")
 
   @@index([platform])
   @@index([isActive, health])
@@ -67,9 +68,12 @@ model TargetAccount {
   schedules   Schedule[]
   commentQueues CommentQueue[]
   fbPostTargets FbPostTarget[]
+  linkedSourceAccountId String?
+  linkedSourceAccount SourceAccount? @relation("SharedSourceConnection", fields: [linkedSourceAccountId], references: [id], onDelete: SetNull)
 
   @@index([platform])
   @@index([isActive, health])
+  @@index([linkedSourceAccountId])
 }
 
 model PlatformSession {
@@ -106,11 +110,76 @@ model RoutingRule {
   @@index([targetId])
 }
 
+model PlatformChannel {
+  id                    String              @id @default(cuid())
+  accountKind           String
+  accountId             String
+  platform              String
+  externalId            String
+  name                  String
+  channelType           String              @default("group")
+  isSource              Boolean             @default(false)
+  isTarget              Boolean             @default(false)
+  filterMode            String              @default("all")
+  acceptedCategories    Json                @default("[]")
+  allowGeneralContent   Boolean             @default(true)
+  isActive              Boolean             @default(true)
+  metadata              Json                @default("{}")
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  sourceFlowLinks       RepostFlowSource[]
+  targetFlowLinks       RepostFlowTarget[]
+  contents              Content[]
+  publishAttempts       PublishAttempt[]
+
+  @@unique([accountKind, accountId, externalId])
+  @@index([accountKind, accountId])
+  @@index([isSource, isActive])
+  @@index([isTarget, isActive])
+}
+
+model RepostFlow {
+  id            String             @id @default(cuid())
+  name          String
+  description   String?
+  useAI         Boolean            @default(true)
+  autoPublish   Boolean            @default(false)
+  requireReview Boolean            @default(true)
+  isActive      Boolean            @default(true)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  sources       RepostFlowSource[]
+  targets       RepostFlowTarget[]
+
+  @@index([isActive])
+}
+
+model RepostFlowSource {
+  flowId    String
+  channelId String
+  flow      RepostFlow      @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  channel   PlatformChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@id([flowId, channelId])
+  @@index([channelId])
+}
+
+model RepostFlowTarget {
+  flowId    String
+  channelId String
+  flow      RepostFlow      @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  channel   PlatformChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@id([flowId, channelId])
+  @@index([channelId])
+}
+
 model Content {
   id              String           @id @default(cuid())
   code            String           @unique
   platform        String
   sourceId        String?
+  sourceChannelId String?
   externalId      String?
   sourceUrl       String?
   author          String?
@@ -129,9 +198,12 @@ model Content {
   cancelledAt     DateTime?
   cancelReason    String?
   postedAt        DateTime?
+  contentHash     String?
+  duplicateOfId   String?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   source          SourceAccount?   @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  sourceChannel   PlatformChannel? @relation(fields: [sourceChannelId], references: [id], onDelete: SetNull)
   media           MediaAsset[]
   links           ContentLink[]
   publishAttempts PublishAttempt[]
@@ -143,6 +215,8 @@ model Content {
   @@index([platform])
   @@index([createdAt])
   @@index([deletedAt])
+  @@index([contentHash])
+  @@index([sourceChannelId])
 }
 
 model AutoConversionRule {
@@ -328,6 +402,7 @@ model PublishAttempt {
   id          String        @id @default(cuid())
   contentId   String
   targetId    String
+  targetChannelId String?
   attemptNo   Int           @default(1)
   status      String        @default("pending")
   resultUrl   String?
@@ -338,10 +413,12 @@ model PublishAttempt {
   createdAt   DateTime      @default(now())
   content     Content       @relation(fields: [contentId], references: [id], onDelete: Cascade)
   target      TargetAccount @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  targetChannel PlatformChannel? @relation(fields: [targetChannelId], references: [id], onDelete: SetNull)
 
   @@unique([contentId, targetId, attemptNo])
   @@index([contentId])
   @@index([targetId])
+  @@index([targetChannelId])
   @@index([status])
 }
 

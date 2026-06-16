@@ -6,6 +6,84 @@ Ghi lại từng thay đổi liên quan tới platform automation, kèm nguồn 
 
 ---
 
+## 2026-06-11
+
+### Facebook - khảo sát runtime Page post/photo/reel/comment qua Edge debug port
+- **Files:**
+  - `docs/automation-change-log.md`
+  - `packages/adapters/src/platforms/facebook-selectors.ts`
+- **Summary:**
+  - Khảo sát thủ công bằng Edge mở với `--remote-debugging-port=9222`, điều khiển qua CDP/Playwright để mô phỏng cách runtime Selenium/Tauri sau này sẽ bám browser thật.
+  - Account đã đăng nhập Facebook và đã chuyển identity sang Page `Ngọc Trai` qua modal `Chuyển trang cá nhân` / nút `Chuyển`.
+  - Xác nhận Page profile URL sau switch: `https://www.facebook.com/nhaccuamongmer#`.
+  - Xác nhận danh sách Page quản lý quan sát được:
+    - `Ngọc Trai`, URL Page `https://www.facebook.com/nhaccuamongmer`, asset id quan sát từ Business Inbox: `111084616949772`.
+    - `Câu cá King Vip`, asset id quan sát từ URL: `1104531792739008`, profile id trong link: `61570663287491`.
+  - Khảo sát composer Page, đăng ảnh, đăng Reel, option mở rộng, lịch đăng, quyền riêng tư và comment box. Không bấm `Đăng`; draft ảnh/Reel đã đóng sau khảo sát.
+  - Có upload file test do user chỉ định để mở màn sau upload:
+    - `C:\Users\manhh\Downloads\2tnJ.jpeg`
+    - `C:\Users\manhh\Downloads\Nấu Ăn Cuối Tuần\#trendingreels #anngon (7).mp4`
+- **Observed selectors and flow notes:**
+  - Page composer entry:
+    - Button text: `Bạn đang nghĩ gì?`
+    - Page-level media button: `div[role="button"][aria-label="Ảnh/video"]`
+    - Page-level Reel button: `div[role="button"][aria-label="Thước phim"]`
+    - Page-level live video button: `div[role="button"][aria-label="Video trực tiếp"]`
+  - Create post modal:
+    - Dialog: `[role="dialog"][aria-label="Tạo bài viết"]`
+    - Identity text observed: `Ngọc Trai`
+    - Privacy button aria: `Chỉnh sửa quyền riêng tư. Đang chia sẻ với Công khai.`
+    - Textbox: `[role="dialog"] [role="textbox"][contenteditable="true"]`
+    - Media input: `input[type="file"]`, accept contains `image/*` and `video/*`, `multiple=true`.
+  - Add-to-post options observed:
+    - `Ảnh/video`
+    - `Gắn thẻ người khác`
+    - `Video trực tiếp`
+    - `Check in`
+    - `Mời cộng tác viên`
+    - `Cảm xúc/hoạt động`
+    - `Ảnh GIF`
+    - `Nhận tin nhắn`
+    - `Nhận tin nhắn WhatsApp`
+    - `Nhận cuộc gọi`
+  - Photo post after upload:
+    - Attachment edit button aria: `Chỉnh sửa file phương tiện`
+    - Remove attachment aria: `Gỡ file đính kèm trong bài viết`
+    - Photo edit panel options: `Cắt`, `Xoay`, `Gắn thẻ ảnh`, `Công cụ chèn văn bản`, `Văn bản thay thế`, `Lưu`, `Hủy`
+    - `Video trực tiếp` becomes disabled after image is attached.
+  - Post settings:
+    - Dialog/header: `Cài đặt bài viết`
+    - Options: `Đối tượng của bài viết`, `Lựa chọn lịch đăng`, `Chia sẻ lên nhóm`, `Chia sẻ lên tin`, `Quảng bá bài viết`
+    - Schedule panel: date combobox example `11 Tháng 6, 2026`, time combobox example `18:54`, submit button `Lên lịch đăng sau`
+    - Audience panel: `Công khai`, radio checked, `Đặt làm đối tượng mặc định`, button `Xong`
+    - Final buttons: `Lưu` / aria `Lưu bài viết làm bản nháp`, and `Đăng` / aria `Đăng`
+  - Reel flow:
+    - Entry: `div[role="button"][aria-label="Thước phim"]`
+    - First modal text: `Tạo thước phim`
+    - Upload button aria: `Tải video lên cho Thước phim`
+    - Reel video input: `input[type="file"]`, accept starts with `video/*`, `multiple=false`
+    - After upload: preview video controls, `Tiếp`, pause button `Tạm dừng video`, slider `Change Position`, slider `Thay đổi âm lượng`, mute/unmute `Bật tiếng`
+    - Edit step: `Chỉnh sửa thước phim`, caption placeholder text `Mô tả thước phim của bạn...`, `Thu ngắn video`, `Phụ đề`, copyright status `Đang kiểm tra nội dung có bản quyền`, then `Tiếp`
+    - Final step: `Cài đặt thước phim`, `Công khai`, `Gắn thẻ và cộng tác`, `Remix và sử dụng âm thanh gốc`, `Chia sẻ lên nhóm`, `Chia sẻ lên tin`, `Quảng bá thước phim`, `Lựa chọn lịch đăng`, copyright ok message, `Lưu`, `Đăng`
+  - Comment on Page post:
+    - Voice switch aria: `Giọng nói hiện có, chuyển trang cá nhân`
+    - Comment textbox aria: `Bình luận dưới tên Ngọc Trai`
+    - Attach media aria: `Đính kèm một ảnh hoặc video`
+    - Comment media input accepts image/video and is single-file in the observed DOM.
+- **Implementation guidance:**
+  - Không hardcode một selector đơn lẻ; luôn dùng fallback theo thứ tự: role/aria tiếng Việt runtime-verified, text tiếng Việt, CSS input/accept, English fallback nếu account đổi ngôn ngữ.
+  - Selector config lưu thêm `selectorPolicy` và `domFingerprints`: HTML rút gọn, tín hiệu ổn định, tín hiệu phụ thuộc ngôn ngữ, và fallback plan để port sang Selenium/Tauri.
+  - Với Selenium, ưu tiên `By.cssSelector`/`By.xpath` dựa trên role/dialog/input attributes; label text chỉ là fallback hoặc bước verify sau khi tìm thấy element.
+  - Với Page, cần đảm bảo identity đang là Page trước khi publish/comment; nếu gặp modal `Chuyển trang cá nhân`, phải bấm `Chuyển` hoặc mở danh sách Page và chọn đúng Page theo tên/URL/id.
+  - Với Reel và ảnh, sau upload phải chờ preview/`Tiếp` bật trước khi sang bước kế tiếp; không dựa vào timeout cố định nếu có thể quan sát trạng thái DOM.
+  - Với `Đăng`, chỉ click ở bước cuối khi job thực sự được phép publish; trong khảo sát chỉ ghi nhận selector.
+- **Sources:**
+  - Runtime observation trên Edge debug port `9222`, Facebook tiếng Việt, Page `Ngọc Trai`, ngày 2026-06-11.
+  - DOM snapshot, role/aria/text selector logs và screenshot quan sát trong phiên Codex hiện tại.
+- **Confidence:** `runtime-verified` cho Page `Ngọc Trai` trong Facebook tiếng Việt; fallback tiếng Anh là `hypothesis` cho tương thích đa ngôn ngữ.
+
+---
+
 ## 2026-04-21 (session 2)
 
 ### API - Instagram/Threads session health-check endpoints
@@ -61,12 +139,10 @@ Ghi lại từng thay đổi liên quan tới platform automation, kèm nguồn 
   - `packages/adapters/src/utils/playwright-helpers.ts` (new)
   - `packages/adapters/src/platforms/instagram.ts` (imports refactored)
   - `packages/adapters/src/platforms/x.ts` (TODO comment)
-  - `packages/adapters/src/platforms/zalo-bot.ts` (TODO comment)
-  - `packages/adapters/src/platforms/zalo-web.ts` (TODO comment)
 - **Summary:**
   - Extracted `hasVisible`, `clickFirst`, `clickFirstVisible` from `instagram.ts` into shared `packages/adapters/src/utils/playwright-helpers.ts`.
   - Existing local definitions in `facebook.ts` remain (no selector changes; no source required).
-  - Added `// TODO: not yet implemented` to publish method bodies in X, Zalo-bot, and Zalo-web adapters to make scaffold status explicit.
+  - Added `// TODO: not yet implemented` to the X publish method body to make scaffold status explicit.
   - No new automation selectors introduced; no UI flow changes.
 - **Sources:**
   - Internal refactor only; no automation selectors changed.
@@ -188,3 +264,23 @@ Ghi lại từng thay đổi liên quan tới platform automation, kèm nguồn 
   - Facebook: `runtime-verified` / existing internal implementation lineage
   - Threads: `github-reference`
   - Instagram: `hypothesis` (selectors based on reference patterns, not yet verified)
+
+---
+
+## 2026-06-14
+
+### M1 — content-process.ts: routing.useAI gate + auto-publish fix
+- **Files:**
+  - `packages/worker-core/src/processors/content-process.ts`
+- **Summary:**
+  - Di chuyển `resolveRouting()` lên trước block AI để có `routing.useAI` trước khi gọi AI.
+  - Thêm điều kiện `routing.useAI` vào guard `if (ruleResult.needAi && routing.useAI)` — khi user tắt AI ở routing rule thì không gọi AI dù rule engine nói needAi=true.
+  - Sửa auto-publish khi không có AI: `autoTargets = aiDecision ? (aiDecision.autoPublish ? ... : []) : routing.autoPublishTargetIds` — trước đây nếu không có AI thì autoTargets luôn rỗng, content ngồi ở `ready_to_publish` không ai publish.
+
+### M1 — RoutingPage.tsx: thêm cột useAI/requireReview và nút Xóa/Bật-Tắt
+- **Files:**
+  - `apps/web-admin/src/pages/RoutingPage.tsx`
+- **Summary:**
+  - Thêm cột Tự đăng / Dùng AI / Cần duyệt / Trạng thái vào bảng routing rules.
+  - Thêm nút Bật/Tắt (PUT /routing-rules/:id) và Xóa (DELETE) mỗi rule.
+  - Dùng Badge tone để phân biệt trạng thái trực quan.

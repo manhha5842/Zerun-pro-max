@@ -468,7 +468,23 @@ const settings = {
   telegram: { botToken: "", chatId: "", enabled: false },
   ai: { provider: "openai", apiKey: "mock-key-hidden", model: "gpt-5.4", rewritePrompt: "Viết lại nội dung tự nhiên bằng tiếng Việt có dấu, giữ ý chính.", removeInvalidLinkPrompt: "Xóa hoặc viết lại đoạn chứa link không hỗ trợ." },
   cloudinary: { enabled: true, keys: [{ cloudName: "zerun-demo-1", apiKey: "demo-key-1", apiSecret: "********", priority: 1, enabled: true }] },
-  affiliate: { networks: ["shopee", "lazada"], unknownLinkAction: "saved_for_review", shopeeRule: { enabled: true }, lazadaRule: { enabled: true } }
+  affiliate: {
+    networks: ["shopee", "lazada"],
+    unknownLinkAction: "saved_for_review",
+    accessTradeToken: "",
+    accessTradeCampaignId: "",
+    shopeeMode: "auto",
+    shopeeAffiliateId: "",
+    shopee: { enabled: true, primary: "web", fallbackEnabled: true, fallback: "accesstrade", affiliateId: "", campaignId: "", subId: "" },
+    lazadaKey: "",
+    lazadaSecret: "",
+    lazadaToken: "",
+    lazadaRegion: "VN",
+    lazada: { enabled: true, primary: "api", fallbackEnabled: true, fallback: "accesstrade", campaignId: "", subId: "" },
+    tiktok: { enabled: false, primary: "accesstrade", fallbackEnabled: false, fallback: "accesstrade", campaignId: "", subId: "" },
+    shopeeRule: { enabled: true },
+    lazadaRule: { enabled: true }
+  }
 };
 
 function clone<T>(value: T): T {

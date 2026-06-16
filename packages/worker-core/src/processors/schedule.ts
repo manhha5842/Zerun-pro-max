@@ -8,6 +8,8 @@ export async function processScheduleRelease(rawJob: unknown, context: Processor
     include: { content: true }
   });
   if (schedule.status !== "scheduled") return;
+  // Don't release if the content has been paused — user must resume manually
+  if (schedule.content.status === "paused") return;
 
   await context.prisma.schedule.update({ where: { id: schedule.id }, data: { status: "released" } });
   await context.prisma.content.update({ where: { id: schedule.contentId }, data: { status: "ready_to_publish" } });

@@ -61,8 +61,7 @@ const platformLabels: Record<string, string> = {
   threads: "Threads",
   telegram: "Telegram",
   x: "X / Twitter",
-  "zalo-bot": "Zalo OA",
-  "zalo-web": "Zalo Web"
+  "zalo-personal": "Zalo cá nhân"
 };
 
 function isBrowserLoginPlatform(platform: string): platform is BrowserLoginPlatform {
@@ -348,8 +347,7 @@ export function AccountsPage() {
             <option value="threads">Threads</option>
             <option value="telegram">Telegram</option>
             <option value="x">X / Twitter</option>
-            <option value="zalo-bot">Zalo OA</option>
-            <option value="zalo-web">Zalo Web</option>
+            <option value="zalo-personal">Zalo cá nhân</option>
           </Select>
           <Select value={health} onChange={(event) => setHealth(event.target.value)}>
             <option value="all">Tất cả health</option>

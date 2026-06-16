@@ -17,7 +17,7 @@ import { detectLinks } from "@zerun/core";
 import type { BrowserContext } from "playwright";
 import { ensureDatabaseReady, prisma } from "@zerun/db";
 import { buildPagination, fail, ok, readDesktopRuntime, realtimeBus, updateDesktopRuntimeConfig, type Platform } from "@zerun/shared";
-import { createWorkerCore, type WorkerCore } from "@zerun/worker-core";
+import { createWorkerCore, type WorkerCore, AccessTradeAffiliateAdapter, LazadaAffiliateAdapter, ShopeeAffiliateAdapter, ShopeeAffiliateIdAdapter } from "@zerun/worker-core";
 import { config } from "./config.js";
 
 type AnyBody = Record<string, any>;
@@ -620,6 +620,140 @@ function registerExtendedSettingsRoutes(app: FastifyInstance) {
     shopeeRule: { enabled: true },
     lazadaRule: { enabled: true },
     unknownLinkAction: "saved_for_review"
+  });
+
+  app.post("/settings/affiliate/test-conversion", async (request) => {
+    const body = request.body as AnyBody;
+    const platform = String(body.platform ?? "");
+    const configData = (body.config ?? {}) as AnyBody;
+    const testUrl = String(body.testUrl ?? "").trim();
+
+    if (!testUrl) {
+      return fail("BAD_REQUEST", "URL test không được để trống");
+    }
+
+    try {
+      if (platform === "shopee") {
+        let isFullAffiliate = false;
+        try {
+          const urlObj = new URL(testUrl);
+          if (urlObj.searchParams.has("affiliate_id")) isFullAffiliate = true;
+          const utmMedium = urlObj.searchParams.get("utm_medium");
+          const utmSource = urlObj.searchParams.get("utm_source");
+          if (utmMedium === "affiliates" && utmSource && utmSource.startsWith("an_")) isFullAffiliate = true;
+        } catch {
+          // ignore
+        }
+
+        if (isFullAffiliate && configData.replaceAffiliateId && configData.affiliateId) {
+          const adapter = new ShopeeAffiliateIdAdapter(configData.affiliateId);
+          const result = await adapter.convert({ url: testUrl, network: "shopee" });
+          return ok({ success: result.success, converted: result.converted, error: result.error });
+        }
+
+        const makeAdapter = (source: string) => {
+          if (source === "web") {
+            return new ShopeeAffiliateAdapter({
+              mode: "web",
+              accessTradeToken: configData.accessTradeToken || undefined,
+              accessTradeCampaignId: configData.campaignId || undefined,
+              getPage: async () => {
+                const workerShopee = app.workerCore?.registry?.affiliateAdapter as any;
+                return workerShopee?.getPage?.() || null;
+              }
+            });
+          }
+          return new AccessTradeAffiliateAdapter({
+            token: configData.accessTradeToken || undefined,
+            defaultCampaignId: configData.campaignId || undefined
+          });
+        };
+
+        const primaryAdapter = makeAdapter(configData.primarySource);
+        let result = await primaryAdapter.convert({
+          url: testUrl,
+          network: "shopee",
+          campaignId: configData.campaignId || undefined,
+          subId: configData.subId || undefined
+        });
+
+        if (!result.success && configData.useFallback && configData.fallbackSource !== configData.primarySource) {
+          const fallbackAdapter = makeAdapter(configData.fallbackSource);
+          result = await fallbackAdapter.convert({
+            url: testUrl,
+            network: "shopee",
+            campaignId: configData.campaignId || undefined,
+            subId: configData.subId || undefined
+          });
+        }
+
+        return ok({ success: result.success, converted: result.converted, error: result.error });
+      }
+
+      if (platform === "lazada") {
+        const makeAdapter = (source: string) => {
+          if (source === "lazada_api" || source === "api") {
+            return new LazadaAffiliateAdapter({
+              appKey: configData.appKey || undefined,
+              appSecret: configData.appSecret || undefined,
+              accessToken: configData.accessToken || undefined,
+              region: configData.region || "VN"
+            });
+          }
+          return new AccessTradeAffiliateAdapter({
+            token: configData.accessTradeToken || undefined,
+            defaultCampaignId: configData.campaignId || undefined
+          });
+        };
+
+        const primaryAdapter = makeAdapter(configData.primarySource);
+        const subIdStr = typeof configData.subIds === "object" ? JSON.stringify(configData.subIds) : undefined;
+        
+        let result = await primaryAdapter.convert({
+          url: testUrl,
+          network: "lazada",
+          campaignId: configData.campaignId || undefined,
+          subId: subIdStr
+        });
+
+        if (!result.success && configData.useFallback && configData.fallbackSource !== configData.primarySource) {
+          const fallbackAdapter = makeAdapter(configData.fallbackSource);
+          result = await fallbackAdapter.convert({
+            url: testUrl,
+            network: "lazada",
+            campaignId: configData.campaignId || undefined,
+            subId: subIdStr
+          });
+        }
+
+        return ok({ success: result.success, converted: result.converted, error: result.error });
+      }
+
+      if (platform === "tiktok" || platform === "tiktokShop") {
+        const adapter = new AccessTradeAffiliateAdapter({
+          token: configData.accessTradeToken || undefined,
+          defaultCampaignId: configData.campaignId || undefined
+        });
+        const trackingStr = typeof configData.tracking === "object" ? JSON.stringify(configData.tracking) : undefined;
+        
+        const result = await adapter.convert({
+          url: testUrl,
+          network: "tiktok_shop" as any,
+          campaignId: configData.campaignId || undefined,
+          subId: trackingStr
+        });
+
+        return ok({ success: result.success, converted: result.converted, error: result.error });
+      }
+
+      return fail("BAD_REQUEST", `Không hỗ trợ nền tảng test: ${platform}`);
+    } catch (error) {
+      return ok({
+        success: false,
+        converted: null,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
   });
 
   app.post("/settings/ai/test", async (request) => {

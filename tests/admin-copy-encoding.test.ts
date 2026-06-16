@@ -63,10 +63,11 @@ const expectedVietnameseCopy: Record<(typeof copyFiles)[number], string[]> = {
     "Mở trình duyệt đăng nhập"
   ],
   "apps/web-admin/src/pages/AccountSessionsPage.tsx": [
-    "Tổng hợp trạng thái session, checkpoint và health",
-    "Chưa có tài khoản",
-    "Tạo tài khoản ở trang Quản lý tài khoản trước khi kiểm tra session.",
-    "Kiểm tra gần nhất"
+    "Session nâng cao",
+    "QR chính đã nằm trong wizard",
+    "Chưa có tài khoản Zalo nguồn.",
+    "Quét QR bằng ứng dụng Zalo để đăng nhập",
+    "Cập nhật:"
   ],
   "apps/web-admin/src/pages/accountForms.tsx": [
     "Mẫu thêm tài khoản đăng",
@@ -84,7 +85,7 @@ const expectedVietnameseCopy: Record<(typeof copyFiles)[number], string[]> = {
     "Chọn nền tảng",
     "Đăng nhập",
     "Không thể tạo tài khoản.",
-    "Đăng nhập qua trình duyệt",
+    "đăng nhập qua trình duyệt",
     "Mật khẩu không bao giờ đi qua Zerun.",
     "Sẵn sàng kết nối",
     "Đặt tên tài khoản",
@@ -101,7 +102,7 @@ const expectedVietnameseCopy: Record<(typeof copyFiles)[number], string[]> = {
     "X / Twitter đăng nhập qua trình duyệt riêng.",
     "mật khẩu không đi qua Zerun.",
     "Nếu X yêu cầu email, 2FA hoặc checkpoint",
-    "bấm Lưu session"
+    "Lưu session"
   ],
   "apps/web-admin/src/api/client.ts": [
     "Yêu cầu thất bại"

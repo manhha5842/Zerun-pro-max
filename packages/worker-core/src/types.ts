@@ -51,6 +51,7 @@ export const publishExecuteJobSchema = z.object({
   version: z.literal(1),
   contentId: z.string().min(1),
   targetId: z.string().min(1),
+  targetChannelId: z.string().min(1).optional(),
   requestedBy: z.enum(["system", "admin"])
 });
 

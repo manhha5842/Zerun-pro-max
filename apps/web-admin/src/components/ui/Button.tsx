@@ -42,8 +42,12 @@ export function Button({ className, variant, size, asChild = false, icon, childr
 
   return (
     <Comp className={cn(buttonVariants({ variant, size, className }))} {...props}>
-      {icon}
-      {children}
+      {asChild ? children : (
+        <>
+          {icon}
+          {children}
+        </>
+      )}
     </Comp>
   );
 }

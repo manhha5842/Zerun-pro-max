@@ -14,7 +14,6 @@ Use Playwright persistent-session automation for:
 - facebook
 - instagram
 - threads
-- zalo-web
 - optional x browser mode
 
 This is the best fit when:
@@ -28,12 +27,11 @@ Use API or unofficial/private clients for:
 - telegram (MTProto session)
 - x default mode (agent-twitter-client)
 - instagram crawl only (instagram-private-api)
-- zalo-bot (official OA/bot API)
+- Zalo personal (`zca-js`)
 
-### 3. Split platform concepts when the use cases are different
-Zalo must be split into two adapters:
-- zalo-bot: official bot/OA messaging
-- zalo-web: personal-account browser automation
+### 3. Keep the supported Zalo scope explicit
+The project supports one Zalo integration:
+- `zalo-personal`: QR session, realtime group listening, and group publishing through `zca-js`
 
 ## Platform decisions
 
@@ -94,13 +92,12 @@ Routing:
 - otherwise => existing scraper/client mode
 
 ### Zalo
-Reference:
-- KaiyoDev/zalo-bot-js is useful for bot/OA patterns, not for personal-account web automation
-
 Decision:
-- split into:
-  - `zalo-bot`: official OA/bot API adapter
-  - `zalo-web`: Playwright persistent-session adapter for personal account use
+- use only `zalo-personal`
+- authenticate by QR and persist the client session
+- listen to configured groups in realtime
+- publish only to configured group `threadId` values
+- use a secondary account because the client library is unofficial
 
 ## Recommended adapter capability matrix
 
@@ -111,8 +108,7 @@ Decision:
 | threads   | yes   | yes          | yes           | no    | no   | yes           | browser       |
 | x         | yes   | yes          | browser mode  | no    | no   | later         | api/browser   |
 | telegram  | yes   | yes          | yes           | no    | no   | yes           | api/session   |
-| zalo-bot  | yes   | yes          | limited       | no    | no   | yes           | api           |
-| zalo-web  | yes   | yes          | yes           | no    | no   | yes           | browser       |
+| zalo-personal | realtime groups | yes       | yes           | no    | no   | no            | QR/client session |
 
 ## Error classification standard
 Every adapter should map failures into a small consistent set:
@@ -139,11 +135,11 @@ When using browser automation:
 ## Recommended implementation order
 1. instagram browser adapter
 2. threads adapter hardening
-3. zalo split (`zalo-bot`, `zalo-web`)
+3. Zalo personal session and group-flow hardening
 4. x dual-mode support
 
 ## Notes for web-admin and API
 To expose these capabilities cleanly later:
 - account creation should support sessionDir-backed browser accounts
-- browser-login flow can be reused for instagram, threads, x(browser), and zalo-web
+- browser-login flow can be reused for instagram, threads, and x(browser)
 - account health badges should show auth state consistently across platforms

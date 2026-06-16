@@ -1,7 +1,10 @@
+import { computeContentHashes } from "@zerun/core";
 import { classifyError, logger, realtimeBus } from "@zerun/shared";
 import { sourceCrawlJobSchema, type SourceCrawlJob } from "../types.js";
 import type { ProcessorContext } from "./context.js";
-import { makeContentCode, toAdapterAccount } from "./helpers.js";
+import { asRecord, makeContentCode, toAdapterAccount } from "./helpers.js";
+
+const DEDUP_WINDOW_HOURS = 48;
 
 export async function processSourceCrawl(rawJob: unknown, context: ProcessorContext) {
   const job = sourceCrawlJobSchema.parse(rawJob) satisfies SourceCrawlJob;
@@ -24,76 +27,153 @@ export async function processSourceCrawl(rawJob: unknown, context: ProcessorCont
     }
 
     const adapter = context.registry.getSource(source.platform as never);
-    const result = await adapter.crawl({
-      account: toAdapterAccount(source),
-      limit: Number((source.config as Record<string, unknown>)?.limit ?? 20),
-      since: job.crawlWindow?.from ? new Date(job.crawlWindow.from) : undefined
+    const sourceChannels = await context.prisma.platformChannel.findMany({
+      where: { accountKind: "source", accountId: source.id, isSource: true, isActive: true }
     });
+    const sourceConfig = asRecord(source.config);
+    const telegramCursorByChannel = readNumberMap(sourceConfig.telegramCursorByChannel);
+    const nextTelegramCursorByChannel = { ...telegramCursorByChannel };
+    const channelInputs = sourceChannels.length > 0 ? sourceChannels : [null];
+    const crawlResults = await Promise.all(channelInputs.map(async (channel) => {
+      const cursorKey = getCursorKey(channel);
+      const account = applyCrawlCursor(
+        applySourceChannel(source, channel),
+        source.platform,
+        telegramCursorByChannel[cursorKey]
+      );
+      const result = await adapter.crawl({
+        account: toAdapterAccount(account),
+        limit: Number((source.config as Record<string, unknown>)?.limit ?? 20),
+        since: job.crawlWindow?.from ? new Date(job.crawlWindow.from) : undefined
+      });
+      return result.items.map((item) => ({ item, channel }));
+    }));
+    const items = crawlResults.flat();
 
     let createdCount = 0;
-    for (const item of result.items) {
+    let existingCount = 0;
+    for (const entry of items) {
+      const { item, channel } = entry;
+      if (source.platform === "telegram") {
+        updateTelegramCursor(nextTelegramCursorByChannel, getCursorKey(channel), item.externalId);
+      }
+      const externalId = channel ? `${channel.id}:${item.externalId}` : item.externalId;
       const existing = await context.prisma.content.findUnique({
         where: {
           platform_sourceId_externalId: {
             platform: item.platform,
             sourceId: source.id,
-            externalId: item.externalId
+            externalId
           }
         }
       });
 
-      const content = existing
-        ? await context.prisma.content.update({
-            where: { id: existing.id },
-            data: {
-              originalText: item.text,
-              sourceUrl: item.originalUrl,
-              author: item.author,
-              postedAt: item.postedAt,
-              metadata: (item.metadata ?? {}) as any
-            }
-          })
-        : await context.prisma.content.create({
-            data: {
-              code: makeContentCode(),
-              platform: item.platform,
-              sourceId: source.id,
-              externalId: item.externalId,
-              sourceUrl: item.originalUrl,
-              author: item.author,
-              originalText: item.text,
-              status: "discovered",
-              postedAt: item.postedAt,
-              metadata: (item.metadata ?? {}) as any,
-              media: {
-                create: item.media.map((media) => ({
-                  type: media.type,
-                  mimeType: media.mimeType,
-                  sourceUrl: media.url,
-                  localPath: media.localPath,
-                  metadata: (media.metadata ?? {}) as any
-                }))
-              }
-            }
-          });
-
-      if (!existing) {
-        createdCount += 1;
-        realtimeBus.emitEvent({
-          type: "content:new",
-          contentId: content.id,
-          code: content.code,
-          platform: item.platform,
-          createdAt: new Date().toISOString()
+      if (existing) {
+        existingCount += 1;
+        await context.prisma.content.update({
+          where: { id: existing.id },
+          data: {
+            originalText: item.text,
+            sourceUrl: item.originalUrl,
+            author: item.author,
+            postedAt: item.postedAt,
+            sourceChannelId: channel?.id,
+            metadata: { ...(item.metadata ?? {}), sourceChannelId: channel?.id ?? null, sourceChannelName: channel?.name ?? null } as any
+          }
         });
+        if (existing.status === "discovered" || existing.status === "failed") {
+          await context.enqueueContentProcess({ version: 1, contentId: existing.id });
+        }
+        continue;
       }
+
+      // Tầng 2: dedup chéo nguồn qua contentHash
+      const links = item.text.match(/https?:\/\/\S+/g) ?? [];
+      const hashes = computeContentHashes(item.text, links);
+      const dedupWindowStart = new Date(Date.now() - DEDUP_WINDOW_HOURS * 60 * 60 * 1000);
+
+      const duplicate = await (context.prisma as any).content.findFirst({
+        where: {
+          contentHash: hashes.linkHash,
+          createdAt: { gte: dedupWindowStart },
+          status: { notIn: ["duplicate", "skipped", "rejected"] }
+        },
+        select: { id: true }
+      });
+
+      if (duplicate) {
+        // Tin trùng — tạo bản ghi nhẹ với status=duplicate, không chạy AI/convert/publish
+        const dupContent = await context.prisma.content.create({
+          data: {
+            code: makeContentCode(),
+            platform: item.platform,
+            sourceId: source.id,
+            sourceChannelId: channel?.id,
+            externalId,
+            sourceUrl: item.originalUrl,
+            author: item.author,
+            originalText: item.text,
+            status: "duplicate" as never,
+            postedAt: item.postedAt,
+            contentHash: hashes.linkHash,
+            duplicateOfId: duplicate.id,
+            metadata: { ...(item.metadata ?? {}), sourceChannelId: channel?.id ?? null, sourceChannelName: channel?.name ?? null } as any
+          } as any
+        });
+        logger.debug(`Content ${dupContent.code} là bản trùng của ${duplicate.id}`);
+        continue;
+      }
+
+      const content = await context.prisma.content.create({
+        data: {
+          code: makeContentCode(),
+          platform: item.platform,
+          sourceId: source.id,
+          sourceChannelId: channel?.id,
+          externalId,
+          sourceUrl: item.originalUrl,
+          author: item.author,
+          originalText: item.text,
+          status: "discovered",
+          postedAt: item.postedAt,
+          contentHash: hashes.linkHash,
+          metadata: { ...(item.metadata ?? {}), sourceChannelId: channel?.id ?? null, sourceChannelName: channel?.name ?? null } as any,
+          media: {
+            create: item.media.map((media) => ({
+              type: media.type,
+              mimeType: media.mimeType,
+              sourceUrl: media.url,
+              localPath: media.localPath,
+              metadata: (media.metadata ?? {}) as any
+            }))
+          }
+        } as any
+      });
+
+      createdCount += 1;
+      realtimeBus.emitEvent({
+        type: "content:new",
+        contentId: content.id,
+        code: content.code,
+        platform: item.platform,
+        createdAt: new Date().toISOString()
+      });
 
       await context.enqueueContentProcess({ version: 1, contentId: content.id });
     }
 
+    const shouldPersistTelegramCursor =
+      source.platform === "telegram" &&
+      JSON.stringify(telegramCursorByChannel) !== JSON.stringify(nextTelegramCursorByChannel);
     await context.prisma.sourceAccount.update({
       where: { id: source.id },
-      data: { lastCrawledAt: new Date(), health: "healthy" }
+      data: {
+        lastCrawledAt: new Date(),
+        health: "healthy",
+        ...(shouldPersistTelegramCursor
+          ? { config: { ...sourceConfig, telegramCursorByChannel: nextTelegramCursorByChannel } as any }
+          : {})
+      }
     });
 
     await context.prisma.activityLog.create({
@@ -101,7 +181,7 @@ export async function processSourceCrawl(rawJob: unknown, context: ProcessorCont
         type: "crawl:complete",
         platform: source.platform,
         sourceId: source.id,
-        message: `Đã crawl ${result.items.length} nội dung từ ${source.name}, mới ${createdCount} nội dung.`
+        message: `Đã crawl ${items.length} nội dung từ ${source.name}, mới ${createdCount} nội dung.`
       }
     });
 
@@ -109,9 +189,10 @@ export async function processSourceCrawl(rawJob: unknown, context: ProcessorCont
       type: "crawl:complete",
       sourceId: source.id,
       platform: source.platform as never,
-      itemCount: result.items.length,
+      itemCount: items.length,
       createdAt: new Date().toISOString()
     });
+    logger.debug("Source crawl summary", { sourceId: source.id, itemCount: items.length, createdCount, existingCount });
 
     await context.prisma.workerJobLog.update({
       where: { id: log.id },
@@ -126,4 +207,69 @@ export async function processSourceCrawl(rawJob: unknown, context: ProcessorCont
     });
     throw classified;
   }
+}
+
+function readNumberMap(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: Record<string, number> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    const parsed = typeof raw === "number" ? raw : Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) result[key] = parsed;
+  }
+  return result;
+}
+
+function getCursorKey(channel: { id: string } | null) {
+  return channel?.id ?? "__default__";
+}
+
+function applyCrawlCursor(
+  account: {
+    id: string;
+    platform: string;
+    name: string;
+    handle: string | null;
+    credentials: unknown;
+    config: unknown;
+  },
+  platform: string,
+  cursor: number | undefined
+) {
+  if (platform !== "telegram" || !cursor) return account;
+  return {
+    ...account,
+    config: {
+      ...asRecord(account.config),
+      telegramMinId: cursor
+    }
+  };
+}
+
+function updateTelegramCursor(cursorByChannel: Record<string, number>, cursorKey: string, externalId: string) {
+  const messageId = Number(externalId);
+  if (!Number.isFinite(messageId) || messageId <= 0) return;
+  cursorByChannel[cursorKey] = Math.max(cursorByChannel[cursorKey] ?? 0, messageId);
+}
+
+function applySourceChannel(
+  account: {
+    id: string;
+    platform: string;
+    name: string;
+    handle: string | null;
+    credentials: unknown;
+    config: unknown;
+  },
+  channel: { externalId: string } | null
+) {
+  if (!channel) return account;
+  const credentials = account.credentials && typeof account.credentials === "object" && !Array.isArray(account.credentials)
+    ? { ...(account.credentials as Record<string, unknown>) }
+    : {};
+  const config = account.config && typeof account.config === "object" && !Array.isArray(account.config)
+    ? { ...(account.config as Record<string, unknown>) }
+    : {};
+  if (account.platform === "telegram") credentials.source = channel.externalId;
+  if (account.platform === "zalo-personal") config.threadId = channel.externalId;
+  return { ...account, credentials, config };
 }

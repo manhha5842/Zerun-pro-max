@@ -137,6 +137,10 @@ export function SettingsPage() {
     queryKey: ["settings", "telegram"],
     queryFn: () => apiGet<TelegramSettings>("/settings/telegram"),
   });
+  const autoPublishQuery = useQuery({
+    queryKey: ["settings", "auto-publish"],
+    queryFn: () => apiGet<{ enabled: boolean }>("/settings/auto-publish"),
+  });
   const aiQuery = useQuery({
     queryKey: ["settings", "ai"],
     queryFn: () => apiGet<AiSettings>("/settings/ai"),
@@ -177,6 +181,7 @@ export function SettingsPage() {
     chatId: "",
     enabled: false,
   });
+  const [autoPublishEnabled, setAutoPublishEnabled] = useState(true);
   const [ai, setAi] = useState<AiSettings>({
     provider: "",
     apiKey: "",
@@ -194,6 +199,7 @@ export function SettingsPage() {
     "Nội dung tiếng Việt có dấu cần viết lại và gỡ link không hợp lệ.",
   );
   const [testOutput, setTestOutput] = useState("");
+  const [aiConnectionResult, setAiConnectionResult] = useState<{ ok: boolean; model: string; latencyMs: number } | null>(null);
 
   useEffect(() => {
     applyTheme(themePreference);
@@ -213,6 +219,9 @@ export function SettingsPage() {
   useEffect(() => {
     if (telegramQuery.data) setTelegram(telegramQuery.data);
   }, [telegramQuery.data]);
+  useEffect(() => {
+    if (autoPublishQuery.data) setAutoPublishEnabled(Boolean(autoPublishQuery.data.enabled));
+  }, [autoPublishQuery.data]);
   useEffect(() => {
     if (aiQuery.data) setAi(aiQuery.data);
   }, [aiQuery.data]);
@@ -253,6 +262,11 @@ export function SettingsPage() {
     onSuccess: () => toast.success("Đã lưu cấu hình Telegram."),
     onError: (error: Error) => toast.error(error.message),
   });
+  const saveAutoPublish = useMutation({
+    mutationFn: (enabled: boolean) => apiPut("/settings/auto-publish", { enabled }),
+    onSuccess: (_data, enabled) => toast.success(enabled ? "Đã bật auto-publish." : "Đã TẮT auto-publish toàn hệ thống."),
+    onError: (error: Error) => toast.error(error.message),
+  });
   const saveAi = useMutation({
     mutationFn: () => apiPut("/settings/ai", ai),
     onSuccess: () => toast.success("Đã lưu cấu hình AI."),
@@ -283,6 +297,23 @@ export function SettingsPage() {
       toast.success("Đã chạy test prompt.");
     },
     onError: (error: Error) => toast.error(error.message),
+  });
+  const testAiConnection = useMutation({
+    mutationFn: () =>
+      apiPost<{ ok: boolean; model: string; latencyMs: number }>("/settings/ai/test-connection", {
+        baseUrl: ai.provider,
+        apiKey: ai.apiKey,
+        model: ai.model || "auto"
+      }),
+    onSuccess: (data) => {
+      setAiConnectionResult(data);
+      if (data.ok) toast.success(`Kết nối OK — model: ${data.model} (${data.latencyMs}ms)`);
+      else toast.error("Kết nối thất bại");
+    },
+    onError: (error: Error) => {
+      setAiConnectionResult(null);
+      toast.error(error.message);
+    }
   });
 
   const handleThemeChange = (value: string) => {
@@ -501,8 +532,8 @@ export function SettingsPage() {
 
           {activeTab === "ai" ? (
             <div className="form-grid">
-              <label>
-                <Label>Provider</Label>
+              <label className="span-2">
+                <Label>Base URL (9router / OpenAI-compatible)</Label>
                 <Input
                   value={ai.provider}
                   onChange={(event) =>
@@ -511,11 +542,11 @@ export function SettingsPage() {
                       provider: event.target.value,
                     }))
                   }
-                  placeholder="openai / anthropic / local"
+                  placeholder="https://api.9router.ai"
                 />
               </label>
               <label>
-                <Label>Model</Label>
+                <Label>Model (để trống = tự động)</Label>
                 <Input
                   value={ai.model}
                   onChange={(event) =>
@@ -524,10 +555,10 @@ export function SettingsPage() {
                       model: event.target.value,
                     }))
                   }
-                  placeholder="gpt-5.4"
+                  placeholder="auto"
                 />
               </label>
-              <label className="span-2">
+              <label>
                 <Label>API key</Label>
                 <Input
                   type="password"
@@ -540,6 +571,22 @@ export function SettingsPage() {
                   }
                 />
               </label>
+              <div className="span-2 actions" style={{ marginBottom: 0 }}>
+                <Button
+                  variant="secondary"
+                  onClick={() => testAiConnection.mutate()}
+                  disabled={testAiConnection.isPending}
+                >
+                  {testAiConnection.isPending ? "Đang test..." : "Test kết nối"}
+                </Button>
+                {aiConnectionResult !== null && (
+                  <span style={{ fontSize: "0.85rem", color: aiConnectionResult.ok ? "var(--color-success, green)" : "var(--color-error, red)" }}>
+                    {aiConnectionResult.ok
+                      ? `✓ OK — ${aiConnectionResult.model} (${aiConnectionResult.latencyMs}ms)`
+                      : "✗ Kết nối thất bại"}
+                  </span>
+                )}
+              </div>
               <label className="span-2">
                 <Label>Prompt rewrite mặc định</Label>
                 <Textarea
@@ -666,6 +713,19 @@ export function SettingsPage() {
 
           {activeTab === "telegram" ? (
             <div className="form-grid">
+              <label className="checkbox-row span-2">
+                <input
+                  type="checkbox"
+                  checked={autoPublishEnabled}
+                  onChange={(event) => {
+                    setAutoPublishEnabled(event.target.checked);
+                    saveAutoPublish.mutate(event.target.checked);
+                  }}
+                />
+                <span>
+                  Bật auto-publish toàn hệ thống <span className="table-subtle">(tắt nhanh để dừng mọi đăng tự động — tin vẫn vào hàng chờ duyệt)</span>
+                </span>
+              </label>
               <label className="checkbox-row">
                 <input
                   type="checkbox"

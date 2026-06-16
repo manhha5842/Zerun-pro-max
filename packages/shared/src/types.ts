@@ -1,4 +1,4 @@
-export const platforms = ["telegram", "x", "threads", "instagram", "facebook", "zalo-bot", "zalo-web"] as const;
+export const platforms = ["telegram", "x", "threads", "instagram", "facebook", "zalo-personal"] as const;
 export type Platform = (typeof platforms)[number];
 
 export const accountKinds = ["source", "target"] as const;
@@ -15,7 +15,8 @@ export const contentStatuses = [
   "published",
   "failed",
   "skipped",
-  "rejected"
+  "rejected",
+  "duplicate"
 ] as const;
 export type ContentStatus = (typeof contentStatuses)[number];
 

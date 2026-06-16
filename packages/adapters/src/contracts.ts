@@ -83,6 +83,30 @@ export interface SourceAdapter {
   crawl(input: CrawlInput): Promise<CrawlResult>;
 }
 
+/** Handle để dừng một listener đang chạy. */
+export type ListenerHandle = {
+  stop: () => Promise<void>;
+  /**
+   * (Tuỳ chọn) Đăng ký callback khi kết nối listener rớt hẳn (đóng/lỗi).
+   * Manager dùng để tự reconnect (re-login từ credentials đã lưu).
+   */
+  onClose?: (handler: () => void) => void;
+};
+
+/**
+ * Nguồn dữ liệu dạng push (realtime) — zca-js, Telegram realtime, ...
+ * Khác `SourceAdapter` (pull/crawl): giữ kết nối sống và bắn từng item qua `onItem`.
+ * Worker `realtime-listener` chịu trách nhiệm gọi `startListener` lúc boot và giữ handle.
+ */
+export interface RealtimeSourceAdapter {
+  platform: Platform;
+  testConnection(account: AdapterAccount): Promise<AdapterHealth>;
+  startListener(
+    account: AdapterAccount,
+    onItem: (item: RawSourceItem) => Promise<void>
+  ): Promise<ListenerHandle>;
+}
+
 export type CommentInput = {
   account: AdapterAccount;
   postUrl: string;

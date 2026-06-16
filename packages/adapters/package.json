@@ -12,6 +12,7 @@
     "agent-twitter-client": "^0.0.18",
     "instagram-private-api": "^1.46.1",
     "playwright": "^1.57.0",
-    "telegram": "^2.26.22"
+    "telegram": "^2.26.22",
+    "zca-js": "^2.1.2"
   }
 }

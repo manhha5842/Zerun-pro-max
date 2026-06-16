@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import { apiGet, apiPost } from "../api/client";
 import { EmptyState } from "../components/common/EmptyState";
 import { FilterToolbar } from "../components/common/FilterToolbar";
@@ -7,7 +8,9 @@ import { PageHeader } from "../components/common/PageHeader";
 import { PostDataTable, type PostRow } from "../components/common/PostDataTable";
 import { SectionCard } from "../components/common/SectionCard";
 import { Button } from "../components/ui/Button";
+import { Dialog } from "../components/ui/Dialog";
 import { Input } from "../components/ui/Input";
+import { Label } from "../components/ui/Label";
 import { Select } from "../components/ui/Select";
 
 function useContents() {
@@ -41,17 +44,40 @@ function sortRows(rows: PostRow[], sortBy: string, sortOrder: string) {
 }
 
 export function SavedContentsPage() {
+  const navigate = useNavigate();
   const [keyword, setKeyword] = useState("");
   const [platform, setPlatform] = useState("all");
   const [status, setStatus] = useState("all");
   const [sortBy, setSortBy] = useState("updatedAt");
   const [sortOrder, setSortOrder] = useState("desc");
   const [pageSize, setPageSize] = useState("20");
+  const [resumeTarget, setResumeTarget] = useState<PostRow | null>(null);
+  const [resumeMode, setResumeMode] = useState<"now" | "schedule">("now");
+  const [resumeScheduledAt, setResumeScheduledAt] = useState("");
   const query = useContents();
   const actionMutation = useMutation({
-    mutationFn: ({ id, action }: { id: string; action: string }) => apiPost("/contents/bulk-action", { ids: [id], action }),
+    mutationFn: ({ id, action, forceNow, scheduledAt }: { id: string; action: string; forceNow?: boolean; scheduledAt?: string }) =>
+      apiPost("/contents/bulk-action", { ids: [id], action, forceNow, scheduledAt }),
     onSuccess: () => query.refetch()
   });
+
+  function openResumeDialog(row: PostRow) {
+    setResumeTarget(row);
+    setResumeMode("now");
+    setResumeScheduledAt("");
+  }
+
+  function confirmResume() {
+    if (!resumeTarget) return;
+    if (resumeMode === "schedule" && !resumeScheduledAt) return;
+    actionMutation.mutate({
+      id: resumeTarget.id,
+      action: "resume",
+      forceNow: resumeMode === "now",
+      scheduledAt: resumeMode === "schedule" ? resumeScheduledAt : undefined
+    });
+    setResumeTarget(null);
+  }
 
   const rows = useMemo(() => {
     const archiveStatuses = new Set(["saved", "failed"]);
@@ -115,13 +141,42 @@ export function SavedContentsPage() {
           detailNote={(row) => row.savedReason ?? row.lastError ?? "Cần xử lý thủ công"}
           actions={(row) => (
             <>
+              <Button size="sm" variant="secondary" onClick={() => navigate(`/contents/${row.code}/edit`)}>Chỉnh sửa</Button>
               <Button size="sm" variant="secondary" onClick={() => actionMutation.mutate({ id: row.id, action: "retry" })}>Retry</Button>
-              <Button size="sm" variant="secondary" onClick={() => actionMutation.mutate({ id: row.id, action: "resume" })}>Đưa về chờ đăng</Button>
+              <Button size="sm" variant="secondary" onClick={() => openResumeDialog(row)}>Đưa về chờ đăng</Button>
               <Button size="sm" variant="danger" onClick={() => actionMutation.mutate({ id: row.id, action: "move_to_trash" })}>Thùng rác</Button>
             </>
           )}
         />
       </SectionCard>
+
+      {resumeTarget ? (
+        <Dialog open onClose={() => setResumeTarget(null)} title="Đưa về chờ đăng">
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <p style={{ margin: 0, fontSize: 14 }}>Chọn cách xử lý bài <strong>{resumeTarget.code}</strong>:</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input type="radio" name="resumeMode" value="now" checked={resumeMode === "now"} onChange={() => setResumeMode("now")} />
+                <span>Đăng ngay</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input type="radio" name="resumeMode" value="schedule" checked={resumeMode === "schedule"} onChange={() => setResumeMode("schedule")} />
+                <span>Hẹn lịch</span>
+              </label>
+            </div>
+            {resumeMode === "schedule" ? (
+              <div>
+                <Label htmlFor="resume-scheduled-at">Thời gian đăng</Label>
+                <Input id="resume-scheduled-at" type="datetime-local" value={resumeScheduledAt} onChange={(e) => setResumeScheduledAt(e.target.value)} />
+              </div>
+            ) : null}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <Button variant="secondary" onClick={() => setResumeTarget(null)}>Huỷ</Button>
+              <Button onClick={confirmResume} disabled={actionMutation.isPending || (resumeMode === "schedule" && !resumeScheduledAt)}>Xác nhận</Button>
+            </div>
+          </div>
+        </Dialog>
+      ) : null}
     </>
   );
 }

@@ -1,6 +1,6 @@
 /**
  * Shared Playwright helpers for browser automation adapters.
- * Used by: facebook, instagram, threads, x, zalo-web adapters.
+ * Used by browser automation adapters such as Facebook, Instagram, Threads, and X.
  */
 
 /**

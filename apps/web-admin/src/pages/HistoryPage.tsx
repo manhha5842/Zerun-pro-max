@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { apiGet } from "../api/client";
 import { EmptyState } from "../components/common/EmptyState";
 import { FilterToolbar } from "../components/common/FilterToolbar";
@@ -61,6 +62,7 @@ function attemptToPost(attempt: AttemptRow): PostRow {
 }
 
 export function HistoryPage() {
+  const navigate = useNavigate();
   const [page, setPage] = useState(1);
   const [keyword, setKeyword] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -99,7 +101,7 @@ export function HistoryPage() {
             <option value="threads">Threads</option>
             <option value="telegram">Telegram</option>
             <option value="x">X / Twitter</option>
-            <option value="zalo-bot">Zalo Bot</option>
+            <option value="zalo-personal">Zalo cá nhân</option>
           </Select>
           <Select value={sortBy} onChange={(event) => { setSortBy(event.target.value); setPage(1); }}>
             <option value="createdAt">Sắp xếp theo thời gian</option>
@@ -125,6 +127,9 @@ export function HistoryPage() {
           timeHeader="Thời gian đăng"
           getTimeValue={(row) => row.postedAt ?? row.createdAt}
           empty={<EmptyState title="Chưa có lịch sử" description="Bài đăng thành công sẽ xuất hiện ở đây." />}
+          actions={(row) => (
+            <Button size="sm" variant="secondary" onClick={() => navigate(`/contents/${row.code}/edit`)}>Chỉnh sửa</Button>
+          )}
         />
 
         {pagination && pagination.totalPages > 1 ? (

@@ -34,8 +34,7 @@ const platformLabel: Record<string, string> = {
   instagram: "Instagram",
   threads: "Threads",
   x: "X / Twitter",
-  "zalo-bot": "Zalo Bot",
-  "zalo-web": "Zalo Web"
+  "zalo-personal": "Zalo cá nhân"
 };
 
 export function PendingCommentsPage() {

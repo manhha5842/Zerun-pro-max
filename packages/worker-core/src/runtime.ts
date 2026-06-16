@@ -1,9 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { Queue, QueueEvents, Worker, type JobsOptions } from "bullmq";
 import IORedis from "ioredis";
-import { createRealAdapterRegistry, type AdapterRegistry } from "@zerun/adapters";
+import {
+  AccessTradeAffiliateAdapter,
+  AffiliateRouter,
+  createRealAdapterRegistry,
+  LazadaAffiliateAdapter,
+  ShopeeAffiliateAdapter,
+  type AdapterRegistry,
+  type AffiliateAdapter
+} from "@zerun/adapters";
 import { prisma as defaultPrisma, type PrismaClient } from "@zerun/db";
-import { logger } from "@zerun/shared";
+import { logger, type LinkNetwork } from "@zerun/shared";
 import { processContent } from "./processors/content-process.js";
 import { processCrawlJob } from "./processors/crawl-job.js";
 import { processSourceCrawl } from "./processors/source-crawl.js";
@@ -12,6 +20,7 @@ import { processScheduleRelease } from "./processors/schedule.js";
 import { processPlatformHealth } from "./processors/platform-health.js";
 import { processFbPost } from "./processors/fb-post.js";
 import { processComment } from "./processors/comment.js";
+import { RealtimeListenerManager } from "./processors/realtime-listener.js";
 import {
   JobName,
   QueueName,
@@ -56,7 +65,7 @@ export type WorkerCore = {
   triggerCrawl: (sourceId: string, requestedBy?: SourceCrawlJob["requestedBy"]) => Promise<WorkerQueuedJob>;
   runCrawlJob: (crawlJobId: string) => Promise<WorkerQueuedJob>;
   processContent: (contentId: string) => Promise<WorkerQueuedJob>;
-  publishNow: (contentId: string, targetId: string, requestedBy?: PublishExecuteJob["requestedBy"]) => Promise<WorkerQueuedJob>;
+  publishNow: (contentId: string, targetId: string, requestedBy?: PublishExecuteJob["requestedBy"], targetChannelId?: string) => Promise<WorkerQueuedJob>;
   scheduleRelease: (scheduleId: string, scheduledAt: Date) => Promise<WorkerQueuedJob>;
   testAccount: (accountId: string, accountKind: PlatformHealthJob["accountKind"]) => Promise<WorkerQueuedJob>;
   scheduleFbPost: (fbPostTargetId: string, scheduledAt: Date) => Promise<WorkerQueuedJob>;
@@ -77,6 +86,366 @@ const defaultJobOptions: JobsOptions = {
     age: 60 * 60 * 24 * 7
   }
 };
+
+const DEFAULT_SOURCE_POLL_INTERVAL_MS = 60_000;
+const MIN_SOURCE_POLL_INTERVAL_MS = 15_000;
+
+type SourcePoller = {
+  start: () => void;
+  stop: () => void;
+};
+
+type AffiliateProviderKey = "web" | "api" | "accesstrade" | "affiliate_id";
+
+type PlatformAffiliateConfig = {
+  enabled: boolean;
+  primary: AffiliateProviderKey;
+  fallbackEnabled: boolean;
+  fallback: AffiliateProviderKey;
+  affiliateId?: string;
+  campaignId?: string;
+  subId?: string;
+  accessTradeToken?: string;
+  appKey?: string;
+  appSecret?: string;
+  accessToken?: string;
+  region?: string;
+};
+
+class AffiliateChainAdapter implements AffiliateAdapter {
+  constructor(private readonly adapters: AffiliateAdapter[]) {}
+
+  detect(text: string) {
+    return this.adapters[0]?.detect(text) ?? [];
+  }
+
+  async convert(input: Parameters<AffiliateAdapter["convert"]>[0]) {
+    let lastResult: Awaited<ReturnType<AffiliateAdapter["convert"]>> | null = null;
+    let lastError: Error | null = null;
+
+    for (const adapter of this.adapters) {
+      try {
+        const result = await adapter.convert(input);
+        if (result.success) return result;
+        lastResult = result;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
+    }
+
+    if (lastResult) return lastResult;
+    throw lastError ?? new Error("Không có provider affiliate khả dụng");
+  }
+}
+
+class StaticFailureAffiliateAdapter implements AffiliateAdapter {
+  constructor(
+    private readonly network: LinkNetwork,
+    private readonly message: string
+  ) {}
+
+  detect() {
+    return [];
+  }
+
+  async convert(input: Parameters<AffiliateAdapter["convert"]>[0]) {
+    return {
+      original: input.url,
+      converted: null,
+      network: this.network,
+      success: false,
+      error: this.message
+    };
+  }
+}
+
+export class ShopeeAffiliateIdAdapter implements AffiliateAdapter {
+  constructor(
+    private readonly affiliateId?: string,
+    private readonly requireExistingAffiliateId = false
+  ) {}
+
+  detect() {
+    return [];
+  }
+
+  async convert(input: Parameters<AffiliateAdapter["convert"]>[0]) {
+    const affiliateId = this.affiliateId?.trim();
+    if (!affiliateId) {
+      return {
+        original: input.url,
+        converted: null,
+        network: "shopee" as const,
+        success: false,
+        error: "Thiếu Shopee affiliate_id"
+      };
+    }
+
+    try {
+      const url = new URL(input.url);
+      let matched = false;
+      if (url.searchParams.has("affiliate_id")) {
+        url.searchParams.set("affiliate_id", affiliateId);
+        matched = true;
+      }
+      const utmMedium = url.searchParams.get("utm_medium");
+      const utmSource = url.searchParams.get("utm_source");
+      if (utmMedium === "affiliates" && utmSource && utmSource.startsWith("an_")) {
+        url.searchParams.set("utm_source", `an_${affiliateId}`);
+        matched = true;
+      }
+
+      if (this.requireExistingAffiliateId && !matched) {
+        return {
+          original: input.url,
+          converted: null,
+          network: "shopee" as const,
+          success: false,
+          error: "Link chưa phải affiliate link hợp lệ để thay nhanh"
+        };
+      }
+
+      return {
+        original: input.url,
+        converted: url.toString(),
+        network: "shopee" as const,
+        success: true
+      };
+    } catch (error) {
+      return {
+        original: input.url,
+        converted: null,
+        network: "shopee" as const,
+        success: false,
+        error: error instanceof Error ? error.message : "Link Shopee không hợp lệ"
+      };
+    }
+  }
+}
+
+class ScopedAffiliateAdapter implements AffiliateAdapter {
+  constructor(
+    private readonly adapter: AffiliateAdapter,
+    private readonly defaults: { campaignId?: string; subId?: string }
+  ) {}
+
+  detect(text: string) {
+    return this.adapter.detect(text);
+  }
+
+  convert(input: Parameters<AffiliateAdapter["convert"]>[0]) {
+    return this.adapter.convert({
+      ...input,
+      campaignId: input.campaignId ?? this.defaults.campaignId,
+      subId: input.subId ?? this.defaults.subId
+    });
+  }
+}
+
+function createSourcePoller(prisma: PrismaClient, enqueue: (job: SourceCrawlJob) => Promise<unknown>): SourcePoller {
+  const configured = Number(process.env.SOURCE_POLL_INTERVAL_MS ?? DEFAULT_SOURCE_POLL_INTERVAL_MS);
+  const intervalMs = Math.max(MIN_SOURCE_POLL_INTERVAL_MS, Number.isFinite(configured) ? configured : DEFAULT_SOURCE_POLL_INTERVAL_MS);
+  const inFlight = new Set<string>();
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let stopped = true;
+
+  const tick = async () => {
+    if (stopped) return;
+    const accounts = await prisma.sourceAccount.findMany({
+      where: {
+        isActive: true,
+        health: { not: "paused" },
+        platform: { in: ["telegram", "x", "threads", "instagram", "facebook"] }
+      },
+      select: { id: true, name: true, platform: true, lastCrawledAt: true }
+    });
+    for (const account of accounts) {
+      if (inFlight.has(account.id)) continue;
+      const hasChannel = await prisma.platformChannel.count({
+        where: { accountKind: "source", accountId: account.id, isSource: true, isActive: true }
+      });
+      if (hasChannel === 0) continue;
+      inFlight.add(account.id);
+      enqueue({ version: 1, sourceId: account.id, requestedBy: "system" })
+        .catch((error) => logger.warn("Không enqueue được source poll", { accountId: account.id, error: (error as Error).message }))
+        .finally(() => inFlight.delete(account.id));
+    }
+  };
+
+  return {
+    start: () => {
+      if (timer) return;
+      stopped = false;
+      void tick();
+      timer = setInterval(() => void tick(), intervalMs);
+      timer.unref?.();
+      logger.info("Source polling đã bật", { intervalMs });
+    },
+    stop: () => {
+      stopped = true;
+      if (timer) clearInterval(timer);
+      timer = null;
+      inFlight.clear();
+      logger.info("Source polling đã dừng");
+    }
+  };
+}
+
+async function createConfiguredAdapterRegistry(prisma: PrismaClient) {
+  try {
+    const setting = await prisma.systemSetting.findUnique({ where: { key: "affiliate_settings" } });
+    const config = setting?.value && typeof setting.value === "object" && !Array.isArray(setting.value)
+      ? setting.value as Record<string, unknown>
+      : {};
+    const read = (key: string) => typeof config[key] === "string" ? String(config[key]).trim() : "";
+    const readPlatformConfig = (key: "shopee" | "lazada" | "tiktok", defaults: PlatformAffiliateConfig): PlatformAffiliateConfig => {
+      const value = config[key];
+      if (!value || typeof value !== "object" || Array.isArray(value)) return defaults;
+      const record = value as Record<string, unknown>;
+      const readProvider = (field: "primary" | "fallback", fallback: AffiliateProviderKey) => {
+        const provider = record[field];
+        return provider === "web" || provider === "api" || provider === "accesstrade" || provider === "affiliate_id"
+          ? provider
+          : fallback;
+      };
+
+      return {
+        enabled: typeof record.enabled === "boolean" ? record.enabled : defaults.enabled,
+        primary: readProvider("primary", defaults.primary),
+        fallbackEnabled: typeof record.fallbackEnabled === "boolean" ? record.fallbackEnabled : defaults.fallbackEnabled,
+        fallback: readProvider("fallback", defaults.fallback),
+        affiliateId: typeof record.affiliateId === "string" ? record.affiliateId.trim() : defaults.affiliateId,
+        campaignId: typeof record.campaignId === "string" ? record.campaignId.trim() : defaults.campaignId,
+        subId: typeof record.subId === "string" ? record.subId.trim() : defaults.subId,
+        accessTradeToken: typeof record.accessTradeToken === "string" ? record.accessTradeToken.trim() : (defaults as any).accessTradeToken,
+        appKey: typeof record.appKey === "string" ? record.appKey.trim() : (defaults as any).appKey,
+        appSecret: typeof record.appSecret === "string" ? record.appSecret.trim() : (defaults as any).appSecret,
+        accessToken: typeof record.accessToken === "string" ? record.accessToken.trim() : (defaults as any).accessToken,
+        region: typeof record.region === "string" ? record.region.trim() : (defaults as any).region
+      };
+    };
+    
+    const shopeeConfig = readPlatformConfig("shopee", {
+      enabled: true,
+      primary: "web",
+      fallbackEnabled: true,
+      fallback: "accesstrade",
+      affiliateId: read("shopeeAffiliateId") || "",
+      campaignId: "",
+      subId: "",
+      accessTradeToken: ""
+    });
+    const lazadaConfig = readPlatformConfig("lazada", {
+      enabled: true,
+      primary: "api",
+      fallbackEnabled: true,
+      fallback: "accesstrade",
+      campaignId: "",
+      subId: "",
+      accessTradeToken: "",
+      appKey: read("lazadaKey") || process.env.LAZADA_APP_KEY || "",
+      appSecret: read("lazadaSecret") || process.env.LAZADA_APP_SECRET || "",
+      accessToken: read("lazadaToken") || process.env.LAZADA_ACCESS_TOKEN || "",
+      region: read("lazadaRegion") || process.env.LAZADA_REGION || "VN"
+    });
+    const tiktokConfig = readPlatformConfig("tiktok", {
+      enabled: false,
+      primary: "accesstrade",
+      fallbackEnabled: false,
+      fallback: "accesstrade",
+      campaignId: "",
+      subId: "",
+      accessTradeToken: ""
+    });
+
+    const fallback = new AccessTradeAffiliateAdapter({
+      token: read("accessTradeToken") || undefined,
+      defaultCampaignId: read("accessTradeCampaignId") || undefined
+    });
+
+    const makeAccessTrade = (platformToken?: string, platformCampaignId?: string) => new AccessTradeAffiliateAdapter({
+      token: platformToken || read("accessTradeToken") || undefined,
+      defaultCampaignId: platformCampaignId || read("accessTradeCampaignId") || undefined
+    });
+
+    const makeShopeeProvider = (provider: AffiliateProviderKey): AffiliateAdapter => {
+      const shopeeToken = shopeeConfig.accessTradeToken || read("accessTradeToken") || undefined;
+      const shopeeCampaign = shopeeConfig.campaignId || read("accessTradeCampaignId") || undefined;
+      if (provider === "affiliate_id") return new ShopeeAffiliateIdAdapter(shopeeConfig.affiliateId || read("shopeeAffiliateId"));
+      if (provider === "web") {
+        return new ShopeeAffiliateAdapter({
+          mode: "web",
+          accessTradeToken: shopeeToken,
+          accessTradeCampaignId: shopeeCampaign
+        });
+      }
+      return makeAccessTrade(shopeeToken, shopeeCampaign);
+    };
+
+    const makeLazadaProvider = (provider: AffiliateProviderKey): AffiliateAdapter => {
+      const lazadaKey = lazadaConfig.appKey || read("lazadaKey") || process.env.LAZADA_APP_KEY || "";
+      const lazadaSecret = lazadaConfig.appSecret || read("lazadaSecret") || process.env.LAZADA_APP_SECRET || "";
+      const lazadaToken = lazadaConfig.accessToken || read("lazadaToken") || process.env.LAZADA_ACCESS_TOKEN || "";
+      const lazadaRegion = lazadaConfig.region || read("lazadaRegion") || process.env.LAZADA_REGION || "VN";
+
+      const lazadaATToken = lazadaConfig.accessTradeToken || read("accessTradeToken") || undefined;
+      const lazadaATCampaign = lazadaConfig.campaignId || read("accessTradeCampaignId") || undefined;
+
+      if (provider === "api") {
+        if (lazadaKey && lazadaSecret && lazadaToken) {
+          return new LazadaAffiliateAdapter({
+            appKey: lazadaKey,
+            appSecret: lazadaSecret,
+            accessToken: lazadaToken,
+            region: lazadaRegion
+          });
+        }
+        return new StaticFailureAffiliateAdapter("lazada", "Thiếu Lazada API credentials");
+      }
+      if (provider === "web") return new StaticFailureAffiliateAdapter("lazada", "Lazada web/session chưa được nối vào worker");
+      return makeAccessTrade(lazadaATToken, lazadaATCampaign);
+    };
+
+    const makeChain = (
+      config: PlatformAffiliateConfig,
+      factory: (provider: AffiliateProviderKey) => AffiliateAdapter,
+      prepend: AffiliateAdapter[] = []
+    ) => {
+      const providers = [...prepend, factory(config.primary)];
+      if (config.fallbackEnabled && config.fallback !== config.primary) providers.push(factory(config.fallback));
+      const scoped = providers.map((provider) => new ScopedAffiliateAdapter(provider, {
+        campaignId: config.campaignId || undefined,
+        subId: config.subId || undefined
+      }));
+      return new AffiliateChainAdapter(scoped);
+    };
+
+    const providers: Partial<Record<LinkNetwork, AffiliateAdapter>> = {};
+    if (shopeeConfig.enabled) {
+      const fastAffiliateId = shopeeConfig.affiliateId || read("shopeeAffiliateId");
+      providers.shopee = makeChain(
+        shopeeConfig,
+        makeShopeeProvider,
+        fastAffiliateId ? [new ShopeeAffiliateIdAdapter(fastAffiliateId, true)] : []
+      );
+    }
+    if (lazadaConfig.enabled) providers.lazada = makeChain(lazadaConfig, makeLazadaProvider);
+    if (tiktokConfig.enabled) {
+      const tiktokToken = tiktokConfig.accessTradeToken || read("accessTradeToken") || undefined;
+      const tiktokCampaign = tiktokConfig.campaignId || read("accessTradeCampaignId") || undefined;
+      providers.tiktok_shop = makeChain(tiktokConfig, () => makeAccessTrade(tiktokToken, tiktokCampaign));
+    }
+
+    return createRealAdapterRegistry({
+      affiliateAdapter: new AffiliateRouter({ providers, fallback })
+    });
+  } catch (error) {
+    logger.warn("Không đọc được cấu hình Affiliate từ database, dùng biến môi trường", {
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return createRealAdapterRegistry();
+  }
+}
 
 type LocalJobState = "waiting" | "delayed" | "active" | "completed" | "failed" | "removed";
 type LocalProcessor = (job: LocalQueueJob) => Promise<unknown>;
@@ -174,7 +543,7 @@ type LocalQueues = ReturnType<typeof createLocalQueues>;
 
 async function createLocalWorkerCore(options: WorkerCoreOptions = {}): Promise<WorkerCore> {
   const prisma = options.prisma ?? defaultPrisma;
-  const registry = options.registry ?? createRealAdapterRegistry();
+  const registry = options.registry ?? await createConfiguredAdapterRegistry(prisma);
   const queues = createLocalQueues();
 
   const context = {
@@ -199,13 +568,23 @@ async function createLocalWorkerCore(options: WorkerCoreOptions = {}): Promise<W
       })
   };
 
+  const realtimeManager = new RealtimeListenerManager(registry, prisma, context.enqueueContentProcess);
+  const sourcePoller = createSourcePoller(prisma, (job) => queues[QueueName.SourceCrawl].add(JobName.SourceCrawl, job, {
+    ...defaultJobOptions,
+    jobId: `poll_${sanitizeJobIdToken(job.sourceId)}_${Date.now()}`
+  }));
+
   async function start() {
     wireLocalProcessors(queues, context);
     await recoverLocalJobs(prisma, context);
+    await realtimeManager.start();
+    sourcePoller.start();
     logger.info("Worker Core local đã khởi động", { queues: Object.values(QueueName) });
   }
 
   async function stop() {
+    sourcePoller.stop();
+    await realtimeManager.stop();
     await Promise.allSettled(Object.values(queues).map((queue) => queue.close()));
     logger.info("Worker Core local đã dừng");
   }
@@ -232,8 +611,12 @@ async function createLocalWorkerCore(options: WorkerCoreOptions = {}): Promise<W
       ),
     processContent: (contentId: string) =>
       queues[QueueName.ContentProcess].add(JobName.ContentProcess, { version: 1, contentId } satisfies ContentProcessJob, stableJob({ version: 1, contentId })),
-    publishNow: (contentId: string, targetId: string, requestedBy: PublishExecuteJob["requestedBy"] = "admin") =>
-      queues[QueueName.Publish].add(JobName.PublishExecute, { version: 1, contentId, targetId, requestedBy } satisfies PublishExecuteJob, stableJob({ version: 1, contentId, targetId, requestedBy })),
+    publishNow: (contentId: string, targetId: string, requestedBy: PublishExecuteJob["requestedBy"] = "admin", targetChannelId?: string) =>
+      queues[QueueName.Publish].add(
+        JobName.PublishExecute,
+        { version: 1, contentId, targetId, ...(targetChannelId ? { targetChannelId } : {}), requestedBy } satisfies PublishExecuteJob,
+        stableJob({ version: 1, contentId, targetId, ...(targetChannelId ? { targetChannelId } : {}), requestedBy })
+      ),
     scheduleRelease: (scheduleId: string, scheduledAt: Date) =>
       queues[QueueName.Schedule].add(JobName.ScheduleRelease, { version: 1, scheduleId } satisfies ScheduleReleaseJob, {
         ...stableJob({ version: 1, scheduleId }),
@@ -266,7 +649,7 @@ export async function createWorkerCore(options: WorkerCoreOptions = {}): Promise
 
 async function createRedisWorkerCore(options: WorkerCoreOptions = {}): Promise<WorkerCore> {
   const prisma = options.prisma ?? defaultPrisma;
-  const registry = options.registry ?? createRealAdapterRegistry();
+  const registry = options.registry ?? await createConfiguredAdapterRegistry(prisma);
   const redisUrl = options.redisUrl ?? process.env.REDIS_URL ?? "redis://localhost:6379";
   const connection = new IORedis(redisUrl, { maxRetriesPerRequest: null });
   const queues = createQueues(connection);
@@ -295,6 +678,12 @@ async function createRedisWorkerCore(options: WorkerCoreOptions = {}): Promise<W
       })
   };
 
+  const realtimeManager = new RealtimeListenerManager(registry, prisma, context.enqueueContentProcess);
+  const redisSourcePoller = createSourcePoller(prisma, (job) => queues[QueueName.SourceCrawl].add(JobName.SourceCrawl, job, {
+    ...defaultJobOptions,
+    jobId: `poll_${sanitizeJobIdToken(job.sourceId)}_${Date.now()}`
+  }));
+
   async function start() {
     workers.push(
       new Worker(QueueName.CrawlJob, (job) => processCrawlJob(job.data, context), { connection, concurrency: 2 }),
@@ -310,10 +699,14 @@ async function createRedisWorkerCore(options: WorkerCoreOptions = {}): Promise<W
     workers.forEach((worker) => {
       worker.on("failed", (job, error) => logger.error("Worker job failed", { queue: worker.name, jobId: job?.id, error: error.message }));
     });
+    await realtimeManager.start();
+    redisSourcePoller.start();
     logger.info("Worker Core đã khởi động", { queues: Object.values(QueueName) });
   }
 
   async function stop() {
+    redisSourcePoller.stop();
+    await realtimeManager.stop();
     await Promise.allSettled(workers.map((worker) => worker.close()));
     await Promise.allSettled(queueEvents.map((event) => event.close()));
     await Promise.allSettled(Object.values(queues).map((queue) => queue.close()));
@@ -343,8 +736,12 @@ async function createRedisWorkerCore(options: WorkerCoreOptions = {}): Promise<W
       ),
     processContent: (contentId: string) =>
       queues[QueueName.ContentProcess].add(JobName.ContentProcess, { version: 1, contentId } satisfies ContentProcessJob, stableJob({ version: 1, contentId })),
-    publishNow: (contentId: string, targetId: string, requestedBy: PublishExecuteJob["requestedBy"] = "admin") =>
-      queues[QueueName.Publish].add(JobName.PublishExecute, { version: 1, contentId, targetId, requestedBy } satisfies PublishExecuteJob, stableJob({ version: 1, contentId, targetId, requestedBy })),
+    publishNow: (contentId: string, targetId: string, requestedBy: PublishExecuteJob["requestedBy"] = "admin", targetChannelId?: string) =>
+      queues[QueueName.Publish].add(
+        JobName.PublishExecute,
+        { version: 1, contentId, targetId, ...(targetChannelId ? { targetChannelId } : {}), requestedBy } satisfies PublishExecuteJob,
+        stableJob({ version: 1, contentId, targetId, ...(targetChannelId ? { targetChannelId } : {}), requestedBy })
+      ),
     scheduleRelease: (scheduleId: string, scheduledAt: Date) =>
       queues[QueueName.Schedule].add(JobName.ScheduleRelease, { version: 1, scheduleId } satisfies ScheduleReleaseJob, {
         ...stableJob({ version: 1, scheduleId }),

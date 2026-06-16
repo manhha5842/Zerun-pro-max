@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { apiGet, apiPost, apiPostForm } from "../api/client";
 import { FileUploadDropzone } from "../components/common/FileUploadDropzone";
+import { MediaPathInput } from "../components/common/MediaPathInput";
 import { PageHeader } from "../components/common/PageHeader";
 import { SectionCard } from "../components/common/SectionCard";
 import { ThreadsPublishSettings, buildThreadsPublishPayload, defaultThreadsPublishSettings } from "../components/common/ThreadsPublishSettings";
@@ -181,7 +182,8 @@ export function PostComposerPage() {
             ) : null}
             <div className="span-2">
               <FileUploadDropzone label="Upload media bài viết" accept="image/*,video/*" multiple onChange={(files) => files.forEach((file) => uploadMutation.mutate({ file, kind: "post" }))} />
-              <div className="file-list">{mediaFiles.map((file) => <Badge key={file.localPath}>{file.filename}</Badge>)}</div>
+              <MediaPathInput onAdd={(file) => setMediaFiles((current) => [...current, file])} />
+              <div className="file-list">{mediaFiles.map((file) => <Badge key={file.localPath} title={file.localPath}>{file.filename}</Badge>)}</div>
             </div>
             <label>
               <Label>Comment đầu tiên</Label>
@@ -205,7 +207,8 @@ export function PostComposerPage() {
                 </label>
                 <div className="span-2">
                   <FileUploadDropzone label="Upload media comment" accept="image/*,video/*" multiple onChange={(files) => files.forEach((file) => uploadMutation.mutate({ file, kind: "comment" }))} />
-                  <div className="file-list">{commentMediaFiles.map((file) => <Badge key={file.localPath}>{file.filename}</Badge>)}</div>
+                  <MediaPathInput placeholder="Nhập đường dẫn media comment..." onAdd={(file) => setCommentMediaFiles((current) => [...current, file])} />
+                  <div className="file-list">{commentMediaFiles.map((file) => <Badge key={file.localPath} title={file.localPath}>{file.filename}</Badge>)}</div>
                 </div>
               </>
             ) : null}

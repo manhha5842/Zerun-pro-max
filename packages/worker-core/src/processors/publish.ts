@@ -1,8 +1,10 @@
+import { formatCaptionForPlatform } from "@zerun/core";
 import { AdapterAuthError, AdapterCheckpointError, classifyError, logger, realtimeBus } from "@zerun/shared";
 import type { ThreadsLinkPreviewMode, ThreadsPublishOptions, ThreadsSpoilerMode } from "@zerun/adapters";
 import { publishExecuteJobSchema, type PublishExecuteJob } from "../types.js";
 import type { ProcessorContext } from "./context.js";
-import { mapMediaAssets, normalizeMediaPaths, toAdapterAccount } from "./helpers.js";
+import { ensureLocalMediaAssets, mapMediaAssets, normalizeMediaPaths, toAdapterAccount } from "./helpers.js";
+import { sendAlert } from "../notify/alert.js";
 
 // BullMQ handles retries automatically via defaultJobOptions in runtime.ts:
 // - attempts: 3 (max 3 total attempts)
@@ -60,6 +62,29 @@ function prepareThreadsPublishText(text: string, comment: string, options?: Thre
   };
 }
 
+function applyTargetChannelDestination(
+  account: {
+    id: string;
+    platform: string;
+    name: string;
+    handle: string | null;
+    credentials: unknown;
+    config: unknown;
+  },
+  channel: { externalId: string; platform: string } | null
+) {
+  if (!channel) return account;
+  const credentials = isRecord(account.credentials) ? { ...account.credentials } : {};
+  const config = isRecord(account.config) ? { ...account.config } : {};
+  if (account.platform === "telegram") {
+    credentials.target = channel.externalId;
+  }
+  if (account.platform === "zalo-personal") {
+    config.threadId = channel.externalId;
+  }
+  return { ...account, credentials, config };
+}
+
 export async function processPublish(rawJob: unknown, context: ProcessorContext) {
   const job = publishExecuteJobSchema.parse(rawJob) satisfies PublishExecuteJob;
   const startedAt = new Date();
@@ -73,11 +98,14 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
     }
   });
 
-  const attemptNo = (await context.prisma.publishAttempt.count({ where: { contentId: job.contentId, targetId: job.targetId } })) + 1;
+  const attemptNo = (await context.prisma.publishAttempt.count({
+    where: { contentId: job.contentId, targetId: job.targetId, ...(job.targetChannelId ? { targetChannelId: job.targetChannelId } : {}) }
+  })) + 1;
   const attempt = await context.prisma.publishAttempt.create({
     data: {
       contentId: job.contentId,
       targetId: job.targetId,
+      ...(job.targetChannelId ? { targetChannelId: job.targetChannelId } : {}),
       attemptNo,
       status: "running",
       startedAt
@@ -91,35 +119,60 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
       where: { id: job.contentId },
       include: { media: true, source: { include: { routingRules: true } } }
     });
+    if (content.status === "paused") {
+      await context.prisma.publishAttempt.update({ where: { id: attempt.id }, data: { status: "cancelled", error: "Bài đăng đang bị tạm dừng", completedAt: new Date() } });
+      await context.prisma.workerJobLog.update({ where: { id: log.id }, data: { status: "completed", completedAt: new Date() } });
+      return;
+    }
     const target = await context.prisma.targetAccount.findUniqueOrThrow({ where: { id: job.targetId } });
+    const targetChannel = job.targetChannelId
+      ? await context.prisma.platformChannel.findUniqueOrThrow({ where: { id: job.targetChannelId } })
+      : null;
+    const linkedSource = target.linkedSourceAccountId
+      ? await context.prisma.sourceAccount.findUniqueOrThrow({ where: { id: target.linkedSourceAccountId } })
+      : null;
+    const publishAccount = linkedSource
+      ? {
+          ...target,
+          credentials: linkedSource.credentials,
+          config: linkedSource.config,
+          handle: linkedSource.handle,
+          platform: linkedSource.platform
+        }
+      : target;
     targetPlatform = target.platform;
     if (!target.isActive || target.health === "paused") throw new Error("Target đang tắt hoặc bị pause");
 
     await context.prisma.content.update({ where: { id: content.id }, data: { status: "publishing" } });
 
-    // Routes by target.platform: facebook, instagram, threads, x, zalo-bot, zalo-web, etc.
+    // The target platform determines which registered publish adapter handles this job.
     // The adapter registry resolves the correct adapter for each platform automatically.
     const metadata = (content.metadata ?? {}) as Record<string, unknown>;
     const postType = typeof metadata.type === "string" ? metadata.type : undefined;
     const threadsOptions = target.platform === "threads" ? normalizeThreadsPublishOptions(metadata.threads) : undefined;
-    const preparedPublish = prepareThreadsPublishText(
+    // M3-A4: caption template theo nền tảng (X ngắn, FB/Telegram dài) — giữ link affiliate.
+    const platformCaption = formatCaptionForPlatform(
       content.finalText ?? content.draftText ?? content.originalText,
+      target.platform
+    );
+    const preparedPublish = prepareThreadsPublishText(
+      platformCaption,
       typeof metadata.comment === "string" ? metadata.comment : "",
       threadsOptions
     );
     const storedMedia = mapMediaAssets(content.media);
     const mediaSource = storedMedia.length > 0 ? storedMedia : normalizeMediaPaths(metadata.mediaPaths);
-    const media = mediaSource.map((asset) => ({
+    const media = await ensureLocalMediaAssets(mediaSource.map((asset) => ({
       ...asset,
       metadata: {
         ...(asset.metadata ?? {}),
         ...(postType ? { postType, type: postType } : {})
       }
-    }));
+    })), { contentId: content.id });
 
     const adapter = context.registry.getPublish(target.platform as never);
     const result = await adapter.publish({
-      account: toAdapterAccount(target),
+      account: toAdapterAccount(applyTargetChannelDestination(publishAccount, targetChannel)),
       contentId: content.id,
       text: preparedPublish.text,
       media,
@@ -136,15 +189,17 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
       }
     });
 
-    const targetIds = content.source?.routingRules.filter((rule) => rule.isActive).map((rule) => rule.targetId) ?? [target.id];
+    const targetIds = Array.isArray(content.scheduledTargets)
+      ? (content.scheduledTargets as unknown[]).map(String)
+      : content.source?.routingRules.filter((rule) => rule.isActive).map((rule) => rule.targetId) ?? [target.id];
     const successfulTargetCount = await context.prisma.publishAttempt.groupBy({
-      by: ["targetId"],
+      by: [job.targetChannelId ? "targetChannelId" : "targetId"] as never,
       where: {
         contentId: content.id,
-        targetId: { in: targetIds },
+        ...(job.targetChannelId ? { targetChannelId: { in: targetIds } } : { targetId: { in: targetIds } }),
         status: "success"
       }
-    });
+    } as never);
     const nextStatus = successfulTargetCount.length >= targetIds.length ? "published" : "publishing";
 
     await context.prisma.content.update({ where: { id: content.id }, data: { status: nextStatus } });
@@ -154,8 +209,8 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
         platform: target.platform,
         contentId: content.id,
         targetId: target.id,
-        message: `Đã đăng ${content.code} lên ${target.name}.`,
-        metadata: { resultUrl: result.url }
+        message: `Đã đăng ${content.code} lên ${targetChannel?.name ?? target.name}.`,
+        metadata: { resultUrl: result.url, targetChannelId: targetChannel?.id ?? null }
       }
     });
     realtimeBus.emitEvent({
@@ -235,17 +290,17 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
       createdAt: new Date().toISOString()
     });
 
-    try {
-      const tgSetting = await context.prisma.systemSetting.findUnique({ where: { key: "telegram_notify" } });
-      const tg = (tgSetting?.value ?? {}) as Record<string, unknown>;
-      if (tg.enabled && tg.botToken && tg.chatId) {
-        const msg = `❌ Đăng bài thất bại
-· Mã bài: ${job.contentId}
-· Nền tảng: ${targetPlatform ?? "unknown"}
-· Lỗi: ${classified.message}`;
-        await fetch(`https://api.telegram.org/bot${tg.botToken}/sendMessage?chat_id=${tg.chatId}&text=${encodeURIComponent(msg)}`).catch(() => {});
-      }
-    } catch {}
+    const needLogin =
+      classified instanceof AdapterAuthError ||
+      classified instanceof AdapterCheckpointError ||
+      classified.kind === "adapter_auth" ||
+      classified.kind === "adapter_checkpoint";
+    await sendAlert(context.prisma, {
+      category: needLogin ? "login_required" : "publish_fail",
+      platform: targetPlatform ?? "unknown",
+      account: job.targetId,
+      detail: classified.message
+    }).catch(() => undefined);
 
     await context.prisma.workerJobLog.update({
       where: { id: log.id },
