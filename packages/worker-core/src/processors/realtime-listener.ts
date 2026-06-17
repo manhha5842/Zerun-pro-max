@@ -119,7 +119,7 @@ export class RealtimeListenerManager {
 
     try {
       const adapter = this.registry.getRealtime(account.platform as never);
-      const adapterAccount = toAdapterAccount(account);
+      const adapterAccount = toAdapterAccount(await this.withRealtimeConfig(account));
 
       const handle = await adapter.startListener(adapterAccount, async (item) => {
         await this.onItem(account.id, item);
@@ -142,6 +142,30 @@ export class RealtimeListenerManager {
       });
       this.scheduleReconnect(account);
     }
+  }
+
+  private async withRealtimeConfig(account: DesiredAccount): Promise<DesiredAccount> {
+    if (account.platform !== "telegram") return account;
+    const channels = await this.prisma.platformChannel.findMany({
+      where: { accountKind: "source", accountId: account.id, isSource: true, isActive: true },
+      select: { externalId: true }
+    });
+    const config = account.config && typeof account.config === "object" && !Array.isArray(account.config)
+      ? { ...(account.config as Record<string, unknown>) }
+      : {};
+    const credentials = account.credentials && typeof account.credentials === "object" && !Array.isArray(account.credentials)
+      ? account.credentials as Record<string, unknown>
+      : {};
+    const credentialSource = typeof credentials.source === "string" && credentials.source.trim() ? credentials.source.trim() : null;
+    const listenSources = channels.map((channel) => channel.externalId).filter(Boolean);
+    if (listenSources.length === 0 && credentialSource) listenSources.push(credentialSource);
+    return {
+      ...account,
+      config: {
+        ...config,
+        listenSources
+      }
+    };
   }
 
   private async onItem(sourceId: string, item: RawSourceItem) {

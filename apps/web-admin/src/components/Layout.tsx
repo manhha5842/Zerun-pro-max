@@ -21,34 +21,20 @@ const navSections: NavSection[] = [
     ]
   },
   {
-    label: "Đăng bài",
+    label: "Đăng lại",
     items: [
-      { to: "/contents/new", label: "Tạo bài đăng", icon: "compose" },
-      { to: "/contents", label: "Quản lý bài đăng", icon: "content", match: /^\/contents$/ },
-      { to: "/history", label: "Lịch sử", icon: "history" },
-      { to: "/contents/archive", label: "Kho lưu trữ", icon: "archive", match: /^\/contents\/archive/ },
-      { to: "/contents/trash", label: "Thùng rác", icon: "trash", match: /^\/contents\/trash/ }
+      { to: "/repost/flow", label: "Luồng đăng lại", icon: "automation", match: /^\/repost\/flow/ },
+      { to: "/repost/review", label: "Hàng chờ duyệt", icon: "content", match: /^\/repost\/review/ },
+      { to: "/repost/manual-links", label: "Link lỗi cần xử lý", icon: "tool", match: /^\/repost\/manual-links/ },
+      { to: "/repost/history", label: "Lịch sử đăng lại", icon: "history", match: /^\/repost\/history/ }
     ]
   },
   {
-    label: "Chuyển đổi tự động",
+    label: "Tài khoản & Kênh",
     items: [
-      { to: "/auto-conversion/rules", label: "Cấu hình chuyển đổi", icon: "automation", match: /^\/auto-conversion\/rules/ },
-      { to: "/auto-conversion/history", label: "Lịch sử chuyển đổi", icon: "history", match: /^\/auto-conversion\/history/ }
-    ]
-  },
-  {
-    label: "Crawl dữ liệu",
-    items: [
-      { to: "/crawl", label: "Crawl dữ liệu", icon: "crawl", match: /^\/crawl$/ },
-      { to: "/crawl/history", label: "Lịch sử crawl", icon: "history", match: /^\/crawl\/history/ },
-      { to: "/crawl/results", label: "Kết quả crawl", icon: "content", match: /^\/crawl\/results/ }
-    ]
-  },
-  {
-    label: "Tài khoản",
-    items: [
-      { to: "/accounts", label: "Tài khoản đăng", icon: "account", match: /^\/accounts/ }
+      { to: "/accounts", label: "Quản lý tài khoản", icon: "account", match: /^\/accounts$/ },
+      { to: "/accounts/sources", label: "Kênh nguồn", icon: "automation", match: /^\/accounts\/sources/ },
+      { to: "/accounts/targets", label: "Kênh đích", icon: "automation", match: /^\/accounts\/targets/ }
     ]
   },
   {

@@ -255,7 +255,7 @@ function createSourcePoller(prisma: PrismaClient, enqueue: (job: SourceCrawlJob)
       where: {
         isActive: true,
         health: { not: "paused" },
-        platform: { in: ["telegram", "x", "threads", "instagram", "facebook"] }
+        platform: { in: ["x", "threads", "instagram", "facebook"] }
       },
       select: { id: true, name: true, platform: true, lastCrawledAt: true }
     });

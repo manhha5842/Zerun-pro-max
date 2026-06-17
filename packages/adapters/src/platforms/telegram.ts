@@ -1,10 +1,23 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { AdapterAuthError, ConfigurationError, RetryableNetworkError, withRetry, type Platform } from "@zerun/shared";
-import type { AdapterAccount, AdapterHealth, CrawlInput, CrawlResult, PublishAdapter, PublishInput, PublishResult, RawMedia, SourceAdapter } from "../contracts.js";
+import type {
+  AdapterAccount,
+  AdapterHealth,
+  CrawlInput,
+  CrawlResult,
+  ListenerHandle,
+  PublishAdapter,
+  PublishInput,
+  PublishResult,
+  RawMedia,
+  RawSourceItem,
+  RealtimeSourceAdapter,
+  SourceAdapter
+} from "../contracts.js";
 import { readNumber, readOptionalString, readString } from "../utils/credentials.js";
 
-export class TelegramAdapter implements SourceAdapter, PublishAdapter {
+export class TelegramAdapter implements SourceAdapter, RealtimeSourceAdapter, PublishAdapter {
   readonly platform: Platform = "telegram";
 
   async testConnection(account: AdapterAccount): Promise<AdapterHealth> {
@@ -14,7 +27,7 @@ export class TelegramAdapter implements SourceAdapter, PublishAdapter {
       const connected = await client.isUserAuthorized();
       return connected ? { status: "healthy", message: "Telegram session hợp lệ" } : { status: "failed", message: "Telegram session chưa đăng nhập" };
     } finally {
-      await client.disconnect();
+      await destroyTelegramClient(client);
     }
   }
 
@@ -54,7 +67,7 @@ export class TelegramAdapter implements SourceAdapter, PublishAdapter {
     } catch (error) {
       throw normalizeTelegramError(error);
     } finally {
-      await client.disconnect();
+      await destroyTelegramClient(client);
     }
   }
 
@@ -84,11 +97,76 @@ export class TelegramAdapter implements SourceAdapter, PublishAdapter {
     } catch (error) {
       throw normalizeTelegramError(error);
     } finally {
-      await client.disconnect();
+      await destroyTelegramClient(client);
     }
   }
 
-  private async createClient(account: AdapterAccount): Promise<any> {
+  async startListener(
+    account: AdapterAccount,
+    onItem: (item: RawSourceItem) => Promise<void>
+  ): Promise<ListenerHandle> {
+    const client = await this.createClient(account, { suppressTimeoutErrors: false });
+    const events = await import("telegram/events/index.js");
+    const listenSources = readStringArray(account.config.listenSources);
+    const closeHandlers: Array<() => void> = [];
+    let stopped = false;
+
+    const fireClose = () => {
+      if (stopped) return;
+      for (const handler of closeHandlers.splice(0)) handler();
+    };
+
+    client.onError = async (error: Error) => {
+      if (/TIMEOUT/i.test(error.message)) return;
+      console.warn(`[telegram] Listener error: ${error.message}`);
+      await destroyTelegramClient(client).catch(() => undefined);
+      fireClose();
+    };
+
+    await client.connect();
+    const sourceMatchers = await resolveTelegramSourceMatchers(client, listenSources);
+    const eventBuilder = new events.NewMessage({ incoming: true });
+
+    const handler = async (event: any) => {
+      const message = event?.message;
+      if (!message || message.out) return;
+      const matchedSource = matchTelegramSource(message, sourceMatchers);
+      if (sourceMatchers.length > 0 && !matchedSource) return;
+
+      const text = typeof message.message === "string" ? message.message : "";
+      const media = await downloadTelegramMedia(client, account, matchedSource?.source ?? "telegram-listener", message);
+      if (text.trim().length === 0 && media.length === 0) return;
+
+      await onItem({
+        platform: this.platform,
+        sourceId: account.id,
+        externalId: String(message.id),
+        author: message.senderId ? String(message.senderId) : undefined,
+        text,
+        media,
+        originalUrl: buildTelegramMessageUrl(matchedSource?.source, message.id),
+        postedAt: message.date ? new Date(message.date * 1000) : undefined,
+        metadata: {
+          threadId: matchedSource?.source ?? getTelegramChatKey(message),
+          chatId: getTelegramChatKey(message),
+          groupedId: message.groupedId?.toString?.()
+        }
+      });
+    };
+
+    client.addEventHandler(handler, eventBuilder);
+
+    return {
+      stop: async () => {
+        stopped = true;
+        client.removeEventHandler?.(handler, eventBuilder);
+        await destroyTelegramClient(client);
+      },
+      onClose: (callback) => closeHandlers.push(callback)
+    };
+  }
+
+  private async createClient(account: AdapterAccount, options: { suppressTimeoutErrors?: boolean } = {}): Promise<any> {
     const apiId = readNumber(account.credentials, "apiId");
     const apiHash = readString(account.credentials, "apiHash");
     const session = readOptionalString(account.credentials, "session");
@@ -96,13 +174,107 @@ export class TelegramAdapter implements SourceAdapter, PublishAdapter {
 
     const telegram = await import("telegram");
     const sessions = await import("telegram/sessions/index.js");
-    return new telegram.TelegramClient(new sessions.StringSession(session), apiId, apiHash, {
+    const client = new telegram.TelegramClient(new sessions.StringSession(session), apiId, apiHash, {
       connectionRetries: 3,
+      reconnectRetries: 1,
+      retryDelay: 1500,
       // FLOOD_WAIT ≤ 5 phút: GramJS tự sleep rồi tiếp, không ném lỗi (không crash).
       // Lớn hơn → ném ra, để withRetry/alert xử lý.
       floodSleepThreshold: 300
     });
+    if (options.suppressTimeoutErrors !== false) {
+      client.onError = async (error: Error) => {
+        if (/TIMEOUT/i.test(error.message)) return;
+        console.warn(`[telegram] Background client error: ${error.message}`);
+      };
+    }
+    return client;
   }
+}
+
+async function destroyTelegramClient(client: any): Promise<void> {
+  if (typeof client?.destroy === "function") {
+    await client.destroy();
+    return;
+  }
+  await client?.disconnect?.();
+}
+
+type TelegramSourceMatcher = {
+  source: string;
+  keys: Set<string>;
+};
+
+async function resolveTelegramSourceMatchers(client: any, sources: string[]): Promise<TelegramSourceMatcher[]> {
+  const matchers: TelegramSourceMatcher[] = [];
+  for (const source of sources) {
+    const keys = new Set<string>([normalizeTelegramSource(source)]);
+    try {
+      const peerId = await client.getPeerId(source);
+      keys.add(String(peerId));
+    } catch {
+      // Private/inaccessible sources may still match by raw externalId string.
+    }
+    matchers.push({ source, keys });
+  }
+  return matchers;
+}
+
+function matchTelegramSource(message: any, matchers: TelegramSourceMatcher[]): TelegramSourceMatcher | null {
+  const candidates = getTelegramMessageKeys(message);
+  return matchers.find((matcher) => [...matcher.keys].some((key) => candidates.has(key))) ?? null;
+}
+
+function getTelegramMessageKeys(message: any): Set<string> {
+  const keys = new Set<string>();
+  addKey(keys, message?.chatId);
+  addKey(keys, message?.peerId?.channelId);
+  addKey(keys, message?.peerId?.chatId);
+  addKey(keys, message?.peerId?.userId);
+
+  const channelId = toPlainId(message?.peerId?.channelId);
+  if (channelId) keys.add(`-100${channelId}`);
+  const chatId = toPlainId(message?.peerId?.chatId);
+  if (chatId) keys.add(`-${chatId}`);
+
+  return keys;
+}
+
+function getTelegramChatKey(message: any): string {
+  return [...getTelegramMessageKeys(message)][0] ?? "";
+}
+
+function buildTelegramMessageUrl(source: string | undefined, messageId: unknown): string | undefined {
+  if (!source || !messageId) return undefined;
+  const normalized = source.trim();
+  if (/^@?[a-zA-Z0-9_]{5,}$/.test(normalized)) {
+    return `https://t.me/${normalized.replace(/^@/, "")}/${messageId}`;
+  }
+  return undefined;
+}
+
+function normalizeTelegramSource(source: string): string {
+  const trimmed = source.trim();
+  if (/^-?\d+$/.test(trimmed)) return trimmed;
+  return trimmed.replace(/^https?:\/\/t\.me\//i, "@").replace(/^@?/, "@");
+}
+
+function addKey(keys: Set<string>, value: unknown) {
+  const plain = toPlainId(value);
+  if (plain) keys.add(plain);
+}
+
+function toPlainId(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (typeof value === "bigint") return value.toString();
+  const converted = (value as { toString?: () => string }).toString?.();
+  return converted && converted !== "[object Object]" ? converted : null;
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim());
 }
 
 async function downloadTelegramMedia(client: any, account: AdapterAccount, source: string, message: any): Promise<RawMedia[]> {

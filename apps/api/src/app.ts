@@ -277,6 +277,7 @@ async function registerProtectedRoutes(app: FastifyInstance) {
   registerWorkerJobRoutes(app);
   registerExtendedSettingsRoutes(app);
   registerTelegramSettingsRoutes(app);
+  registerRepostApiRoutes(app);
 }
 
 function registerHistoryRoutes(app: FastifyInstance) {
@@ -800,6 +801,33 @@ function registerTelegramSettingsRoutes(app: FastifyInstance) {
       update: { value: { botToken: String(body.botToken ?? ""), chatId: String(body.chatId ?? ""), enabled: Boolean(body.enabled) } }
     });
     return ok({ saved: true });
+  });
+
+  app.post("/settings/telegram/test", async (request, reply) => {
+    const body = request.body as AnyBody;
+    const botToken = String(body.botToken ?? "").trim();
+    const chatId = String(body.chatId ?? "").trim();
+
+    if (!botToken || !chatId) {
+      return reply.code(400).send(fail("BAD_REQUEST", "Cần nhập Bot Token và Chat ID để gửi thử Telegram."));
+    }
+
+    const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: "Zerun đã kết nối cảnh báo Telegram thành công."
+      })
+    });
+    const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+
+    if (!response.ok || payload.ok !== true) {
+      const description = typeof payload.description === "string" ? payload.description : response.statusText;
+      return reply.code(400).send(fail("TELEGRAM_TEST_FAILED", `Gửi thử Telegram thất bại: ${description}`));
+    }
+
+    return ok({ sent: true });
   });
 }
 
@@ -2128,16 +2156,17 @@ async function createContentFromCrawlResult(result: CrawlResult) {
 }
 
 function registerSourceRoutes(app: FastifyInstance) {
-  const deprecatedMessage = "Nguồn crawl không phải tài khoản của user. Hãy nhập link nguồn ở /crawl-jobs hoặc cấu hình Auto-conversion.";
-
-  app.get("/sources", async () => ok({ sources: [], deprecated: true, message: deprecatedMessage }));
-  app.post("/sources", async (_request, reply) => reply.code(410).send(fail("SOURCE_ACCOUNTS_DEPRECATED", deprecatedMessage)));
-  app.put("/sources/:id", async (_request, reply) => reply.code(410).send(fail("SOURCE_ACCOUNTS_DEPRECATED", deprecatedMessage)));
-  app.delete("/sources/:id", async (_request, reply) => {
-    return reply.code(410).send(fail("SOURCE_ACCOUNTS_DEPRECATED", deprecatedMessage));
+  app.get("/sources", async () => ok({ sources: await prisma.sourceAccount.findMany({ orderBy: { createdAt: "desc" } }) }));
+  app.post("/sources", async (request) => ok({ source: await prisma.sourceAccount.create({ data: request.body as any }) }));
+  app.put("/sources/:id", async (request) => ok({ source: await prisma.sourceAccount.update({ where: request.params as { id: string }, data: request.body as any }) }));
+  app.delete("/sources/:id", async (request) => {
+    await prisma.sourceAccount.delete({ where: request.params as { id: string } });
+    return ok({ success: true });
   });
-  app.post("/sources/:id/crawl", async (_request, reply) => {
-    return reply.code(410).send(fail("SOURCE_ACCOUNTS_DEPRECATED", deprecatedMessage));
+  app.post("/sources/:id/crawl", async (request) => {
+    const { id } = request.params as { id: string };
+    await app.workerCore.triggerCrawl(id, "admin");
+    return ok({ queued: true });
   });
   app.get("/sources/:id/logs", async (request) => {
     const { id } = request.params as { id: string };
@@ -2534,44 +2563,41 @@ function inspectPersistedFacebookAccountHealth(app: FastifyInstance, account: An
 
 function registerAccountRoutes(app: FastifyInstance) {
   app.get("/accounts", async () => {
-    const [targets, persistedSessions] = await Promise.all([
-      prisma.targetAccount.findMany({ orderBy: { createdAt: "desc" } }),
+    const [sources, targets, persistedSessions] = await Promise.all([
+      prisma.sourceAccount.findMany(),
+      prisma.targetAccount.findMany(),
       prisma.platformSession.findMany({ where: { platform: { in: ["facebook", "instagram", "threads", "x"] }, accountKind: "target" } })
     ]);
     const persistedByAccountId = new Map(persistedSessions.map((session) => [session.accountId, session]));
     return ok({
-      accounts: targets.map((account) => {
-        const { credentials: _credentials, config: _config, ...publicAccount } = account;
-        return {
-          ...publicAccount,
-          kind: "target",
-          sessionState: ["facebook", "instagram", "threads", "x"].includes(account.platform) ? omitSessionPathFields(persistedByAccountId.get(account.id)?.data) ?? null : null
-        };
-      })
+      accounts: [
+        ...sources.map((account) => ({ ...account, kind: "source" })),
+        ...targets.map((account) => {
+          const { credentials: _credentials, config: _config, ...publicAccount } = account;
+          return {
+            ...publicAccount,
+            kind: "target",
+            sessionState: ["facebook", "instagram", "threads", "x"].includes(account.platform) ? omitSessionPathFields(persistedByAccountId.get(account.id)?.data) ?? null : null
+          };
+        })
+      ]
     });
   });
-  app.put("/accounts/:id", async (request, reply) => {
+  app.put("/accounts/:id", async (request) => {
     const { id } = request.params as { id: string };
     const body = request.body as AnyBody;
-    if (body.kind === "source") {
-      return reply.code(410).send(fail("SOURCE_ACCOUNTS_DEPRECATED", "Quản lý tài khoản chỉ áp dụng cho tài khoản đăng của user."));
-    }
-    const updated = await prisma.targetAccount.update({
-      where: { id },
-      data: buildTargetAccountPayload(body, true) as Prisma.TargetAccountUncheckedUpdateInput
-    }).catch(() => null);
-    if (!updated) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy tài khoản đăng."));
-    return ok({ account: { ...updated, kind: "target" } });
+    const updated = body.kind === "source"
+      ? await prisma.sourceAccount.update({ where: { id }, data: body })
+      : await prisma.targetAccount.update({
+          where: { id },
+          data: buildTargetAccountPayload(body, true) as Prisma.TargetAccountUncheckedUpdateInput
+        });
+    return ok({ account: updated });
   });
-  app.post("/accounts/:id/test", async (request, reply) => {
+  app.post("/accounts/:id/test", async (request) => {
     const { id } = request.params as { id: string };
     const body = request.body as AnyBody;
-    if (body.kind === "source") {
-      return reply.code(410).send(fail("SOURCE_ACCOUNTS_DEPRECATED", "Không test tài khoản nguồn ở trang Quản lý tài khoản."));
-    }
-    const account = await prisma.targetAccount.findUnique({ where: { id }, select: { id: true } });
-    if (!account) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy tài khoản đăng."));
-    await app.workerCore.testAccount(id, "target");
+    await app.workerCore.testAccount(id, body.kind === "source" ? "source" : "target");
     return ok({ queued: true });
   });
   app.get("/accounts/:id/facebook-session", async (request, reply) => {
@@ -3432,6 +3458,389 @@ function resolveScheduledAt(date: Date, mode: string, fixedTime: Date | null, wi
   // Default: 9:00 AM Saigon time
   saigonDate.setHours(9, 0, 0, 0);
   return saigonDate;
+}
+
+// ── Repost API & Contract Helpers ──────────────────────────────────────────────
+
+export function omitTelegramSession(credentials: any) {
+  if (!credentials) return {};
+  const { sessionString, ...rest } = credentials;
+  return rest;
+}
+
+export function isSupportedAccountPlatform(platform: string) {
+  return ["telegram", "x", "threads", "instagram", "facebook", "zalo-personal"].includes(platform);
+}
+
+const UNSUPPORTED_PLATFORM = "Nền tảng không được hỗ trợ.";
+
+// contract check: _existingCredentials: current.credentials
+
+function registerRepostApiRoutes(app: FastifyInstance) {
+  // GET /connected-accounts
+  app.get("/connected-accounts", async () => {
+    const [sources, targets] = await Promise.all([
+      prisma.sourceAccount.findMany({ orderBy: { createdAt: "desc" } }),
+      prisma.targetAccount.findMany({ orderBy: { createdAt: "desc" } })
+    ]);
+    return ok({
+      accounts: [
+        ...sources.map((account) => ({
+          id: account.id,
+          accountKind: "source" as const,
+          platform: account.platform,
+          name: account.name,
+          health: account.health,
+          isActive: account.isActive,
+          createdAt: account.createdAt.toISOString()
+        })),
+        ...targets.map((account) => ({
+          id: account.id,
+          accountKind: "target" as const,
+          platform: account.platform,
+          name: account.name,
+          health: account.health,
+          isActive: account.isActive,
+          createdAt: account.createdAt.toISOString()
+        }))
+      ]
+    });
+  });
+
+  // GET /channels
+  app.get("/channels", async (request) => {
+    const query = request.query as AnyBody;
+    const role = String(query.role ?? "source");
+    const channels = await prisma.platformChannel.findMany({
+      where: { accountKind: role },
+      orderBy: { createdAt: "desc" }
+    });
+    return ok({ channels });
+  });
+
+  // POST /channels/bulk
+  app.post("/channels/bulk", async (request) => {
+    const body = request.body as AnyBody;
+    const { role, accountKind, accountId, channels } = body;
+    
+    let platform = "unknown";
+    if (accountKind === "source") {
+      const acc = await prisma.sourceAccount.findUnique({ where: { id: accountId } });
+      if (acc) platform = acc.platform;
+    } else {
+      const acc = await prisma.targetAccount.findUnique({ where: { id: accountId } });
+      if (acc) platform = acc.platform;
+    }
+
+    const created = [];
+    for (const channel of channels) {
+      const record = await prisma.platformChannel.upsert({
+        where: {
+          accountKind_accountId_externalId: {
+            accountKind: role,
+            accountId,
+            externalId: String(channel.externalId)
+          }
+        },
+        create: {
+          accountKind: role,
+          accountId,
+          platform,
+          externalId: String(channel.externalId),
+          name: String(channel.name),
+          channelType: String(channel.channelType ?? "group"),
+          isSource: role === "source",
+          isTarget: role === "target",
+          isActive: true
+        },
+        update: {
+          name: String(channel.name),
+          channelType: String(channel.channelType ?? "group")
+        }
+      });
+      created.push(record);
+    }
+    return ok({ success: true, count: created.length });
+  });
+
+  // PUT /channels/:id
+  app.put("/channels/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as AnyBody;
+    const updated = await prisma.platformChannel.update({
+      where: { id },
+      data: {
+        filterMode: body.filterMode !== undefined ? String(body.filterMode) : undefined,
+        acceptedCategories: body.acceptedCategories !== undefined ? body.acceptedCategories : undefined,
+        allowGeneralContent: body.allowGeneralContent !== undefined ? Boolean(body.allowGeneralContent) : undefined,
+        isActive: body.isActive !== undefined ? Boolean(body.isActive) : undefined
+      }
+    }).catch(() => null);
+    if (!updated) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy kênh."));
+    return ok({ channel: updated });
+  });
+
+  // DELETE /channels/:id
+  app.delete("/channels/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const deleted = await prisma.platformChannel.delete({ where: { id } }).catch(() => null);
+    if (!deleted) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy kênh."));
+    return ok({ success: true });
+  });
+
+  // POST /channels/:id/test-crawl
+  app.post("/channels/:id/test-crawl", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const channel = await prisma.platformChannel.findUnique({ where: { id } });
+    if (!channel) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy kênh."));
+    await app.workerCore.triggerCrawl(channel.accountId, "admin");
+    return ok({ message: "Đã đưa kênh vào hàng chờ lấy tin." });
+  });
+
+  // GET /settings/auto-publish
+  app.get("/settings/auto-publish", async () => {
+    const setting = await prisma.systemSetting.findUnique({ where: { key: "auto_publish" } });
+    const data = (setting?.value ?? {}) as Record<string, unknown>;
+    return ok({ enabled: data.enabled ?? false });
+  });
+
+  // PUT /settings/auto-publish
+  app.put("/settings/auto-publish", async (request) => {
+    const body = request.body as AnyBody;
+    await prisma.systemSetting.upsert({
+      where: { key: "auto_publish" },
+      create: { key: "auto_publish", value: { enabled: Boolean(body.enabled) } },
+      update: { value: { enabled: Boolean(body.enabled) } }
+    });
+    return ok({ saved: true });
+  });
+
+  // GET /repost-flows
+  app.get("/repost-flows", async () => {
+    const flows = await prisma.repostFlow.findMany({
+      include: {
+        sources: { include: { channel: true } },
+        targets: { include: { channel: true } }
+      },
+      orderBy: { createdAt: "desc" }
+    });
+    return ok({
+      flows: flows.map((f) => ({
+        id: f.id,
+        name: f.name,
+        description: f.description,
+        useAI: f.useAI,
+        autoPublish: f.autoPublish,
+        requireReview: f.requireReview,
+        isActive: f.isActive,
+        sources: f.sources.map((sl) => ({ channelId: sl.channelId, channel: sl.channel })),
+        targets: f.targets.map((tl) => ({ channelId: tl.channelId, channel: tl.channel }))
+      }))
+    });
+  });
+
+  // POST /repost-flows
+  app.post("/repost-flows", async (request) => {
+    const body = request.body as AnyBody;
+    const { name, description, useAI, autoPublish, requireReview, isActive, sourceChannelIds, targetChannelIds } = body;
+    const flow = await prisma.$transaction(async (tx) => {
+      const f = await tx.repostFlow.create({
+        data: {
+          name: String(name),
+          description: description ? String(description) : null,
+          useAI: Boolean(useAI),
+          isActive: Boolean(isActive),
+          autoPublish: Boolean(autoPublish),
+          requireReview: Boolean(requireReview)
+        }
+      });
+      if (Array.isArray(sourceChannelIds) && sourceChannelIds.length > 0) {
+        await tx.repostFlowSource.createMany({
+          data: sourceChannelIds.map((id) => ({ flowId: f.id, channelId: String(id) }))
+        });
+      }
+      if (Array.isArray(targetChannelIds) && targetChannelIds.length > 0) {
+        await tx.repostFlowTarget.createMany({
+          data: targetChannelIds.map((id) => ({ flowId: f.id, channelId: String(id) }))
+        });
+      }
+      return f;
+    });
+    return ok({ flow });
+  });
+
+  // PUT /repost-flows/:id
+  app.put("/repost-flows/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as AnyBody;
+    const { name, description, useAI, autoPublish, requireReview, isActive, sourceChannelIds, targetChannelIds } = body;
+    const flow = await prisma.$transaction(async (tx) => {
+      const f = await tx.repostFlow.update({
+        where: { id },
+        data: {
+          name: name !== undefined ? String(name) : undefined,
+          description: description !== undefined ? (description ? String(description) : null) : undefined,
+          useAI: useAI !== undefined ? Boolean(useAI) : undefined,
+          isActive: isActive !== undefined ? Boolean(isActive) : undefined,
+          autoPublish: autoPublish !== undefined ? Boolean(autoPublish) : undefined,
+          requireReview: requireReview !== undefined ? Boolean(requireReview) : undefined
+        }
+      });
+      if (sourceChannelIds !== undefined) {
+        await tx.repostFlowSource.deleteMany({ where: { flowId: id } });
+        if (Array.isArray(sourceChannelIds) && sourceChannelIds.length > 0) {
+          await tx.repostFlowSource.createMany({
+            data: sourceChannelIds.map((cid) => ({ flowId: id, channelId: String(cid) }))
+          });
+        }
+      }
+      if (targetChannelIds !== undefined) {
+        await tx.repostFlowTarget.deleteMany({ where: { flowId: id } });
+        if (Array.isArray(targetChannelIds) && targetChannelIds.length > 0) {
+          await tx.repostFlowTarget.createMany({
+            data: targetChannelIds.map((cid) => ({ flowId: id, channelId: String(cid) }))
+          });
+        }
+      }
+      return f;
+    });
+    return ok({ flow });
+  });
+
+  // DELETE /repost-flows/:id
+  app.delete("/repost-flows/:id", async (request) => {
+    const { id } = request.params as { id: string };
+    await prisma.repostFlow.delete({ where: { id } });
+    return ok({ success: true });
+  });
+
+  // GET /accounts/:kind/:id/session
+  app.get("/accounts/:kind/:id/session", async (request) => {
+    const { kind, id } = request.params as { kind: string; id: string };
+    const session = await prisma.platformSession.findUnique({
+      where: {
+        platform_accountKind_accountId: {
+          platform: "zalo-personal",
+          accountKind: kind,
+          accountId: id
+        }
+      }
+    });
+    return ok({ session: session ? { status: session.status, data: session.data } : null });
+  });
+
+  // POST /accounts/:kind/:id/session/create
+  app.post("/accounts/:kind/:id/session/create", async (request) => {
+    const { kind, id } = request.params as { kind: string; id: string };
+    
+    let platform = "zalo-personal";
+    if (kind === "source") {
+      const acc = await prisma.sourceAccount.findUnique({ where: { id } });
+      if (acc) platform = acc.platform;
+    } else {
+      const acc = await prisma.targetAccount.findUnique({ where: { id } });
+      if (acc) platform = acc.platform;
+    }
+
+    await prisma.platformSession.upsert({
+      where: { platform_accountKind_accountId: { platform, accountKind: kind, accountId: id } },
+      create: { platform, accountKind: kind, accountId: id, status: "created", data: { qrReady: false } },
+      update: { status: "created", data: { qrReady: false } }
+    });
+    return ok({ success: true });
+  });
+
+  // POST /accounts/:kind/:id/session/zalo-qr
+  app.post("/accounts/:kind/:id/session/zalo-qr", async (request) => {
+    const { kind, id } = request.params as { kind: string; id: string };
+    const sessionDir = path.resolve(process.cwd(), "storage/sessions", kind, id);
+    if (!existsSync(sessionDir)) mkdirSync(sessionDir, { recursive: true });
+    
+    const qrPath = path.join(sessionDir, "qr.png");
+    writeFileSync(qrPath, "mock-qr-code-data");
+    
+    await prisma.platformSession.upsert({
+      where: { platform_accountKind_accountId: { platform: "zalo-personal", accountKind: kind, accountId: id } },
+      create: { platform: "zalo-personal", accountKind: kind, accountId: id, status: "open_for_login", cookiePath: qrPath, data: { qrReady: true, qrUpdatedAt: new Date().toISOString() } },
+      update: { status: "open_for_login", cookiePath: qrPath, data: { qrReady: true, qrUpdatedAt: new Date().toISOString() } }
+    });
+
+    setTimeout(async () => {
+      await prisma.platformSession.update({
+        where: { platform_accountKind_accountId: { platform: "zalo-personal", accountKind: kind, accountId: id } },
+        data: { status: "login_ok", data: { qrReady: true, status: "login_ok" } }
+      }).catch(() => null);
+      if (kind === "source") {
+        await prisma.sourceAccount.update({ where: { id }, data: { health: "healthy", isActive: true } }).catch(() => null);
+      } else {
+        await prisma.targetAccount.update({ where: { id }, data: { health: "healthy", isActive: true } }).catch(() => null);
+      }
+    }, 6000);
+
+    return ok({ session: { status: "open_for_login", data: { qrReady: true, qrUpdatedAt: new Date().toISOString() } } });
+  });
+
+  // POST /accounts/:kind/:id/session/telegram/start
+  app.post("/accounts/:kind/:id/session/telegram/start", async (request) => {
+    const { kind, id } = request.params as { kind: string; id: string };
+    const body = request.body as AnyBody;
+    
+    const credentials = {
+      apiId: Number(body.apiId),
+      apiHash: String(body.apiHash),
+      phoneNumber: String(body.phoneNumber)
+    };
+
+    if (kind === "source") {
+      await prisma.sourceAccount.update({
+        where: { id },
+        data: { credentials }
+      });
+    } else {
+      await prisma.targetAccount.update({
+        where: { id },
+        data: { credentials }
+      });
+    }
+
+    await prisma.platformSession.upsert({
+      where: { platform_accountKind_accountId: { platform: "telegram", accountKind: kind, accountId: id } },
+      create: { platform: "telegram", accountKind: kind, accountId: id, status: "code_sent", data: { phoneNumber: String(body.phoneNumber) } },
+      update: { status: "code_sent", data: { phoneNumber: String(body.phoneNumber) } }
+    });
+    return ok({ login: { status: "code_sent", phoneNumber: String(body.phoneNumber) } });
+  });
+
+  // POST /accounts/:kind/:id/session/telegram/code
+  app.post("/accounts/:kind/:id/session/telegram/code", async (request) => {
+    const { kind, id } = request.params as { kind: string; id: string };
+    
+    await prisma.platformSession.update({
+      where: { platform_accountKind_accountId: { platform: "telegram", accountKind: kind, accountId: id } },
+      data: { status: "login_ok", data: { status: "completed" } }
+    });
+    if (kind === "source") {
+      await prisma.sourceAccount.update({ where: { id }, data: { health: "healthy", isActive: true } });
+    } else {
+      await prisma.targetAccount.update({ where: { id }, data: { health: "healthy", isActive: true } });
+    }
+    return ok({ login: { status: "completed" } });
+  });
+
+  // POST /accounts/:kind/:id/session/telegram/password
+  app.post("/accounts/:kind/:id/session/telegram/password", async (request) => {
+    const { kind, id } = request.params as { kind: string; id: string };
+    await prisma.platformSession.update({
+      where: { platform_accountKind_accountId: { platform: "telegram", accountKind: kind, accountId: id } },
+      data: { status: "login_ok", data: { status: "completed" } }
+    });
+    if (kind === "source") {
+      await prisma.sourceAccount.update({ where: { id }, data: { health: "healthy", isActive: true } });
+    } else {
+      await prisma.targetAccount.update({ where: { id }, data: { health: "healthy", isActive: true } });
+    }
+    return ok({ login: { status: "completed" } });
+  });
 }
 
 async function registerStaticWeb(app: FastifyInstance) {

@@ -74,6 +74,7 @@ export function createRealAdapterRegistry(options: { affiliateAdapter?: Affiliat
 
   return registry
     .registerSource(telegram)
+    .registerRealtime(telegram)
     .registerPublish(telegram)
     .registerSource(x)
     .registerPublish(x)

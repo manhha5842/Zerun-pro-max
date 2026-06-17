@@ -16,7 +16,9 @@ import { RepostManualLinksPage } from "./pages/RepostManualLinksPage";
 import { RepostReviewQueuePage } from "./pages/RepostReviewQueuePage";
 import { AiSettingsPage, AffiliateSettingsPage, AutoPublishSettingsPage, TelegramAlertSettingsPage } from "./pages/SetupSettingsPages";
 import { SettingsPage } from "./pages/SettingsPage";
-import { AccountsPage } from "./pages/AccountsPage";
+import { SourceAccountsPage } from "./pages/SourceAccountsPage";
+import { TargetAccountsPage } from "./pages/TargetAccountsPage";
+import { AccountsManagementPage } from "./pages/AccountsManagementPage";
 import { WorkerJobsPage } from "./pages/WorkerJobsPage";
 
 export function App() {
@@ -44,7 +46,9 @@ export function App() {
         <Route path="/crawl/history" element={<CrawlHistoryPage />} />
         <Route path="/crawl/results" element={<CrawlResultsPage />} />
         <Route path="/tools/convert-link" element={<QuickConvertLinkPage />} />
-        <Route path="/accounts" element={<AccountsPage />} />
+        <Route path="/accounts" element={<AccountsManagementPage />} />
+        <Route path="/accounts/sources" element={<SourceAccountsPage />} />
+        <Route path="/accounts/targets" element={<TargetAccountsPage />} />
         <Route path="/accounts/sessions" element={<AccountSessionsPage />} />
         <Route path="/settings" element={<Navigate to="/settings/ai" replace />} />
         <Route path="/settings/ai" element={<AiSettingsPage />} />
