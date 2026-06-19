@@ -19,6 +19,7 @@ import { ensureDatabaseReady, prisma } from "@zerun/db";
 import { buildPagination, fail, ok, readDesktopRuntime, realtimeBus, updateDesktopRuntimeConfig, type Platform } from "@zerun/shared";
 import { createWorkerCore, type WorkerCore, AccessTradeAffiliateAdapter, LazadaAffiliateAdapter, ShopeeAffiliateAdapter, ShopeeAffiliateIdAdapter } from "@zerun/worker-core";
 import { config } from "./config.js";
+import { registerShopeeBrowserConvertRoutes } from "./shopee-browser-routes.js";
 
 type AnyBody = Record<string, any>;
 
@@ -265,6 +266,7 @@ async function registerProtectedRoutes(app: FastifyInstance) {
   registerRoutingRoutes(app);
   registerLinkRoutes(app);
   registerConvertLinkToolRoutes(app);
+  await registerShopeeBrowserConvertRoutes(app);
   registerScheduleRoutes(app);
   registerAccountRoutes(app);
   registerAiRoutes(app);

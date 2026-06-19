@@ -9,7 +9,7 @@ import { ContentDetailPage } from "./pages/ContentDetailPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { PostComposerPage } from "./pages/PostComposerPage";
-import { QuickConvertLinkPage } from "./pages/QuickConvertLinkPage";
+import { ConvertLinkToolPage } from "./pages/ConvertLinkToolPage";
 import { RepostFlowPage } from "./pages/RepostFlowPage";
 import { RepostHistoryPage } from "./pages/RepostHistoryPage";
 import { RepostManualLinksPage } from "./pages/RepostManualLinksPage";
@@ -45,7 +45,7 @@ export function App() {
         <Route path="/crawl" element={<CrawlJobsPage />} />
         <Route path="/crawl/history" element={<CrawlHistoryPage />} />
         <Route path="/crawl/results" element={<CrawlResultsPage />} />
-        <Route path="/tools/convert-link" element={<QuickConvertLinkPage />} />
+        <Route path="/tools/convert-link" element={<ConvertLinkToolPage />} />
         <Route path="/accounts" element={<AccountsManagementPage />} />
         <Route path="/accounts/sources" element={<SourceAccountsPage />} />
         <Route path="/accounts/targets" element={<TargetAccountsPage />} />

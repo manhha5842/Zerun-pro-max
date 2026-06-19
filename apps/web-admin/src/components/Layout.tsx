@@ -48,7 +48,7 @@ const navSections: NavSection[] = [
   },
   {
     label: "Công cụ",
-    items: [{ to: "/tools/convert-link", label: "Convert link nhanh", icon: "tool" }]
+    items: [{ to: "/tools/convert-link", label: "Convert link affiliate", icon: "tool" }]
   }
 ];
 

@@ -31,6 +31,21 @@ targetAccounts.push(
 );
 
 let browserSessions: AnyRecord[] = [];
+let shopeeBrowserSession: AnyRecord = {
+  browserName: "Zerun Controlled Browser - Shopee Main",
+  accountId: "shopee-main",
+  status: "not_started",
+  currentUrl: null,
+  lastHealthCheckAt: null,
+  lastError: null,
+  lastScreenshotPath: null,
+  queueStatus: { runningJobId: null, queuedJobIds: [], queuedCount: 0, paused: false },
+  profilePath: "runtime/browser-profiles/shopee-main",
+  browserPid: null,
+  pageName: "Shopee Affiliate Converter Page",
+  captchaLoginState: null
+};
+let shopeeBrowserJobs: AnyRecord[] = [];
 
 let contents: AnyRecord[] = [
   {
@@ -495,6 +510,49 @@ function id(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function buildMockSubId(subIds: string[]) {
+  return subIds
+    .map((item) => String(item ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, "-").replace(/[^a-zA-Z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^[-_]+|[-_]+$/g, ""))
+    .filter(Boolean)
+    .join("-");
+}
+
+function syncShopeeMockQueue() {
+  const active = shopeeBrowserJobs.find((job) => job.status === "running");
+  const queued = shopeeBrowserJobs.filter((job) => job.status === "queued").map((job) => job.jobId);
+  shopeeBrowserSession = {
+    ...shopeeBrowserSession,
+    queueStatus: {
+      runningJobId: active?.jobId ?? null,
+      queuedJobIds: queued,
+      queuedCount: queued.length,
+      paused: shopeeBrowserSession.status === "waiting_captcha" || shopeeBrowserSession.status === "login_required"
+    },
+    captchaLoginState: shopeeBrowserSession.status === "waiting_captcha" || shopeeBrowserSession.status === "login_required" ? shopeeBrowserSession.status : null,
+    lastHealthCheckAt: new Date().toISOString()
+  };
+}
+
+function progressMockShopeeJob(job: AnyRecord) {
+  if (job.status === "queued") {
+    Object.assign(job, { status: "running", startedAt: job.startedAt ?? new Date().toISOString() });
+    shopeeBrowserSession.status = "busy";
+    shopeeBrowserSession.currentUrl = "https://affiliate.shopee.vn/offer/custom_link";
+  } else if (job.status === "running") {
+    const convertedUrl = `https://s.shopee.vn/mock-${String(job.jobId).slice(-5)}`;
+    Object.assign(job, {
+      status: "success",
+      convertedUrl,
+      completedAt: new Date().toISOString(),
+      metadata: { ...job.metadata, convertedUrl, currentUrl: shopeeBrowserSession.currentUrl }
+    });
+    shopeeBrowserSession.status = "ready";
+    shopeeBrowserSession.lastError = null;
+  }
+  syncShopeeMockQueue();
+  return job;
+}
+
 function parseBody(init: RequestInit = {}) {
   if (!init.body) return {};
   if (init.body instanceof FormData) {
@@ -747,6 +805,75 @@ export async function mockApiRequest<T>(path: string, init: RequestInit = {}): P
   if (pathname === "/crawl-results/bulk-create-content") return clone({ created: body.ids ?? [], failed: [] }) as T;
   if (pathname.match(/^\/crawl-results\/[^/]+$/) && method === "DELETE") return clone({ success: true }) as T;
 
+  if (pathname === "/browser-sessions/shopee-main") {
+    syncShopeeMockQueue();
+    return clone(shopeeBrowserSession) as T;
+  }
+  const shopeeBrowserActionMatch = pathname.match(/^\/browser-sessions\/shopee-main\/(start|stop|restart|open|mark-resolved)$/);
+  if (shopeeBrowserActionMatch) {
+    const action = shopeeBrowserActionMatch[1];
+    if (action === "stop") {
+      shopeeBrowserSession = { ...shopeeBrowserSession, status: "stopped", currentUrl: null, lastError: null };
+    } else if (action === "mark-resolved") {
+      shopeeBrowserSession = { ...shopeeBrowserSession, status: "ready", lastError: null, captchaLoginState: null };
+    } else {
+      shopeeBrowserSession = { ...shopeeBrowserSession, status: "ready", currentUrl: "https://affiliate.shopee.vn/offer/custom_link", lastError: null };
+    }
+    syncShopeeMockQueue();
+    return clone(shopeeBrowserSession) as T;
+  }
+  if (pathname === "/tools/convert-link/browser-convert" && method === "POST") {
+    const subIds = Array.isArray(body.subIds) ? body.subIds.map(String) : [];
+    const finalSubId = body.subId ? String(body.subId) : buildMockSubId(subIds);
+    const job = {
+      jobId: id("browser-convert"),
+      platform: "shopee",
+      originalUrl: String(body.url ?? ""),
+      convertedUrl: null,
+      subId: finalSubId,
+      subIds,
+      outputType: body.outputType ?? "shortlink",
+      status: "queued",
+      errorCode: null,
+      errorMessage: null,
+      screenshotPath: null,
+      retryable: false,
+      createdAt: new Date().toISOString(),
+      startedAt: null,
+      completedAt: null,
+      metadata: {
+        platform: "shopee",
+        accountId: "shopee-main",
+        outputType: body.outputType ?? "shortlink",
+        subIds,
+        finalSubId,
+        browserName: "Zerun Controlled Browser - Shopee Main",
+        pageName: "Shopee Affiliate Converter Page",
+        action: "browser_ui_convert"
+      }
+    };
+    shopeeBrowserJobs.unshift(job);
+    shopeeBrowserSession.status = shopeeBrowserSession.status === "not_started" ? "ready" : shopeeBrowserSession.status;
+    syncShopeeMockQueue();
+    return clone({ jobId: job.jobId, status: job.status, message: "Mock browser convert job đã được tạo." }) as T;
+  }
+  const shopeeBrowserJobMatch = pathname.match(/^\/tools\/convert-link\/browser-convert\/([^/]+)(?:\/(retry|cancel))?$/);
+  if (shopeeBrowserJobMatch) {
+    const job = shopeeBrowserJobs.find((item) => item.jobId === shopeeBrowserJobMatch[1]);
+    if (!job) throw new Error("Không tìm thấy browser conversion job.");
+    const action = shopeeBrowserJobMatch[2];
+    if (method === "POST" && action === "retry") {
+      Object.assign(job, { status: "queued", errorCode: null, errorMessage: null, retryable: false, completedAt: null });
+      syncShopeeMockQueue();
+      return clone({ jobId: job.jobId, status: job.status, message: "Đã đưa job mock vào hàng chờ retry." }) as T;
+    }
+    if (method === "POST" && action === "cancel") {
+      Object.assign(job, { status: "cancelled", completedAt: new Date().toISOString() });
+      syncShopeeMockQueue();
+      return clone({ jobId: job.jobId, status: job.status, message: "Đã hủy job mock." }) as T;
+    }
+    return clone(progressMockShopeeJob(job)) as T;
+  }
   if (pathname === "/tools/convert-link/detect") { const text = String(body.text ?? "Nội dung mẫu có link https://shopee.vn/mock và https://forms.gle/mock"); return clone({ links: detectLinks(text), batchId: id("batch") }) as T; }
   if (pathname === "/tools/convert-link/export-batch") return clone({ fileUrl: "#mock-batch-custom-links", filename: "Batch Custom Links.xlsx" }) as T;
   if (pathname === "/tools/convert-link/import-result") return clone({ total: 2, converted: 1, failed: 1, results: [{ originalUrl: "https://shopee.vn/mock", convertedUrl: "https://s.shopee.vn/mock-aff", failureReason: "" }, { originalUrl: "https://forms.gle/mock", convertedUrl: "", failureReason: "Network chưa hỗ trợ" }] }) as T;

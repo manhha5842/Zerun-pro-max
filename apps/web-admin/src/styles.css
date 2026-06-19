@@ -3172,6 +3172,105 @@ button svg {
   font-weight: 700;
 }
 
+.direct-subid-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 14px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.browser-session-grid,
+.result-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.metadata-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  border-bottom: 1px solid var(--color-border);
+  padding: 0 0 10px;
+}
+
+.metadata-field span {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.metadata-field strong {
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.result-output {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.copy-success {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-success);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.warning-panel,
+.error-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-md);
+  background: var(--color-warning-bg);
+  padding: 14px;
+}
+
+.error-panel {
+  border-color: var(--color-danger-border);
+  background: var(--color-danger-bg);
+}
+
+.warning-panel p {
+  margin: 0;
+  color: var(--color-text);
+  font-weight: 650;
+}
+
+.form-error-text {
+  margin: 12px 0 0;
+  color: var(--color-danger);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.screenshot-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.screenshot-preview img {
+  max-width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-panel);
+}
+
 .dialog-backdrop {
   position: fixed;
   inset: 0;
@@ -3671,6 +3770,8 @@ button svg {
   .expanded-content,
   .account-flow-steps,
   .account-session-grid,
+  .browser-session-grid,
+  .result-fields,
   .settings-layout {
     grid-template-columns: 1fr;
   }
