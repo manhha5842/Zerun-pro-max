@@ -11,7 +11,7 @@ export type MediaLike = {
 const DIRECT_URL_PATTERN = /^(https?:|data:|blob:)/i;
 
 export function mediaPathOf(media: MediaLike) {
-  return media.cloudinaryUrl ?? media.sourceUrl ?? media.localPath ?? "";
+  return media.cloudinaryUrl ?? media.localPath ?? media.sourceUrl ?? "";
 }
 
 export function mediaUrlOf(media: MediaLike) {

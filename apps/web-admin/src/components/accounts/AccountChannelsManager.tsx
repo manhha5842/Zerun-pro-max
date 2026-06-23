@@ -20,14 +20,20 @@ type ChannelOption = {
   memberCount?: number;
 };
 
-function accountKey(account: ConnectedAccount) {
-  return `${account.accountKind}:${account.id}`;
+type LoginAccount = ConnectedAccount & {
+  loginAccountKey: string;
+  roleAccounts: Partial<Record<AccountKind, ConnectedAccount>>;
+};
+
+function toLoginAccountKey(account: ConnectedAccount) {
+  const identity = (account.handle ?? account.name).trim().toLowerCase();
+  return `${account.platform}:${identity || account.id}`;
 }
 
 export function AccountChannelsManager({ role }: { role: AccountKind }) {
   const queryClient = useQueryClient();
   const toast = useToast();
-  const [selectedAccountKey, setSelectedAccountKey] = useState("");
+  const [selectedLoginAccountKey, setSelectedLoginAccountKey] = useState("");
   const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
   const [filterDraft, setFilterDraft] = useState({
@@ -45,11 +51,30 @@ export function AccountChannelsManager({ role }: { role: AccountKind }) {
     queryFn: () => apiGet<{ channels: PlatformChannel[] }>(`/channels?role=${role}`)
   });
 
-  const accounts = useMemo(() => {
-    const all = accountsQuery.data?.accounts ?? [];
-    return role === "source" ? all.filter((account) => account.accountKind === "source") : all;
-  }, [accountsQuery.data?.accounts, role]);
-  const selectedAccount = accounts.find((account) => accountKey(account) === selectedAccountKey) ?? null;
+  const accounts = useMemo<LoginAccount[]>(() => {
+    const byLogin = new Map<string, LoginAccount>();
+    for (const account of accountsQuery.data?.accounts ?? []) {
+      const loginAccountKey = toLoginAccountKey(account);
+      const current = byLogin.get(loginAccountKey);
+      if (!current) {
+        byLogin.set(loginAccountKey, {
+          ...account,
+          loginAccountKey,
+          roleAccounts: { [account.accountKind]: account }
+        });
+        continue;
+      }
+      current.roleAccounts[account.accountKind] = account;
+      if (current.health !== "healthy" && account.health === "healthy") {
+        Object.assign(current, account, { loginAccountKey, roleAccounts: current.roleAccounts });
+      }
+    }
+    return Array.from(byLogin.values());
+  }, [accountsQuery.data?.accounts]);
+  const selectedLoginAccount = accounts.find((account) => account.loginAccountKey === selectedLoginAccountKey) ?? null;
+  const selectedAccount = selectedLoginAccount
+    ? selectedLoginAccount.roleAccounts[role] ?? selectedLoginAccount.roleAccounts.source ?? selectedLoginAccount.roleAccounts.target ?? selectedLoginAccount
+    : null;
   const optionsQuery = useQuery({
     queryKey: ["channel-options", selectedAccount?.accountKind, selectedAccount?.id],
     queryFn: () => apiGet<{ channels: ChannelOption[] }>(
@@ -117,7 +142,7 @@ export function AccountChannelsManager({ role }: { role: AccountKind }) {
   const testCrawl = useMutation({
     mutationFn: (id: string) => apiPost<{ message: string }>(`/channels/${id}/test-crawl`, {}),
     onSuccess: async (data) => {
-      toast.success(data.message ?? "Đã đưa kênh vào hàng đợi lấy tin.");
+      toast.success(data.message ?? "Đã tạo job lấy tin. Xem tiến độ ở Worker jobs / Logs, queue Crawl.");
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["channels"] }),
         queryClient.invalidateQueries({ queryKey: ["contents"] })
@@ -156,15 +181,15 @@ export function AccountChannelsManager({ role }: { role: AccountKind }) {
           <div className="field">
             <Label>Tài khoản kết nối</Label>
             <Select
-              value={selectedAccountKey}
+              value={selectedLoginAccountKey}
               onChange={(event) => {
-                setSelectedAccountKey(event.target.value);
+                setSelectedLoginAccountKey(event.target.value);
                 setSelectedOptions([]);
               }}
             >
               <option value="">Chọn tài khoản</option>
               {accounts.map((account) => (
-                <option key={accountKey(account)} value={accountKey(account)}>
+                <option key={account.loginAccountKey} value={account.loginAccountKey}>
                   {account.name} · {platformLabel(account.platform)}
                 </option>
               ))}
@@ -249,12 +274,12 @@ export function AccountChannelsManager({ role }: { role: AccountKind }) {
               }] : []),
               {
                 key: "status",
-                header: role === "source" ? "Trạng thái lấy tin" : "Trạng thái",
+                header: role === "source" ? "Trạng thái realtime" : "Trạng thái",
                 render: (channel) => role === "source" ? (
                   <div className="stack-tight">
                     <Badge tone={channel.isActive ? "good" : "neutral"}>{channel.isActive ? "Đang theo dõi" : "Tạm tắt"}</Badge>
                     <span className="table-subtle">
-                      {channel.account?.lastCrawledAt ? `Lần lấy gần nhất: ${new Date(channel.account.lastCrawledAt).toLocaleString("vi-VN")}` : "Chưa có lần lấy tin nào"}
+                      {channel.account?.lastCrawledAt ? `Cập nhật gần nhất: ${new Date(channel.account.lastCrawledAt).toLocaleString("vi-VN")}` : "Chưa có tín hiệu realtime nào"}
                     </span>
                   </div>
                 ) : <Badge tone={channel.isActive ? "good" : "neutral"}>{channel.isActive ? "Đang dùng" : "Tạm tắt"}</Badge>
@@ -268,7 +293,7 @@ export function AccountChannelsManager({ role }: { role: AccountKind }) {
                       ? <Button size="sm" variant="secondary" icon={<Filter aria-hidden />} onClick={() => editFilter(channel)}>Bộ lọc</Button>
                       : null}
                     {role === "source"
-                      ? <Button size="sm" variant="secondary" onClick={() => testCrawl.mutate(channel.id)} disabled={testCrawl.isPending || !channel.isActive}>Test lấy tin</Button>
+                      ? <Button size="sm" variant="secondary" onClick={() => testCrawl.mutate(channel.id)} disabled={testCrawl.isPending || !channel.isActive}>Kiểm tra realtime</Button>
                       : null}
                     <Button size="sm" variant="ghost" onClick={() => updateChannel.mutate({ id: channel.id, data: { isActive: !channel.isActive } })}>
                       {channel.isActive ? "Tắt" : "Bật"}

@@ -1,8 +1,9 @@
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { LoginQRCallbackEventType, Zalo, type LoginQRCallbackEvent } from "zca-js";
+import { LoginQRCallbackEventType, type LoginQRCallbackEvent } from "zca-js";
 import type { PrismaClient } from "@zerun/db";
 import { ensureProfileDir, upsertSession, type ProfileRef } from "./profile-store.js";
+import { createZaloClient } from "./zalo-client.js";
 
 export type ZaloQrLoginResult = {
   ok: boolean;
@@ -36,7 +37,7 @@ export async function zaloQrLogin(
   });
 
   return new Promise<ZaloQrLoginResult>((resolve) => {
-    const zalo = new Zalo();
+    const zalo = createZaloClient();
     let terminalError: string | undefined;
 
     zalo

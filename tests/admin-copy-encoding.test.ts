@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 
 const copyFiles = [
   "apps/web-admin/src/pages/AccountsPage.tsx",
-  "apps/web-admin/src/pages/AccountSessionsPage.tsx",
   "apps/web-admin/src/pages/accountForms.tsx",
   "apps/web-admin/src/components/accounts/AddAccountDialog.tsx",
   "apps/web-admin/src/components/accounts/TelegramAccountForm.tsx",
@@ -61,13 +60,6 @@ const expectedVietnameseCopy: Record<(typeof copyFiles)[number], string[]> = {
     "Phiên đăng nhập đang mở",
     "Lưu session",
     "Mở trình duyệt đăng nhập"
-  ],
-  "apps/web-admin/src/pages/AccountSessionsPage.tsx": [
-    "Session nâng cao",
-    "QR chính đã nằm trong wizard",
-    "Chưa có tài khoản Zalo nguồn.",
-    "Quét QR bằng ứng dụng Zalo để đăng nhập",
-    "Cập nhật:"
   ],
   "apps/web-admin/src/pages/accountForms.tsx": [
     "Mẫu thêm tài khoản đăng",

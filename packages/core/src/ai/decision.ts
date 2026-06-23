@@ -6,31 +6,26 @@ export const AUTO_PUBLISH_THRESHOLD = 0.85;
 export const REVIEW_THRESHOLD = 0.65;
 
 export type ContentDecision = {
-  status: Extract<ContentStatus, "ready_to_publish" | "waiting_manual_convert" | "skipped"> | "review";
+  status: Extract<ContentStatus, "ready_to_publish" | "waiting_manual_convert" | "skipped">;
   autoPublish: boolean;
   reason: string;
 };
 
-/**
- * Kết hợp rule "safe" + AI confidence → quyết định trạng thái content.
- * Ngưỡng theo tài liệu: >=0.85 safe → auto; 0.65–0.84 → review; <0.65 → skip/review.
- */
+/** Kết hợp rule an toàn với quyết định true/false của AI. */
 export function decideContent(rule: RuleResult, analysis: DealAnalysis): ContentDecision {
   if (!analysis.shouldSave || analysis.messageType === "spam") {
-    return { status: "skipped", autoPublish: false, reason: analysis.reason || "AI: bỏ qua." };
+    return { status: "skipped", autoPublish: false, reason: analysis.reason || "AI xác định không phải deal nên đã bỏ qua." };
   }
 
-  if (analysis.requireReview || rule.verdict === "require_review") {
-    return { status: "review", autoPublish: false, reason: rule.reasons.join("; ") || analysis.reason };
-  }
-
-  if (analysis.shouldPublish && analysis.confidence >= REVIEW_THRESHOLD) {
+  if (analysis.shouldPublish) {
     return {
       status: "ready_to_publish",
-      autoPublish: rule.safe,
-      reason: rule.safe ? "Đủ điều kiện auto publish." : "Nội dung hợp lệ sau khi chuẩn hoá."
+      autoPublish: true,
+      reason: analysis.requireReview || rule.verdict === "require_review"
+        ? `AI đã duyệt thay bước thủ công: ${analysis.reason || rule.reasons.join("; ")}`
+        : "Đủ điều kiện auto publish."
     };
   }
 
-  return { status: "review", autoPublish: false, reason: "Confidence thấp hoặc nội dung chưa đủ rõ." };
+  return { status: "skipped", autoPublish: false, reason: analysis.reason || "AI xác định không phải deal nên đã bỏ qua." };
 }

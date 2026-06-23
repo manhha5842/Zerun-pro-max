@@ -75,28 +75,83 @@ describe("repost account setup contract", () => {
     expect(channelManager).toContain("Vẫn nhận nội dung tổng quát");
   });
 
-  it("uses a column board backed by channel repost flows", () => {
+  it("treats login accounts as shared accounts, with source/target only as channel roles", () => {
+    const channelsPage = read("apps/web-admin/src/pages/ChannelsManagementPage.tsx");
+    const channelManager = read("apps/web-admin/src/components/accounts/AccountChannelsManager.tsx");
+    const apiApp = read("apps/api/src/app.ts");
+
+    expect(channelsPage).toContain("loginAccountKey");
+    expect(channelsPage).toContain("toLoginAccountKey(account)");
+    expect(channelsPage).not.toContain('if (wizard.role === "source" && account.accountKind !== "source") return false;');
+    expect(channelsPage).not.toContain("{roleLabel(account.accountKind)}");
+    expect(channelManager).toContain("toLoginAccountKey(account)");
+    expect(channelManager).not.toContain('role === "source" ? all.filter((account) => account.accountKind === "source") : all');
+    expect(apiApp).toContain("findReusableAccount");
+    expect(apiApp).toContain("resolveChannelOptionAccount");
+  });
+
+  it("uses the Shopee extension bridge instead of a CDP browser session", () => {
+    const apiApp = read("apps/api/src/app.ts");
+    const bridge = read("apps/api/src/zerun-extension-bridge.ts");
+    const convertTool = read("apps/web-admin/src/pages/ConvertLinkToolPage.tsx");
+    const extensionApi = read("extensions/shopee-affiliate-zerun/js/affiliate-api.js");
+
+    expect(apiApp).toContain("/tools/convert-link/extension-convert");
+    expect(bridge).toContain("CONVERT_LINK");
+    expect(bridge).toContain("NEED_LOGIN");
+    expect(convertTool).toContain("Convert link Shopee");
+    expect(convertTool).toContain("Extension:");
+    expect(convertTool).not.toContain("/browser-sessions");
+    expect(convertTool).not.toContain("Kết nối Edge");
+    expect(convertTool).not.toContain("Ngắt kết nối");
+    expect(extensionApi).toContain("async function findAffiliateTabForConvert");
+    expect(extensionApi).toContain("active: true");
+  });
+
+  it("resolves shortlinks through HTTP redirects before affiliate conversion", () => {
+    const apiApp = read("apps/api/src/app.ts");
+    const contentProcessor = read("packages/worker-core/src/processors/content-process.ts");
+
+    expect(apiApp).toContain("expandUrl(url, followRedirectUrl)");
+    expect(apiApp).toContain("detectNetwork(resolvedUrl)");
+    expect(apiApp).toContain("originalUrl: url");
+    expect(apiApp).toContain("resolvedUrl");
+    expect(contentProcessor).toContain("expandUrl(link.url, followRedirectUrl)");
+    expect(contentProcessor).toContain("detectNetwork(resolvedUrl)");
+    expect(contentProcessor).toContain("shouldUseResolvedUrl");
+    expect(contentProcessor).toContain("url: conversionUrl");
+    expect(contentProcessor).toContain("originalUrl: link.url");
+    expect(contentProcessor).not.toContain("subId: content.code");
+  });
+
+  it("uses a compact pipeline backed by channel repost flows", () => {
     const flowPage = read("apps/web-admin/src/pages/RepostFlowPage.tsx");
 
-    expect(flowPage).toContain("flow-board-v2");
+    expect(flowPage).toContain("Pipeline mặc định");
     expect(flowPage).not.toContain("<ReactFlow");
     expect(flowPage).toContain("/repost-flows");
     expect(flowPage).toContain("sourceChannelIds");
     expect(flowPage).toContain("targetChannelIds");
     expect(flowPage).toContain("Danh sách Flow");
-    expect(flowPage).toContain("Cấu hình");
-    expect(flowPage).toContain("Lọc nội dung trùng");
-    expect(flowPage).toContain("Link và domain");
-    expect(flowPage).toContain("Chọn kênh nguồn");
-    expect(flowPage).toContain("Chọn kênh đích");
+    expect(flowPage).toContain("Nguồn đang lấy tin");
+    expect(flowPage).toContain("Lịch sử lấy nguồn tin");
+    expect(flowPage).toContain("Đã reup / đang đăng");
+    expect(flowPage).toContain("Kênh đích của flow");
+    expect(flowPage).toContain("Flow này đăng vào");
+    expect(flowPage).not.toContain("Dùng tất cả kênh đích active");
+    expect(flowPage).not.toContain("Phạm vi đăng");
+    expect(flowPage).not.toContain("targetScope");
+    expect(flowPage).toContain("Chạy thử flow");
+    expect(flowPage).toContain("Nguồn → Gom tin → AI → Đổi link → Route → Đăng");
+    expect(flowPage).toContain("Kênh đích");
     expect(flowPage).not.toContain("source channels");
     expect(flowPage).not.toContain("processing steps");
     expect(flowPage).not.toContain("Duplicate detection");
     expect(flowPage).not.toContain("Link & domain rules");
-    expect(flowPage).not.toContain("Lưu luồng");
+    expect(flowPage).not.toContain("Bật lọc trùng");
+    expect(flowPage).not.toContain("Cần keyword deal");
     expect(flowPage).not.toContain("persistNodeConfig");
-    expect(flowPage).toContain("Đã tự lưu");
-    expect(flowPage).toContain("flow-board-column-head");
+    expect(flowPage).not.toContain("localStorage");
   });
 
   it("keeps the setup guide and checklist in readable Vietnamese", () => {

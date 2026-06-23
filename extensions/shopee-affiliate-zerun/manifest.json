@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Zerun Shopee Affiliate Bridge",
+  "version": "0.1.0",
+  "description": "Convert Shopee affiliate links for Zerun through the user's logged-in browser session.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://affiliate.shopee.vn/*",
+    "https://shopee.vn/*",
+    "https://*.shopee.vn/*",
+    "https://adsense.lazada.vn/*",
+    "https://*.lazada.vn/*",
+    "https://*.lazada.com/*",
+    "ws://localhost:17385/*",
+    "ws://127.0.0.1:17385/*"
+  ],
+  "background": {
+    "service_worker": "js/background.js"
+  },
+  "action": {
+    "default_title": "Zerun Shopee Affiliate",
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html"
+}

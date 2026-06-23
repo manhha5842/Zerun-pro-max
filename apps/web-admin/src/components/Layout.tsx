@@ -24,7 +24,7 @@ const navSections: NavSection[] = [
     label: "Đăng lại",
     items: [
       { to: "/repost/flow", label: "Luồng đăng lại", icon: "automation", match: /^\/repost\/flow/ },
-      { to: "/repost/review", label: "Hàng chờ duyệt", icon: "content", match: /^\/repost\/review/ },
+      { to: "/repost/review", label: "Hàng chờ cần xử lý", icon: "content", match: /^\/repost\/review/ },
       { to: "/repost/manual-links", label: "Link lỗi cần xử lý", icon: "tool", match: /^\/repost\/manual-links/ },
       { to: "/repost/history", label: "Lịch sử đăng lại", icon: "history", match: /^\/repost\/history/ }
     ]
@@ -32,9 +32,8 @@ const navSections: NavSection[] = [
   {
     label: "Tài khoản & Kênh",
     items: [
-      { to: "/accounts", label: "Quản lý tài khoản", icon: "account", match: /^\/accounts$/ },
-      { to: "/accounts/sources", label: "Kênh nguồn", icon: "automation", match: /^\/accounts\/sources/ },
-      { to: "/accounts/targets", label: "Kênh đích", icon: "automation", match: /^\/accounts\/targets/ }
+      { to: "/accounts", label: "Quản lý kênh", icon: "account", match: /^\/accounts(\/sources|\/targets)?$/ },
+      { to: "/accounts/login", label: "Tài khoản đăng nhập", icon: "activity", match: /^\/accounts\/login/ }
     ]
   },
   {
@@ -42,8 +41,7 @@ const navSections: NavSection[] = [
     items: [
       { to: "/settings/ai", label: "AI", icon: "settings", match: /^\/settings\/ai/ },
       { to: "/settings/affiliate", label: "Affiliate", icon: "settings", match: /^\/settings\/affiliate/ },
-      { to: "/settings/telegram-alert", label: "Cảnh báo Telegram", icon: "settings", match: /^\/settings\/telegram-alert/ },
-      { to: "/settings/auto-publish", label: "Auto-publish", icon: "settings", match: /^\/settings\/auto-publish/ }
+      { to: "/settings/telegram-alert", label: "Cảnh báo Telegram", icon: "settings", match: /^\/settings\/telegram-alert/ }
     ]
   },
   {
@@ -101,7 +99,7 @@ export function Layout() {
             <div className="footer-avatar">Z</div>
             <div>
               <div className="footer-title">Zerun</div>
-              <div className="footer-subtitle">Routing AI theo ngành hàng</div>
+              <div className="footer-subtitle">Extension Shopee Affiliate</div>
             </div>
           </div>
         </div>

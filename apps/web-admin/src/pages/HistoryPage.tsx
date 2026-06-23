@@ -84,7 +84,7 @@ export function HistoryPage() {
     <>
       <PageHeader
         title="Lịch sử"
-        subtitle="Chỉ lưu các bài đã đăng thành công. Bài failed hoặc cần review nằm trong Kho lưu trữ."
+        subtitle="Chỉ lưu các bài đã đăng thành công. Bài failed hoặc AI bỏ qua nằm trong Kho lưu trữ."
         actions={<Button variant="secondary" size="sm" icon={<RefreshCw aria-hidden />} onClick={() => query.refetch()}>Làm mới</Button>}
       />
 

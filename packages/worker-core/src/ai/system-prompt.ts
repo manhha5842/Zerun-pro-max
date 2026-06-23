@@ -14,12 +14,12 @@ ${CATEGORY_STRING}
 ## Quy tắc phân tích
 - shouldSave=false: comment/spam/câu hỏi/chào hỏi/không có thông tin hữu ích cho người theo dõi.
 - shouldPublish=true nếu tin là deal/thông báo hữu ích, kể cả không có link mua hàng. Tin không link thường là thông báo, vẫn có thể đăng nếu nội dung rõ.
-- shouldPublish=false khi chỉ có link group/tutorial, chỉ kéo traffic về kênh nguồn, hoặc nội dung cần người duyệt.
-- requireReview=true khi trộn nhiều sàn khó hiểu, caption ảnh mơ hồ, ngành hàng không chắc, hoặc không đủ dữ kiện; không requireReview chỉ vì có nhiều link cùng sàn.
-- confidence: 0.0-1.0 (>=0.85 = rất chắc, 0.65-0.84 = khá chắc, <0.65 = không chắc).
+- shouldPublish=false khi chỉ có link group/tutorial, chỉ kéo traffic về kênh nguồn, hoặc AI không thể tự duyệt nội dung này để đăng.
+- requireReview=false trong hầu hết trả lời. Không dùng requireReview để đưa người dùng duyệt thủ công; nếu không đủ chắc, đặt shouldPublish=false và nói rõ lý do.
+- confidence: 0.0-1.0, chỉ dùng để debug nội bộ, không dùng làm điều kiện publish.
 - primaryCategory: ngành chính của sản phẩm/deal.
 - secondaryCategories: các ngành phụ nếu nội dung thật sự liên quan nhiều ngành; nếu không có thì [].
-- categoryConfidence: độ chắc khi phân loại ngành, 0.0-1.0. Nếu <0.75 hệ thống sẽ giữ lại để duyệt.
+- categoryConfidence: độ chắc khi phân loại ngành, 0.0-1.0, chỉ dùng để debug nội bộ.
 - categoryReason: lý do ngắn, tối đa một câu.
 - Nếu một deal có nhiều ngành hợp lệ, trả primaryCategory là ngành nổi bật nhất và đưa các ngành còn lại vào secondaryCategories.
 - rewrittenText: chỉ thay đổi câu từ nhẹ, không đổi ý, không bịa giá/mã/điều kiện. Ví dụ "NHANH" -> "Lẹ tay kẻo hết", "Qua có b hỏi giày Li-Ning" -> "Giày Lining cho bạn nào cần".
@@ -46,11 +46,11 @@ ${SCHEMA_STRING}
 ### Output
 {"shouldSave":false,"shouldPublish":false,"requireReview":false,"messageType":"comment","primaryCategory":"Voucher & Dịch Vụ","secondaryCategories":[],"categoryConfidence":0.3,"categoryReason":"Không có sản phẩm cụ thể nên ngành hàng không chắc.","platform":"unknown","links":[],"imageDecision":{"shouldKeepImage":false,"needVisionCheck":false},"rewrittenText":"","reason":"Tin nhắn hỏi đáp, không phải deal affiliate.","confidence":0.98}
 
-## Ví dụ 3 - Nội dung nhiều ngành cần review
+## Ví dụ 3 - Nội dung nhiều ngành AI tự quyết không đăng
 ### Input
 {"sourceProfile":{"id":"src2","type":"multi_deal_group","mainPlatforms":["shopee","lazada"],"enabledCategories":[],"trustLevel":"medium"},"message":{"text":"Deal hôm nay:\\n- Máy hút bụi mini: https://shope.ee/xyz\\n- Bình nước trẻ em: https://c.lazada.vn/abc\\nTham gia group: https://zalo.me/g/abc123","isReply":false,"hasImage":false},"extracted":{"links":[{"url":"https://shope.ee/xyz","network":"shopee","roleGuess":"campaign_link"},{"url":"https://c.lazada.vn/abc","network":"lazada","roleGuess":"campaign_link"},{"url":"https://zalo.me/g/abc123","network":"unknown","roleGuess":"group_link"}],"discounts":[],"matchedGlossary":{}},"nearbyMessages":[]}
 
 ### Output
-{"shouldSave":true,"shouldPublish":false,"requireReview":true,"messageType":"campaign_list","primaryCategory":"Dụng Cụ & Thiết Bị Tiện Ích","secondaryCategories":["Mẹ & Bé"],"categoryConfidence":0.78,"categoryReason":"Có máy hút bụi mini và bình nước trẻ em nên liên quan hai ngành.","platform":"mixed","links":[{"url":"https://shope.ee/xyz","role":"campaign_link","shouldConvert":true,"shouldKeep":true},{"url":"https://c.lazada.vn/abc","role":"campaign_link","shouldConvert":true,"shouldKeep":true},{"url":"https://zalo.me/g/abc123","role":"group_link","shouldConvert":false,"shouldKeep":false,"reason":"Link group rác"}],"imageDecision":{"shouldKeepImage":false,"needVisionCheck":false},"rewrittenText":"Deal hôm nay:\\n- Máy hút bụi mini: https://shope.ee/xyz\\n- Bình nước trẻ em: https://c.lazada.vn/abc","reason":"Nhiều link từ nhiều sàn và nhiều ngành, cần review để chọn nội dung đăng.","confidence":0.75}
+{"shouldSave":true,"shouldPublish":false,"requireReview":false,"messageType":"campaign_list","primaryCategory":"Dụng Cụ & Thiết Bị Tiện Ích","secondaryCategories":["Mẹ & Bé"],"categoryConfidence":0.78,"categoryReason":"Có máy hút bụi mini và bình nước trẻ em nên liên quan hai ngành.","platform":"mixed","links":[{"url":"https://shope.ee/xyz","role":"campaign_link","shouldConvert":true,"shouldKeep":true},{"url":"https://c.lazada.vn/abc","role":"campaign_link","shouldConvert":true,"shouldKeep":true},{"url":"https://zalo.me/g/abc123","role":"group_link","shouldConvert":false,"shouldKeep":false,"reason":"Link group rác"}],"imageDecision":{"shouldKeepImage":false,"needVisionCheck":false},"rewrittenText":"Deal hôm nay:\\n- Máy hút bụi mini: https://shope.ee/xyz\\n- Bình nước trẻ em: https://c.lazada.vn/abc","reason":"Nhiều link từ nhiều sàn và nhiều ngành; AI không đủ chắc để tự đăng.","confidence":0.75}
 
 Chỉ trả về JSON theo đúng schema, không giải thích thêm.`;

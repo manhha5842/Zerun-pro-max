@@ -13,7 +13,7 @@ export type SourceProfile = {
   mainPlatforms: LinkNetwork[];
   enabledCategories: AffiliateCategory[];
   trustLevel: SourceTrustLevel;
-  /** Cho phép auto publish khi rule "safe" + confidence cao. */
+  /** Cho phép auto publish khi rule nội bộ xác định nội dung an toàn. */
   allowAutoPublish: boolean;
 };
 

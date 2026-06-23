@@ -17,6 +17,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+function publishAttemptTargetWhere(targetId: string, targetChannelId?: string) {
+  return {
+    targetId,
+    ...(targetChannelId ? { targetChannelId } : { targetChannelId: null })
+  };
+}
+
+function contentPublishText(content: { finalText?: string | null; draftText?: string | null; originalText: string }) {
+  return content.finalText ?? content.draftText ?? content.originalText;
+}
+
+function findUnconvertedPublishLinks(content: {
+  finalText?: string | null;
+  draftText?: string | null;
+  originalText: string;
+  links?: Array<{ originalUrl: string; convertedUrl?: string | null; status: string }>;
+}) {
+  const text = contentPublishText(content);
+  return (content.links ?? []).filter((link) => {
+    if (!text.includes(link.originalUrl)) return false;
+    return !link.convertedUrl || ["detected", "failed", "unsupported"].includes(link.status);
+  });
+}
+
 function normalizeThreadsPublishOptions(value: unknown): ThreadsPublishOptions | undefined {
   if (!isRecord(value)) return undefined;
 
@@ -85,8 +109,33 @@ function applyTargetChannelDestination(
   return { ...account, credentials, config };
 }
 
+async function normalizePublishJobTarget(job: PublishExecuteJob, context: ProcessorContext) {
+  if (job.targetChannelId) {
+    const channel = await context.prisma.platformChannel.findUnique({
+      where: { id: job.targetChannelId },
+      select: { id: true, accountId: true }
+    });
+    if (channel) return { targetId: channel.accountId, targetChannelId: channel.id };
+  }
+
+  const target = await context.prisma.targetAccount.findUnique({
+    where: { id: job.targetId },
+    select: { id: true }
+  });
+  if (target) return { targetId: target.id, targetChannelId: job.targetChannelId };
+
+  const channel = await context.prisma.platformChannel.findUnique({
+    where: { id: job.targetId },
+    select: { id: true, accountId: true }
+  });
+  if (channel) return { targetId: channel.accountId, targetChannelId: channel.id };
+
+  return { targetId: job.targetId, targetChannelId: job.targetChannelId };
+}
+
 export async function processPublish(rawJob: unknown, context: ProcessorContext) {
   const job = publishExecuteJobSchema.parse(rawJob) satisfies PublishExecuteJob;
+  const publishTarget = await normalizePublishJobTarget(job, context);
   const startedAt = new Date();
   const log = await context.prisma.workerJobLog.create({
     data: {
@@ -98,14 +147,33 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
     }
   });
 
+  const existingActiveAttempt = await context.prisma.publishAttempt.findFirst({
+    where: {
+      contentId: job.contentId,
+      ...publishAttemptTargetWhere(publishTarget.targetId, publishTarget.targetChannelId),
+      status: { in: ["running", "success"] }
+    }
+  });
+  if (existingActiveAttempt) {
+    await context.prisma.workerJobLog.update({
+      where: { id: log.id },
+      data: {
+        status: "completed",
+        error: `Bỏ qua publish trùng: content đã có attempt ${existingActiveAttempt.status} tới cùng đích.`,
+        completedAt: new Date()
+      }
+    });
+    return;
+  }
+
   const attemptNo = (await context.prisma.publishAttempt.count({
-    where: { contentId: job.contentId, targetId: job.targetId, ...(job.targetChannelId ? { targetChannelId: job.targetChannelId } : {}) }
+    where: { contentId: job.contentId, ...publishAttemptTargetWhere(publishTarget.targetId, publishTarget.targetChannelId) }
   })) + 1;
   const attempt = await context.prisma.publishAttempt.create({
     data: {
       contentId: job.contentId,
-      targetId: job.targetId,
-      ...(job.targetChannelId ? { targetChannelId: job.targetChannelId } : {}),
+      targetId: publishTarget.targetId,
+      ...(publishTarget.targetChannelId ? { targetChannelId: publishTarget.targetChannelId } : {}),
       attemptNo,
       status: "running",
       startedAt
@@ -117,16 +185,16 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
   try {
     const content = await context.prisma.content.findUniqueOrThrow({
       where: { id: job.contentId },
-      include: { media: true, source: { include: { routingRules: true } } }
+      include: { links: true, media: true, source: { include: { routingRules: true } } }
     });
     if (content.status === "paused") {
       await context.prisma.publishAttempt.update({ where: { id: attempt.id }, data: { status: "cancelled", error: "Bài đăng đang bị tạm dừng", completedAt: new Date() } });
       await context.prisma.workerJobLog.update({ where: { id: log.id }, data: { status: "completed", completedAt: new Date() } });
       return;
     }
-    const target = await context.prisma.targetAccount.findUniqueOrThrow({ where: { id: job.targetId } });
-    const targetChannel = job.targetChannelId
-      ? await context.prisma.platformChannel.findUniqueOrThrow({ where: { id: job.targetChannelId } })
+    const target = await context.prisma.targetAccount.findUniqueOrThrow({ where: { id: publishTarget.targetId } });
+    const targetChannel = publishTarget.targetChannelId
+      ? await context.prisma.platformChannel.findUniqueOrThrow({ where: { id: publishTarget.targetChannelId } })
       : null;
     const linkedSource = target.linkedSourceAccountId
       ? await context.prisma.sourceAccount.findUniqueOrThrow({ where: { id: target.linkedSourceAccountId } })
@@ -142,6 +210,53 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
       : target;
     targetPlatform = target.platform;
     if (!target.isActive || target.health === "paused") throw new Error("Target đang tắt hoặc bị pause");
+
+    const unconvertedLinks = findUnconvertedPublishLinks(content);
+    if (unconvertedLinks.length > 0) {
+      const message = "Vui lòng convert link trước khi đăng. Nội dung hiện vẫn còn link gốc.";
+      await context.prisma.publishAttempt.update({
+        where: { id: attempt.id },
+        data: { status: "cancelled", error: message, completedAt: new Date() }
+      });
+      await context.prisma.content.update({
+        where: { id: content.id },
+        data: {
+          status: "waiting_manual_convert",
+          savedReason: message,
+          savedSource: "publish_guard"
+        }
+      });
+      await context.prisma.workerJobLog.update({ where: { id: log.id }, data: { status: "completed", error: message, completedAt: new Date() } });
+      return;
+    }
+
+    const equivalentContentFilters: Array<Record<string, string>> = [];
+    if (content.contentHash) equivalentContentFilters.push({ contentHash: content.contentHash });
+    if (content.finalText) equivalentContentFilters.push({ finalText: content.finalText });
+    if (content.draftText) equivalentContentFilters.push({ draftText: content.draftText });
+    equivalentContentFilters.push({ originalText: content.originalText });
+    const duplicateSuccess = await context.prisma.publishAttempt.findFirst({
+      where: {
+        ...publishAttemptTargetWhere(publishTarget.targetId, publishTarget.targetChannelId),
+        status: "success",
+        contentId: { not: content.id },
+        content: { is: { OR: equivalentContentFilters } }
+      } as any,
+      include: { content: { select: { code: true } } }
+    });
+    if (duplicateSuccess) {
+      const message = `Bỏ qua publish trùng: nội dung tương tự đã đăng tới đích này (${duplicateSuccess.content.code}).`;
+      await context.prisma.publishAttempt.update({
+        where: { id: attempt.id },
+        data: { status: "cancelled", error: message, completedAt: new Date() }
+      });
+      await context.prisma.content.update({
+        where: { id: content.id },
+        data: { status: "duplicate", duplicateOfId: duplicateSuccess.contentId, savedReason: message, savedSource: "publish_guard" } as any
+      });
+      await context.prisma.workerJobLog.update({ where: { id: log.id }, data: { status: "completed", error: message, completedAt: new Date() } });
+      return;
+    }
 
     await context.prisma.content.update({ where: { id: content.id }, data: { status: "publishing" } });
 
@@ -193,10 +308,10 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
       ? (content.scheduledTargets as unknown[]).map(String)
       : content.source?.routingRules.filter((rule) => rule.isActive).map((rule) => rule.targetId) ?? [target.id];
     const successfulTargetCount = await context.prisma.publishAttempt.groupBy({
-      by: [job.targetChannelId ? "targetChannelId" : "targetId"] as never,
+      by: [publishTarget.targetChannelId ? "targetChannelId" : "targetId"] as never,
       where: {
         contentId: content.id,
-        ...(job.targetChannelId ? { targetChannelId: { in: targetIds } } : { targetId: { in: targetIds } }),
+        ...(publishTarget.targetChannelId ? { targetChannelId: { in: targetIds } } : { targetId: { in: targetIds } }),
         status: "success"
       }
     } as never);
@@ -262,10 +377,10 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
     });
   } catch (error) {
     const classified = classifyError(error);
-    logger.error("Publish job lỗi", { contentId: job.contentId, targetId: job.targetId, error: classified.message, kind: classified.kind });
+    logger.error("Publish job lỗi", { contentId: job.contentId, targetId: publishTarget.targetId, targetChannelId: publishTarget.targetChannelId, error: classified.message, kind: classified.kind });
 
     if (classified instanceof AdapterAuthError || classified instanceof AdapterCheckpointError || classified.kind === "adapter_auth" || classified.kind === "adapter_checkpoint") {
-      await context.prisma.targetAccount.update({ where: { id: job.targetId }, data: { health: "paused" } }).catch(() => undefined);
+      await context.prisma.targetAccount.update({ where: { id: publishTarget.targetId }, data: { health: "paused" } }).catch(() => undefined);
     }
 
     await context.prisma.publishAttempt.update({
@@ -277,14 +392,14 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
       data: {
         type: "publish:failed",
         contentId: job.contentId,
-        targetId: job.targetId,
+        targetId: publishTarget.targetId,
         message: `Đăng thất bại: ${classified.message}`
       }
     });
     realtimeBus.emitEvent({
       type: "publish:failed",
       contentId: job.contentId,
-      targetId: job.targetId,
+      targetId: publishTarget.targetId,
       platform: (targetPlatform ?? "telegram") as never,
       error: classified.message,
       createdAt: new Date().toISOString()
@@ -298,7 +413,7 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
     await sendAlert(context.prisma, {
       category: needLogin ? "login_required" : "publish_fail",
       platform: targetPlatform ?? "unknown",
-      account: job.targetId,
+      account: publishTarget.targetId,
       detail: classified.message
     }).catch(() => undefined);
 

@@ -15,7 +15,7 @@ function categoryOf(content: RepostContent) {
   const { review, analysis } = readReviewMetadata(content);
   return {
     primary: String(review.primaryCategory ?? analysis.primaryCategory ?? "-"),
-    confidence: typeof review.categoryConfidence === "number"
+    debugScore: typeof review.categoryConfidence === "number"
       ? review.categoryConfidence
       : typeof analysis.categoryConfidence === "number"
         ? analysis.categoryConfidence
@@ -38,7 +38,7 @@ export function RepostHistoryPage() {
     <div className="page-stack">
       <PageHeader
         title="Lịch sử đăng lại"
-        subtitle="Theo dõi nội dung đã được xử lý qua pipeline đăng lại, gồm category AI, target match và trạng thái hiện tại."
+        subtitle="Theo dõi nội dung đã được xử lý qua pipeline đăng lại, gồm quyết định AI, target match và trạng thái hiện tại."
         actions={
           <Button variant="secondary" icon={<RefreshCw aria-hidden />} onClick={() => query.refetch()} disabled={query.isFetching}>
             Làm mới
@@ -73,8 +73,8 @@ export function RepostHistoryPage() {
                 const category = categoryOf(row);
                 return (
                   <div className="stack-tight">
-                    <Badge tone={category.confidence !== null && category.confidence < 0.75 ? "warn" : "neutral"}>{category.primary}</Badge>
-                    <span className="table-subtle">{category.confidence === null ? "Confidence: -" : `Confidence: ${category.confidence.toFixed(2)}`}</span>
+                    <Badge tone="neutral">{category.primary}</Badge>
+                    <span className="table-subtle">{category.debugScore === null ? "Debug score: -" : `Debug score: ${category.debugScore.toFixed(2)}`}</span>
                   </div>
                 );
               }

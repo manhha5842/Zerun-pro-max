@@ -45,7 +45,7 @@ export function WorkerJobsPage() {
     <>
       <PageHeader
         title="Worker jobs / Logs"
-        subtitle="Theo dõi queue auto conversion, crawl, media ingest, publish và retry log khi cần."
+        subtitle="Theo dõi job nền. Khi bấm Test lấy tin, xem tiến độ tại đây với queue Crawl."
         actions={<Button variant="secondary" icon={<RefreshCw aria-hidden />} onClick={() => query.refetch()}>Làm mới</Button>}
       />
       <SectionCard>
@@ -61,7 +61,7 @@ export function WorkerJobsPage() {
             <option value="all">Tất cả trạng thái</option>
             <option value="queued">Queued</option>
             <option value="running">Running</option>
-            <option value="success">Success</option>
+            <option value="completed">Completed</option>
             <option value="failed">Failed</option>
           </Select>
         </FilterToolbar>

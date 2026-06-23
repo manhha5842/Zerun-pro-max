@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { AdapterAuthError, ConfigurationError, RetryableNetworkError, withRetry, type Platform } from "@zerun/shared";
 import type {
@@ -77,9 +77,10 @@ export class TelegramAdapter implements SourceAdapter, RealtimeSourceAdapter, Pu
 
     try {
       await client.connect();
-      const files = input.media
-        .map((media) => media.localPath ?? media.url)
-        .filter((file): file is string => typeof file === "string" && file.trim().length > 0);
+      const files = resolveTelegramPublishFiles(input.media);
+      if (input.media.length > 0 && files.length === 0) {
+        throw new ConfigurationError("Không có ảnh/video Telegram hợp lệ để đăng kèm.");
+      }
       const result = await withRetry<any>(() => (
         files.length > 0
           ? client.sendFile(target, { file: files.length === 1 ? files[0] : files, caption: input.text, supportsStreaming: true })
@@ -189,6 +190,35 @@ export class TelegramAdapter implements SourceAdapter, RealtimeSourceAdapter, Pu
       };
     }
     return client;
+  }
+}
+
+function resolveTelegramPublishFiles(media: RawMedia[]): string[] {
+  const files: string[] = [];
+  for (const item of media) {
+    const localPath = item.localPath?.trim();
+    if (localPath) {
+      const resolved = validateTelegramLocalMedia(localPath, item.url);
+      if (resolved) files.push(resolved);
+      continue;
+    }
+
+    const url = item.url?.trim();
+    if (url && /^https?:\/\//i.test(url)) files.push(url);
+  }
+  return files;
+}
+
+function validateTelegramLocalMedia(filePath: string, fallbackUrl?: string): string | null {
+  try {
+    const file = statSync(filePath);
+    if (!file.isFile()) throw new Error("Telegram media file is not accessible");
+    if (file.size <= 0) throw new Error("Telegram media file is empty");
+    return filePath;
+  } catch (error) {
+    const url = fallbackUrl?.trim();
+    if (url && /^https?:\/\//i.test(url)) return url;
+    throw error instanceof Error ? error : new Error("Telegram media file is not accessible");
   }
 }
 

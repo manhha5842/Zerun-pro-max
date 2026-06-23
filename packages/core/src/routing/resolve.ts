@@ -1,5 +1,4 @@
 import {
-  CATEGORY_CONFIDENCE_REVIEW_THRESHOLD,
   normalizeAffiliateCategories,
   targetMatchesCategories,
   type AffiliateCategory
@@ -29,20 +28,42 @@ export type ResolvedRouting = {
   useAI: boolean;
   matchedTargetIds: string[];
   unmatchedTargetIds: string[];
-  analysisCategories: AffiliateCategory[];
-  holdReason?: "low_category_confidence" | "no_matching_target";
+  analysisCategories: string[];
+  holdReason?: "no_matching_target";
 };
+
+const SIMPLE_CATEGORY_ALIASES: Record<string, string[]> = {
+  beauty: ["Sức Khỏe & Sắc Đẹp"],
+  mom_baby: ["Mẹ & Bé"],
+  electronics: ["Thiết Bị Điện Tử", "Điện Thoại & Phụ Kiện", "Máy Tính & Laptop"],
+  home: ["Nhà Cửa & Đời Sống", "Nội Thất & Trang Trí Nhà", "Chăm Sóc Nhà Cửa"],
+  fashion: ["Thời Trang Nam", "Thời Trang Nữ", "Phụ Kiện Thời Trang", "Giày Dép Nam", "Giày Dép Nữ"],
+  general: ["Voucher & Dịch Vụ"]
+};
+
+function normalizeRoutingCategories(value: unknown): string[] {
+  const normalized = normalizeAffiliateCategories(value);
+  const raw = Array.isArray(value)
+    ? value.map(String)
+    : typeof value === "string"
+      ? value.split(",").map((item) => item.trim())
+      : [];
+  const expanded = raw.flatMap((item) => {
+    const key = item.trim().toLowerCase();
+    return [item.trim(), ...(SIMPLE_CATEGORY_ALIASES[key] ?? [])];
+  });
+  return Array.from(new Set([...normalized, ...expanded].filter(Boolean)));
+}
 
 export function resolveRouting(rules: RoutingRuleLike[], input: RoutingInput = {}): ResolvedRouting {
   const activeRules = rules.filter((rule) => rule.isActive);
-  const analysisCategories = normalizeAffiliateCategories(input.analysisCategories ?? []);
-  const categoryConfidence = typeof input.categoryConfidence === "number" ? input.categoryConfidence : null;
+  const analysisCategories = normalizeRoutingCategories(input.analysisCategories ?? []);
   const hasCategoryFilteredTargets = activeRules.some((rule) => rule.filterMode === "category");
   const shouldFilterByCategory = analysisCategories.length > 0 || hasCategoryFilteredTargets;
   const matchedRules = activeRules.filter((rule) => {
     if (rule.filterMode !== "category") return true;
     if (input.isGeneralContent && rule.allowGeneralContent !== false) return true;
-    const targetCategories = normalizeAffiliateCategories(rule.targetCategories ?? []);
+    const targetCategories = normalizeRoutingCategories(rule.targetCategories ?? []);
     if (analysisCategories.length === 0 || targetCategories.length === 0) return false;
     return targetMatchesCategories(analysisCategories, targetCategories);
   });
@@ -51,23 +72,18 @@ export function resolveRouting(rules: RoutingRuleLike[], input: RoutingInput = {
   const unmatchedTargetIds = activeRules
     .map((rule) => rule.targetId)
     .filter((targetId) => !matchedTargetIds.includes(targetId));
-  const lowCategoryConfidence = categoryConfidence !== null && categoryConfidence < CATEGORY_CONFIDENCE_REVIEW_THRESHOLD;
   const noMatchingTarget = shouldFilterByCategory && activeRules.length > 0 && matchedRules.length === 0;
 
   return {
     targetIds,
-    autoPublishTargetIds: lowCategoryConfidence || noMatchingTarget
-      ? []
-      : Array.from(new Set(matchedRules.filter((rule) => rule.autoPublish && !rule.requireReview).map((rule) => rule.targetId))),
+    autoPublishTargetIds: noMatchingTarget ? [] : targetIds,
     requiresManualReview:
       activeRules.length === 0 ||
-      matchedRules.length === 0 ||
-      lowCategoryConfidence ||
-      matchedRules.some((rule) => rule.requireReview || !rule.autoPublish),
+      matchedRules.length === 0,
     useAI: activeRules.some((rule) => rule.useAI),
     matchedTargetIds,
     unmatchedTargetIds,
     analysisCategories,
-    holdReason: noMatchingTarget ? "no_matching_target" : lowCategoryConfidence ? "low_category_confidence" : undefined
+    holdReason: noMatchingTarget ? "no_matching_target" : undefined
   };
 }

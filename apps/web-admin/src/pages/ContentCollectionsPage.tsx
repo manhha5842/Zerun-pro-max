@@ -134,7 +134,7 @@ export function SavedContentsPage() {
           rows={rows}
           timeHeader="Cập nhật"
           getTimeValue={(row) => row.updatedAt}
-          empty={<EmptyState title="Kho lưu trữ đang trống" description="Bài failed hoặc bài cần review sẽ xuất hiện tại đây." />}
+          empty={<EmptyState title="Kho lưu trữ đang trống" description="Bài failed hoặc bài AI bỏ qua sẽ xuất hiện tại đây." />}
           extraColumns={[
             { key: "reason", header: "Lý do", render: (row) => row.savedReason ?? row.lastError ?? "Cần xử lý thủ công" }
           ]}

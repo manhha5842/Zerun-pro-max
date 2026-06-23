@@ -10,39 +10,43 @@ export type ShopeeSubIds = {
 
 export type ShopeeConfig = {
   enabled: boolean;
-  primarySource: "accesstrade" | "web";
+  primarySource: "accesstrade" | "web" | "affiliate_id";
   useFallback: boolean;
-  fallbackSource: "accesstrade" | "web";
+  fallbackSource: "accesstrade" | "web" | "affiliate_id";
   accessTradeToken: string;
   campaignId: string;
   affiliateId: string;
   replaceAffiliateId: boolean;
+  outputType: "shortlink" | "full";
   subIds: ShopeeSubIds;
   testUrl: string;
 };
 
-export type LazadaSubIds = {
+export type LazadaSubIdSet = {
+  id: string; // UUID/Client-side generated ID
+  name: string; // Friendly name
   subId1: string;
   subId2: string;
   subId3: string;
   subId4: string;
   subId5: string;
   subId6: string;
-  subId7: string;
+  isDefault: boolean;
+  subIdKey?: string; // subIdTemplateKey from Lazada Adsense
 };
 
 export type LazadaConfig = {
   enabled: boolean;
   primarySource: "lazada_api" | "accesstrade" | "web";
   useFallback: boolean;
-  fallbackSource: "accesstrade" | "web";
+  fallbackSource: "lazada_api" | "accesstrade" | "web";
   appKey: string;
   appSecret: string;
   accessToken: string;
   region: string;
   accessTradeToken: string;
   campaignId: string;
-  subIds: LazadaSubIds;
+  subIdSets: LazadaSubIdSet[];
   testUrl: string;
 };
 
@@ -125,34 +129,26 @@ export function normalizeShopeeAffiliateUrl(url: string, config: ShopeeConfig): 
 
 // 3. Map Lazada Sub IDs theo Source
 export function mapLazadaSubIdsBySource(
-  subIds: LazadaSubIds,
+  subIds: { subId1: string; subId2: string; subId3: string; subId4: string; subId5: string; subId6: string; },
   source: LazadaConfig["primarySource"] | LazadaConfig["fallbackSource"]
 ): { payload: Record<string, string>; warning?: string } {
-  const keys: Array<keyof LazadaSubIds> = ["subId1", "subId2", "subId3", "subId4", "subId5", "subId6", "subId7"];
-  const sanitized: Record<string, string> = {};
-  keys.forEach((k) => {
-    sanitized[k] = (subIds[k] || "").trim().replace(/[^a-zA-Z0-9_]/g, "");
-  });
+  const sanitized: Record<string, string> = {
+    subId1: (subIds.subId1 || "").trim().replace(/[^a-zA-Z0-9_]/g, ""),
+    subId2: (subIds.subId2 || "").trim().replace(/[^a-zA-Z0-9_]/g, ""),
+    subId3: (subIds.subId3 || "").trim().replace(/[^a-zA-Z0-9_]/g, ""),
+    subId4: (subIds.subId4 || "").trim().replace(/[^a-zA-Z0-9_]/g, ""),
+    subId5: (subIds.subId5 || "").trim().replace(/[^a-zA-Z0-9_]/g, ""),
+    subId6: (subIds.subId6 || "").trim().replace(/[^a-zA-Z0-9_]/g, ""),
+  };
 
-  if (source === "lazada_api") {
+  if (source === "lazada_api" || source === "web") {
     return { payload: sanitized };
-  } else if (source === "web") {
-    const payload: Record<string, string> = {
-      subId1: sanitized.subId1,
-      subId2: sanitized.subId2,
-      subId3: sanitized.subId3,
-    };
-    const hasExtra = sanitized.subId4 || sanitized.subId5 || sanitized.subId6 || sanitized.subId7;
-    return {
-      payload,
-      warning: hasExtra ? "Nguồn Lazada Web UI chỉ hỗ trợ Sub ID 1–3." : undefined,
-    };
   } else {
     // accesstrade
     const payload: Record<string, string> = {
       subId1: sanitized.subId1,
     };
-    const hasExtra = sanitized.subId2 || sanitized.subId3 || sanitized.subId4 || sanitized.subId5 || sanitized.subId6 || sanitized.subId7;
+    const hasExtra = sanitized.subId2 || sanitized.subId3 || sanitized.subId4 || sanitized.subId5 || sanitized.subId6;
     return {
       payload,
       warning: hasExtra ? "Nguồn AccessTrade chỉ hỗ trợ Sub ID 1." : undefined,
@@ -192,6 +188,9 @@ export function validatePlatformConfig(platform: "shopee" | "lazada" | "tiktok",
       if (source === "accesstrade") {
         if (!config.accessTradeToken?.trim()) errors.push("Thiếu AccessTrade token cho Shopee");
         if (!config.campaignId?.trim()) errors.push("Thiếu Campaign ID cho Shopee");
+      }
+      if (source === "affiliate_id") {
+        if (!config.affiliateId?.trim()) errors.push("Thiếu Shopee affiliate_id");
       }
     };
 
@@ -307,7 +306,18 @@ export function toOldPayload(newConfig: NewAffiliateConfig, existingPayload: any
     : shopee.primarySource === "accesstrade" ? "accesstrade" : "affiliate_id";
 
   // Lazada subId gộp để giữ tương thích ngược
-  const lazadaSubIdStr = JSON.stringify(lazada.subIds);
+  const defaultLazadaSet = lazada.subIdSets?.find((s: any) => s.isDefault) || lazada.subIdSets?.[0];
+  const lazadaSubIdStr = defaultLazadaSet
+    ? JSON.stringify({
+        subId1: defaultLazadaSet.subId1,
+        subId2: defaultLazadaSet.subId2,
+        subId3: defaultLazadaSet.subId3,
+        subId4: defaultLazadaSet.subId4,
+        subId5: defaultLazadaSet.subId5,
+        subId6: defaultLazadaSet.subId6,
+      })
+    : "{}";
+
   // TikTok subId gộp các UTM tracking
   const tiktokSubIdStr = JSON.stringify(tiktokShop.tracking);
 
@@ -342,6 +352,7 @@ export function toOldPayload(newConfig: NewAffiliateConfig, existingPayload: any
       fallbackSource: shopee.fallbackSource,
       useFallback: shopee.useFallback,
       replaceAffiliateId: shopee.replaceAffiliateId,
+      outputType: shopee.outputType,
     },
     lazada: {
       enabled: lazada.enabled,
@@ -356,7 +367,7 @@ export function toOldPayload(newConfig: NewAffiliateConfig, existingPayload: any
       appSecret: lazada.appSecret,
       accessToken: lazada.accessToken,
       region: lazada.region,
-      subIds: lazada.subIds,
+      subIdSets: lazada.subIdSets || [],
       primarySource: lazada.primarySource,
       fallbackSource: lazada.fallbackSource,
       useFallback: lazada.useFallback,
@@ -405,28 +416,49 @@ export function fromOldPayload(oldPayload: any): NewAffiliateConfig {
 
   // Lazada
   const lazada = oldPayload?.lazada || {};
-  let lazadaSubIds: LazadaSubIds = {
-    subId1: "",
-    subId2: "",
-    subId3: "",
-    subId4: "",
-    subId5: "",
-    subId6: "",
-    subId7: "",
-  };
-  if (lazada.subIds) {
-    lazadaSubIds = { ...lazadaSubIds, ...lazada.subIds };
-  } else if (lazada.subId) {
-    try {
-      if (lazada.subId.startsWith("{") && lazada.subId.endsWith("}")) {
-        const parsed = JSON.parse(lazada.subId);
-        lazadaSubIds = { ...lazadaSubIds, ...parsed };
-      } else {
+  let subIdSets: LazadaSubIdSet[] = [];
+  
+  if (lazada.subIdSets && Array.isArray(lazada.subIdSets)) {
+    subIdSets = lazada.subIdSets;
+  } else {
+    // Convert old subIds
+    let lazadaSubIds = {
+      subId1: "",
+      subId2: "",
+      subId3: "",
+      subId4: "",
+      subId5: "",
+      subId6: "",
+    };
+    if (lazada.subIds) {
+      lazadaSubIds = { ...lazadaSubIds, ...lazada.subIds };
+    } else if (lazada.subId) {
+      try {
+        if (lazada.subId.startsWith("{") && lazada.subId.endsWith("}")) {
+          const parsed = JSON.parse(lazada.subId);
+          lazadaSubIds = { ...lazadaSubIds, ...parsed };
+        } else {
+          lazadaSubIds.subId1 = lazada.subId;
+        }
+      } catch {
         lazadaSubIds.subId1 = lazada.subId;
       }
-    } catch {
-      lazadaSubIds.subId1 = lazada.subId;
     }
+    
+    subIdSets = [
+      {
+        id: "default",
+        name: "Mặc định",
+        subId1: lazadaSubIds.subId1,
+        subId2: lazadaSubIds.subId2,
+        subId3: lazadaSubIds.subId3,
+        subId4: lazadaSubIds.subId4,
+        subId5: lazadaSubIds.subId5,
+        subId6: lazadaSubIds.subId6,
+        isDefault: true,
+        subIdKey: "",
+      }
+    ];
   }
 
   // TikTok
@@ -466,6 +498,7 @@ export function fromOldPayload(oldPayload: any): NewAffiliateConfig {
       campaignId: shopee.campaignId || accessTradeCampaignId,
       affiliateId: shopee.affiliateId || oldPayload?.shopeeAffiliateId || "",
       replaceAffiliateId: shopee.replaceAffiliateId ?? !!(shopee.affiliateId || oldPayload?.shopeeAffiliateId),
+      outputType: shopee.outputType || "shortlink",
       subIds: shopeeSubIds,
       testUrl: "https://shopee.vn/san-pham-mau?affiliate_id=old_id",
     },
@@ -480,7 +513,7 @@ export function fromOldPayload(oldPayload: any): NewAffiliateConfig {
       region: lazada.region || oldPayload?.lazadaRegion || "VN",
       accessTradeToken: lazada.accessTradeToken || accessTradeToken,
       campaignId: lazada.campaignId || accessTradeCampaignId,
-      subIds: lazadaSubIds,
+      subIdSets,
       testUrl: "https://www.lazada.vn/products/san-pham-mau.html",
     },
     tiktokShop: {

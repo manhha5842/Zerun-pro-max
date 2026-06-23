@@ -1,5 +1,3 @@
-import { mockApiRequest } from "./mockApi";
-
 const DEFAULT_API_BASE = "/api/v1";
 const DEFAULT_API_ASSET_BASE = import.meta.env.DEV
   ? `${window.location.protocol}//${window.location.hostname}:3001/api/v1`
@@ -9,7 +7,6 @@ const API_ASSET_BASE = (
   import.meta.env.VITE_API_ASSET_BASE_URL ??
   (API_BASE.startsWith("http") ? API_BASE : DEFAULT_API_ASSET_BASE)
 ).replace(/\/+$/, "");
-const USE_MOCK_API = import.meta.env.VITE_USE_MOCK_API === "true";
 
 export function apiUrl(path: string): string {
   return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
@@ -76,10 +73,6 @@ function extractApiErrorMessage(payload: unknown, fallback: string) {
 }
 
 async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
-  if (USE_MOCK_API) {
-    return mockApiRequest<T>(path, init);
-  }
-
   const hasBody = init.body !== undefined && init.body !== null;
   const headers = init.body instanceof FormData
     ? init.headers

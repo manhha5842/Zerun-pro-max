@@ -1,6 +1,5 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
-import { AccountSessionsPage } from "./pages/AccountSessionsPage";
 import { AutoConversionHistoryPage, AutoConversionRulesPage } from "./pages/AutoConversionPages";
 import { SavedContentsPage, TrashPage } from "./pages/ContentCollectionsPage";
 import { ContentsPage } from "./pages/ContentsPage";
@@ -14,11 +13,11 @@ import { RepostFlowPage } from "./pages/RepostFlowPage";
 import { RepostHistoryPage } from "./pages/RepostHistoryPage";
 import { RepostManualLinksPage } from "./pages/RepostManualLinksPage";
 import { RepostReviewQueuePage } from "./pages/RepostReviewQueuePage";
-import { AiSettingsPage, AffiliateSettingsPage, AutoPublishSettingsPage, TelegramAlertSettingsPage } from "./pages/SetupSettingsPages";
+import { AffiliateSettingsPage } from "./pages/AffiliateSettingsPage";
+import { AiSettingsPage, TelegramAlertSettingsPage } from "./pages/SetupSettingsPages";
 import { SettingsPage } from "./pages/SettingsPage";
-import { SourceAccountsPage } from "./pages/SourceAccountsPage";
-import { TargetAccountsPage } from "./pages/TargetAccountsPage";
 import { AccountsManagementPage } from "./pages/AccountsManagementPage";
+import { ChannelsManagementPage } from "./pages/ChannelsManagementPage";
 import { WorkerJobsPage } from "./pages/WorkerJobsPage";
 
 export function App() {
@@ -46,15 +45,15 @@ export function App() {
         <Route path="/crawl/history" element={<CrawlHistoryPage />} />
         <Route path="/crawl/results" element={<CrawlResultsPage />} />
         <Route path="/tools/convert-link" element={<ConvertLinkToolPage />} />
-        <Route path="/accounts" element={<AccountsManagementPage />} />
-        <Route path="/accounts/sources" element={<SourceAccountsPage />} />
-        <Route path="/accounts/targets" element={<TargetAccountsPage />} />
-        <Route path="/accounts/sessions" element={<AccountSessionsPage />} />
+        <Route path="/accounts" element={<ChannelsManagementPage />} />
+        <Route path="/accounts/login" element={<AccountsManagementPage />} />
+        <Route path="/accounts/sources" element={<Navigate to="/accounts" replace />} />
+        <Route path="/accounts/targets" element={<Navigate to="/accounts" replace />} />
+        <Route path="/accounts/sessions" element={<Navigate to="/accounts/login" replace />} />
         <Route path="/settings" element={<Navigate to="/settings/ai" replace />} />
         <Route path="/settings/ai" element={<AiSettingsPage />} />
         <Route path="/settings/affiliate" element={<AffiliateSettingsPage />} />
         <Route path="/settings/telegram-alert" element={<TelegramAlertSettingsPage />} />
-        <Route path="/settings/auto-publish" element={<AutoPublishSettingsPage />} />
         <Route path="/settings/legacy" element={<SettingsPage />} />
         <Route path="/worker-jobs" element={<WorkerJobsPage />} />
         <Route path="/import" element={<Navigate to="/contents/new" replace />} />

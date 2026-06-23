@@ -101,11 +101,11 @@ export function DashboardPage() {
 
       <section style={{ marginTop: 18 }}>
         <SectionCard
-          title="AI vs người duyệt"
+          title="AI duyệt nội dung"
           description={`Độ chính xác AI theo nguồn (AI định đăng vs người thực sự đăng). Tổng: ${pct(comparison.data?.overall.accuracy ?? null)} (${comparison.data?.overall.agree ?? 0}/${comparison.data?.overall.total ?? 0}).`}
         >
           {(comparison.data?.bySource ?? []).length === 0 ? (
-            <div className="empty-state">Chưa đủ dữ liệu so sánh (cần tin có cả quyết định AI và người duyệt).</div>
+            <div className="empty-state">Chưa đủ dữ liệu để thống kê quyết định AI.</div>
           ) : (
             <table className="table table-compact">
               <thead>

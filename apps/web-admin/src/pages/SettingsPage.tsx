@@ -137,10 +137,6 @@ export function SettingsPage() {
     queryKey: ["settings", "telegram"],
     queryFn: () => apiGet<TelegramSettings>("/settings/telegram"),
   });
-  const autoPublishQuery = useQuery({
-    queryKey: ["settings", "auto-publish"],
-    queryFn: () => apiGet<{ enabled: boolean }>("/settings/auto-publish"),
-  });
   const aiQuery = useQuery({
     queryKey: ["settings", "ai"],
     queryFn: () => apiGet<AiSettings>("/settings/ai"),
@@ -181,7 +177,6 @@ export function SettingsPage() {
     chatId: "",
     enabled: false,
   });
-  const [autoPublishEnabled, setAutoPublishEnabled] = useState(true);
   const [ai, setAi] = useState<AiSettings>({
     provider: "",
     apiKey: "",
@@ -220,9 +215,6 @@ export function SettingsPage() {
     if (telegramQuery.data) setTelegram(telegramQuery.data);
   }, [telegramQuery.data]);
   useEffect(() => {
-    if (autoPublishQuery.data) setAutoPublishEnabled(Boolean(autoPublishQuery.data.enabled));
-  }, [autoPublishQuery.data]);
-  useEffect(() => {
     if (aiQuery.data) setAi(aiQuery.data);
   }, [aiQuery.data]);
   useEffect(() => {
@@ -260,11 +252,6 @@ export function SettingsPage() {
   const saveTelegram = useMutation({
     mutationFn: () => apiPut("/settings/telegram", telegram),
     onSuccess: () => toast.success("Đã lưu cấu hình Telegram."),
-    onError: (error: Error) => toast.error(error.message),
-  });
-  const saveAutoPublish = useMutation({
-    mutationFn: (enabled: boolean) => apiPut("/settings/auto-publish", { enabled }),
-    onSuccess: (_data, enabled) => toast.success(enabled ? "Đã bật auto-publish." : "Đã TẮT auto-publish toàn hệ thống."),
     onError: (error: Error) => toast.error(error.message),
   });
   const saveAi = useMutation({
@@ -516,7 +503,7 @@ export function SettingsPage() {
                       },
                     }))
                   }
-                  placeholder="https://zerun.example.com"
+                  placeholder="https://ten-mien-cua-ban.vn"
                 />
               </label>
               <div className="span-2 actions">
@@ -713,19 +700,6 @@ export function SettingsPage() {
 
           {activeTab === "telegram" ? (
             <div className="form-grid">
-              <label className="checkbox-row span-2">
-                <input
-                  type="checkbox"
-                  checked={autoPublishEnabled}
-                  onChange={(event) => {
-                    setAutoPublishEnabled(event.target.checked);
-                    saveAutoPublish.mutate(event.target.checked);
-                  }}
-                />
-                <span>
-                  Bật auto-publish toàn hệ thống <span className="table-subtle">(tắt nhanh để dừng mọi đăng tự động — tin vẫn vào hàng chờ duyệt)</span>
-                </span>
-              </label>
               <label className="checkbox-row">
                 <input
                   type="checkbox"

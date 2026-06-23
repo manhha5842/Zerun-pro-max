@@ -16,6 +16,7 @@ import { SectionCard } from "../components/common/SectionCard";
 import { PageHeader } from "../components/common/PageHeader";
 import { ThreadsPublishSettings, buildThreadsPublishPayload, normalizeThreadsPublishSettings, type ThreadsPublishSettingsValue } from "../components/common/ThreadsPublishSettings";
 import { getPlatformLabel, isSupportedTargetPlatform } from "../utils/platforms";
+import type { ContentPackageMetadata } from "./repostTypes";
 
 type AiAnalysis = {
   shouldSave?: boolean;
@@ -61,6 +62,7 @@ type ContentDetail = {
     targetId?: string;
     target?: { platform?: string; name?: string };
   }>;
+  source?: { id: string; name: string; platform: string; handle?: string | null } | null;
 };
 
 type DetailData = { content: ContentDetail };
@@ -69,9 +71,20 @@ type AccountsData = {
   accounts: Array<{ id: string; name: string; platform: string; kind: string }>;
 };
 
-function getMetadata(content: ContentDetail): { type?: string; comment?: string; mediaPaths?: string[]; threads?: Partial<ThreadsPublishSettingsValue>; ai?: AiMeta } {
+type ContentMetadata = {
+  type?: string;
+  comment?: string;
+  mediaPaths?: string[];
+  threads?: Partial<ThreadsPublishSettingsValue>;
+  ai?: AiMeta;
+  contentPackage?: ContentPackageMetadata;
+  sourceChannelId?: string | null;
+  sourceChannelName?: string | null;
+};
+
+function getMetadata(content: ContentDetail): ContentMetadata {
   const raw = content.metadata;
-  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as { type?: string; comment?: string; mediaPaths?: string[]; threads?: Partial<ThreadsPublishSettingsValue>; ai?: AiMeta };
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as ContentMetadata;
   return {};
 }
 
@@ -82,6 +95,113 @@ function postTypesForPlatform(platform: string): Array<{ value: string; label: s
     { value: "story", label: "Story" },
     { value: "reel", label: "Reel" }
   ];
+}
+
+function formatSourceTime(value?: string | null) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleString("vi-VN");
+}
+
+function SourcePackageSection({
+  content,
+  metadata,
+  expanded,
+  onToggle
+}: {
+  content: ContentDetail;
+  metadata: ContentMetadata;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const contentPackage = metadata.contentPackage;
+  const rawMessages = contentPackage?.rawMessages ?? [];
+  const rawMessageIds = contentPackage?.rawMessageIds ?? [];
+  const rawCount = rawMessages.length || rawMessageIds.length || 1;
+  const mediaCount = contentPackage?.mediaCount ?? content.media.length;
+  const linkCount = contentPackage?.linkCount ?? content.links.length;
+  const confidence = typeof contentPackage?.confidence === "number" ? `${Math.round(contentPackage.confidence)}%` : "-";
+  const sourceName = metadata.sourceChannelName ?? content.source?.name ?? getPlatformLabel(content.platform);
+  const hasRawMessages = rawMessages.length > 0;
+
+  return (
+    <SectionCard
+      title="Thông tin nguồn"
+      description="Xem content package đã được gom từ các tin nhắn nguồn trước khi export thành nội dung reup."
+      actions={
+        <Button variant="secondary" size="sm" onClick={onToggle}>
+          {expanded ? "Ẩn chi tiết" : "Xem chi tiết"}
+        </Button>
+      }
+    >
+      <div className="source-package-summary">
+        <div>
+          <span>Nguồn</span>
+          <strong>{sourceName}</strong>
+        </div>
+        <div>
+          <span>Package</span>
+          <strong>{rawCount} tin nhắn</strong>
+        </div>
+        <div>
+          <span>Media</span>
+          <strong>{mediaCount}</strong>
+        </div>
+        <div>
+          <span>Link</span>
+          <strong>{linkCount}</strong>
+        </div>
+        <div>
+          <span>Confidence</span>
+          <strong>{confidence}</strong>
+        </div>
+      </div>
+
+      {contentPackage?.groupingReason ? (
+        <div className="source-package-note">Gom tin: {contentPackage.groupingReason}</div>
+      ) : null}
+
+      {expanded ? (
+        <div className="source-message-list">
+          {hasRawMessages ? rawMessages.map((message, index) => (
+            <article className="source-message-card" key={message.id ?? `${content.id}-${index}`}>
+              <div className="source-message-head">
+                <div>
+                  <strong>{message.senderName ?? message.senderId ?? `Tin nhắn ${index + 1}`}</strong>
+                  <span>{formatSourceTime(message.createdAt)} · ID: {message.externalId ?? message.id}</span>
+                </div>
+                <Badge tone={message.mediaCount ? "good" : "neutral"}>{message.mediaCount ?? 0} media</Badge>
+              </div>
+              {message.text ? (
+                <pre className="source-message-text">{message.text}</pre>
+              ) : (
+                <p className="table-subtle">Tin nhắn này không có text, chỉ có media hoặc metadata.</p>
+              )}
+              {message.links?.length ? (
+                <div className="source-message-links">
+                  {message.links.map((link) => (
+                    <a key={link} href={link} target="_blank" rel="noopener noreferrer">{link}</a>
+                  ))}
+                </div>
+              ) : null}
+            </article>
+          )) : (
+            <article className="source-message-card">
+              <div className="source-message-head">
+                <div>
+                  <strong>Nội dung đã gom</strong>
+                  <span>{rawMessageIds.length ? rawMessageIds.join(", ") : content.code}</span>
+                </div>
+                <Badge tone="neutral">Fallback</Badge>
+              </div>
+              <pre className="source-message-text">{content.originalText}</pre>
+            </article>
+          )}
+        </div>
+      ) : null}
+    </SectionCard>
+  );
 }
 
 export function ContentDetailPage() {
@@ -115,6 +235,7 @@ export function ContentDetailPage() {
   const [threads, setThreads] = useState<ThreadsPublishSettingsValue | undefined>(undefined);
   const [selectedTargetId, setSelectedTargetId] = useState<string | undefined>(undefined);
   const [manualLinks, setManualLinks] = useState<Record<string, string>>({});
+  const [showSourcePackage, setShowSourcePackage] = useState(false);
 
   const effectiveDraftText = draftText ?? content?.draftText ?? content?.originalText ?? "";
   const effectivePostType = postType ?? metadata.type ?? "feed";
@@ -279,6 +400,13 @@ export function ContentDetailPage() {
           </div>
         </SectionCard>
 
+        <SourcePackageSection
+          content={content}
+          metadata={metadata}
+          expanded={showSourcePackage}
+          onToggle={() => setShowSourcePackage((current) => !current)}
+        />
+
         <SectionCard title="Media">
           {effectiveMediaPaths.length === 0 ? (
             <p style={{ color: "var(--color-text-muted)", fontSize: 14 }}>Chưa có media nào.</p>
@@ -313,12 +441,7 @@ export function ContentDetailPage() {
           <SectionCard title="Phân tích AI">
             <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: 14 }}>
               <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-                <span>
-                  <strong>Độ tin cậy:</strong>{" "}
-                  <span style={{ color: (metadata.ai.analysis.confidence ?? 0) >= 0.85 ? "var(--color-primary)" : (metadata.ai.analysis.confidence ?? 0) >= 0.65 ? "var(--color-warn, #f59e0b)" : "var(--color-danger)" }}>
-                    {metadata.ai.analysis.confidence !== undefined ? `${Math.round(metadata.ai.analysis.confidence * 100)}%` : "—"}
-                  </span>
-                </span>
+                <span><strong>Debug score:</strong> {metadata.ai.analysis.confidence !== undefined ? `${Math.round(metadata.ai.analysis.confidence * 100)}%` : "—"}</span>
                 <span><strong>Loại:</strong> {metadata.ai.analysis.messageType ?? "—"}</span>
                 <span><strong>Sàn:</strong> {metadata.ai.analysis.platform ?? "—"}</span>
                 {metadata.ai.model ? <span><strong>Model:</strong> {metadata.ai.model}</span> : null}

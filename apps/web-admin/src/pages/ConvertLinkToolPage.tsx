@@ -1,85 +1,39 @@
-import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Clipboard, ExternalLink, Play, RefreshCw, RotateCcw, Square } from "lucide-react";
-import { apiAssetUrl, apiGet, apiPost, apiPostForm } from "../api/client";
-import { AdminDataTable } from "../components/common/AdminDataTable";
-import { FileUploadDropzone } from "../components/common/FileUploadDropzone";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { Check, Clipboard, Play, RefreshCw } from "lucide-react";
+import { apiGet, apiPost } from "../api/client";
 import { PageHeader } from "../components/common/PageHeader";
 import { SectionCard } from "../components/common/SectionCard";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Label } from "../components/ui/Label";
-import { Select } from "../components/ui/Select";
-import { Textarea } from "../components/ui/Textarea";
 import { useToast } from "../components/ui/Toast";
+import { fromOldPayload, type LazadaSubIdSet } from "../services/affiliateService";
 
-type DetectedLink = {
-  originalUrl: string;
-  network: string;
-  action: string;
-  reason?: string;
-};
-
-type ConvertResult = {
-  originalUrl: string;
-  convertedUrl?: string;
-  failureReason?: string;
-};
-
-type DirectTab = "direct" | "batch";
-type OutputType = "shortlink" | "full";
-type BrowserJobStatus =
-  | "queued"
-  | "running"
-  | "success"
-  | "failed"
-  | "waiting_captcha"
-  | "login_required"
-  | "manual_required"
-  | "cancelled";
-
-type BrowserConvertJob = {
-  jobId: string;
-  platform: string;
-  originalUrl: string;
-  convertedUrl: string | null;
-  subId: string;
-  subIds: string[];
-  outputType: OutputType;
-  status: BrowserJobStatus;
-  errorCode: string | null;
-  errorMessage: string | null;
-  screenshotPath: string | null;
-  retryable: boolean;
-  createdAt: string;
-  startedAt: string | null;
-  completedAt: string | null;
-  metadata: Record<string, unknown>;
-};
-
-type BrowserSessionStatus = {
-  browserName: "Zerun Controlled Browser - Shopee Main";
-  accountId: "shopee-main";
-  status: string;
-  currentUrl: string | null;
-  lastHealthCheckAt: string | null;
+type ExtensionStatus = {
+  wsUrl: string;
+  connected: boolean;
+  busy: boolean;
+  currentTaskId: string | null;
   lastError: string | null;
-  lastScreenshotPath: string | null;
-  queueStatus: {
-    runningJobId: string | null;
-    queuedJobIds: string[];
-    queuedCount: number;
-    paused: boolean;
-  };
-  profilePath: string;
-  browserPid: number | null;
-  pageName: "Shopee Affiliate Converter Page";
-  captchaLoginState: "waiting_captcha" | "login_required" | null;
+  lastResult: ExtensionConvertResponse | null;
 };
 
-const terminalStatuses = new Set<BrowserJobStatus>(["success", "failed", "manual_required", "cancelled"]);
-const actionRequiredStatuses = new Set<BrowserJobStatus>(["waiting_captcha", "login_required"]);
+type ExtensionConvertResponse = {
+  status: "DONE" | "FAILED" | "NEED_LOGIN" | "NEED_MANUAL_VERIFY" | "TIMEOUT";
+  success: boolean;
+  originalUrl: string;
+  convertedUrl?: string | null;
+  shortLink?: string | null;
+  longLink?: string | null;
+  rawLongLink?: string | null;
+  errorCode?: string | null;
+  failCode?: string | null;
+  message?: string | null;
+  via?: string | null;
+  meta?: unknown;
+};
 
 function isShopeeUrl(value: string) {
   try {
@@ -95,478 +49,426 @@ function isShopeeUrl(value: string) {
   }
 }
 
+function isLazadaUrl(value: string) {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase().replace(/^www\./, "");
+    return host === "lazada.vn"
+      || host.endsWith(".lazada.vn")
+      || host === "s.lazada.vn"
+      || host.includes("lazada.");
+  } catch {
+    return false;
+  }
+}
+
 function sanitizeSubId(value: string) {
   return value
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    .trim()
-    .replace(/\s+/g, "-")
-    .replace(/[^a-zA-Z0-9_-]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^[-_]+|[-_]+$/g, "");
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D")
+    .replace(/[^a-zA-Z0-9]/g, "");
 }
 
 function buildFinalSubId(subIds: string[]) {
-  return subIds.map(sanitizeSubId).filter(Boolean).join("-");
+  return subIds.map(sanitizeSubId).filter(Boolean).join("");
 }
 
-function resolveAssetPath(path: string | null | undefined) {
-  if (!path) return "";
-  if (/^https?:\/\//i.test(path)) return path;
-  if (path.startsWith("/api/v1/")) return apiAssetUrl(path.replace(/^\/api\/v1/, ""));
-  return apiAssetUrl(path);
+function extensionBadge(status: ExtensionStatus | null, isLoading: boolean) {
+  if (isLoading && !status) return { text: "Đang kiểm tra", tone: "neutral" as const };
+  if (!status?.connected) return { text: "Chưa kết nối", tone: "danger" as const };
+  if (status.busy) return { text: "Đang xử lý", tone: "warn" as const };
+  return { text: "Đã kết nối", tone: "good" as const };
 }
 
-function formatDate(value: string | null | undefined) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("vi-VN");
-}
-
-function statusTone(status: string): "neutral" | "good" | "warn" | "danger" {
-  if (status === "success" || status === "ready") return "good";
-  if (status === "failed" || status === "error" || status === "login_required") return "danger";
-  if (status === "waiting_captcha" || status === "queued" || status === "running" || status === "busy" || status === "starting") return "warn";
-  return "neutral";
-}
-
-function MetadataField({ label, value }: { label: string; value?: string | number | null }) {
-  return (
-    <div className="metadata-field">
-      <span>{label}</span>
-      <strong>{value || "-"}</strong>
-    </div>
-  );
+function resultErrorMessage(result: ExtensionConvertResponse | null, directError: string) {
+  if (directError) return directError;
+  if (!result || result.success) return "";
+  return result.message || result.errorCode || result.failCode || "Không convert được link.";
 }
 
 export function ConvertLinkToolPage() {
   const toast = useToast();
-  const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<DirectTab>("direct");
-  const [step, setStep] = useState(1);
-  const [text, setText] = useState("");
-  const [subIds, setSubIds] = useState(["", "", "", "", ""]);
-  const [batchId, setBatchId] = useState("");
-  const [links, setLinks] = useState<DetectedLink[]>([]);
-  const [batchFile, setBatchFile] = useState<{ fileUrl: string; filename: string } | null>(null);
-  const [results, setResults] = useState<ConvertResult[]>([]);
-  const [outputMode, setOutputMode] = useState<"text" | "xlsx">("text");
-  const [finalOutput, setFinalOutput] = useState<{ text?: string; fileUrl?: string; filename?: string } | null>(null);
-  const [sourceFile, setSourceFile] = useState<File | null>(null);
-  const [resultFile, setResultFile] = useState<File | null>(null);
+  const resultRef = useRef<HTMLDivElement | null>(null);
+  const [platform, setPlatform] = useState<"shopee" | "lazada">("shopee");
   const [directUrl, setDirectUrl] = useState("");
-  const [outputType, setOutputType] = useState<OutputType>("shortlink");
-  const [currentJobId, setCurrentJobId] = useState("");
-  const [copyMessage, setCopyMessage] = useState("");
+  const [subIds, setSubIds] = useState(["", "", "", "", ""]);
   const [directError, setDirectError] = useState("");
+  const [directResult, setDirectResult] = useState<ExtensionConvertResponse | null>(null);
+  const [copiedKey, setCopiedKey] = useState("");
+  const [selectedLazadaSetId, setSelectedLazadaSetId] = useState("");
 
   const finalSubIdPreview = useMemo(() => buildFinalSubId(subIds), [subIds]);
 
-  const sessionQuery = useQuery({
-    queryKey: ["browser-session", "shopee-main"],
-    queryFn: () => apiGet<BrowserSessionStatus>("/browser-sessions/shopee-main"),
-    refetchInterval: 5_000
+  // Load Lazada Sub ID sets from settings
+  const affiliateConfigQuery = useQuery({
+    queryKey: ["settings", "affiliate"],
+    queryFn: () => apiGet<any>("/settings/affiliate")
   });
 
-  const jobQuery = useQuery({
-    queryKey: ["browser-convert-job", currentJobId],
-    queryFn: () => apiGet<BrowserConvertJob>(`/tools/convert-link/browser-convert/${currentJobId}`),
-    enabled: Boolean(currentJobId),
-    refetchInterval: (query) => {
-      const job = query.state.data as BrowserConvertJob | undefined;
-      return job && (terminalStatuses.has(job.status) || actionRequiredStatuses.has(job.status)) ? false : 2_000;
+  const lazadaSubIdSets = useMemo(() => {
+    const data = affiliateConfigQuery.data;
+    if (!data) return [];
+    try {
+      const parsed = fromOldPayload(data);
+      return parsed.lazada?.subIdSets || [];
+    } catch {
+      return [];
     }
-  });
-
-  const browserJob = jobQuery.data ?? null;
-  const session = sessionQuery.data ?? null;
+  }, [affiliateConfigQuery.data]);
 
   useEffect(() => {
-    setCopyMessage("");
-  }, [browserJob?.convertedUrl]);
-
-  const detectMutation = useMutation({
-    mutationFn: async () => {
-      if (sourceFile) {
-        const body = new FormData();
-        body.append("file", sourceFile);
-        body.append("text", text);
-        body.append("subIds", JSON.stringify(subIds));
-        return apiPostForm<{ links: DetectedLink[]; batchId: string }>("/tools/convert-link/detect", body);
+    if (lazadaSubIdSets.length > 0) {
+      const defaultSet = lazadaSubIdSets.find((s) => s.isDefault) || lazadaSubIdSets[0];
+      if (defaultSet) {
+        setSelectedLazadaSetId(defaultSet.id);
       }
-      return apiPost<{ links: DetectedLink[]; batchId: string }>("/tools/convert-link/detect", { text, subIds });
-    },
-    onSuccess: (data) => {
-      setLinks(data.links);
-      setBatchId(data.batchId);
-      setStep(2);
-    },
-    onError: (error) => toast.error(error.message)
+    }
+  }, [lazadaSubIdSets]);
+
+  // Tự động nhận diện nền tảng từ URL dán vào
+  useEffect(() => {
+    const url = directUrl.trim();
+    if (isLazadaUrl(url)) {
+      setPlatform("lazada");
+    } else if (isShopeeUrl(url)) {
+      setPlatform("shopee");
+    }
+  }, [directUrl]);
+
+  const extensionStatusQuery = useQuery({
+    queryKey: ["shopee-extension-status"],
+    queryFn: () => apiGet<ExtensionStatus>("/tools/convert-link/extension-status"),
+    refetchInterval: 3_000
   });
 
-  const exportMutation = useMutation({
-    mutationFn: () => apiPost<{ fileUrl: string; filename: string }>("/tools/convert-link/export-batch", { batchId }),
-    onSuccess: (data) => setBatchFile(data),
-    onError: (error) => toast.error(error.message)
-  });
+  const extensionStatus = extensionStatusQuery.data ?? null;
+  const isExtensionReady = Boolean(extensionStatus?.connected && !extensionStatus.busy);
+  const badge = extensionBadge(extensionStatus, extensionStatusQuery.isLoading);
+  const shortLink = directResult?.shortLink || 
+    (directResult?.convertedUrl?.startsWith("https://s.shopee.") || directResult?.convertedUrl?.startsWith("https://s.lazada.") 
+      ? directResult.convertedUrl 
+      : "");
+  const fullLink = directResult?.longLink || directResult?.rawLongLink || (!shortLink ? directResult?.convertedUrl || "" : "");
+  const hasResult = Boolean(directResult || directError);
+  const errorMessage = resultErrorMessage(directResult, directError);
 
-  const importMutation = useMutation({
-    mutationFn: async () => {
-      if (resultFile) {
-        const body = new FormData();
-        body.append("batchId", batchId);
-        body.append("file", resultFile);
-        return apiPostForm<{ results: ConvertResult[] }>("/tools/convert-link/import-result", body);
-      }
-      return apiPost<{ results: ConvertResult[] }>("/tools/convert-link/import-result", { batchId, csvText: "" });
-    },
-    onSuccess: (data) => {
-      setResults(data.results);
-      setStep(3);
-    },
-    onError: (error) => toast.error(error.message)
-  });
+  useEffect(() => {
+    if (!hasResult) return;
+    resultRef.current?.focus();
+    resultRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [hasResult]);
 
-  const applyMutation = useMutation({
-    mutationFn: () => apiPost<{ text?: string; fileUrl?: string; filename?: string }>("/tools/convert-link/apply-result", { batchId, output: outputMode }),
-    onSuccess: (data) => setFinalOutput(data),
-    onError: (error) => toast.error(error.message)
-  });
+  useEffect(() => {
+    if (!copiedKey) return;
+    const timer = window.setTimeout(() => setCopiedKey(""), 1600);
+    return () => window.clearTimeout(timer);
+  }, [copiedKey]);
 
-  const createBrowserJobMutation = useMutation({
+  const convertMutation = useMutation({
     mutationFn: () => {
       const url = directUrl.trim();
-      if (!url) throw new Error("URL cần convert không được để trống.");
-      if (!isShopeeUrl(url)) throw new Error("Chỉ chấp nhận link Shopee, s.shopee.vn hoặc shopee.ee.");
-      return apiPost<{ jobId: string; status: BrowserJobStatus; message: string }>("/tools/convert-link/browser-convert", {
-        platform: "shopee",
+      if (!url) throw new Error(`URL ${platform === "shopee" ? "Shopee" : "Lazada"} cần convert không được để trống.`);
+      if (platform === "shopee" && !isShopeeUrl(url)) {
+        throw new Error("Chỉ chấp nhận link Shopee, s.shopee.vn hoặc shopee.ee.");
+      }
+      if (platform === "lazada" && !isLazadaUrl(url)) {
+        throw new Error("Chỉ chấp nhận link Lazada hoặc s.lazada.vn.");
+      }
+
+      const payload: any = {
         url,
-        subIds,
-        outputType,
-        accountId: "shopee-main",
-        mode: "browser_ui_convert",
-        source: "convert_link_tool"
-      });
+        outputType: "shortlink"
+      };
+
+      if (platform === "shopee") {
+        payload.subIds = subIds;
+      } else {
+        const targetSet = lazadaSubIdSets.find((s) => s.id === selectedLazadaSetId);
+        if (targetSet) {
+          payload.lazadaSubIdSet = targetSet;
+        }
+      }
+
+      return apiPost<ExtensionConvertResponse>("/tools/convert-link/extension-convert", payload);
     },
     onSuccess: (data) => {
-      setCurrentJobId(data.jobId);
+      setDirectResult(data);
       setDirectError("");
-      setCopyMessage("");
-      void queryClient.invalidateQueries({ queryKey: ["browser-session", "shopee-main"] });
-      toast.success("Đã tạo job convert qua Shopee Browser.");
+      setCopiedKey("");
+      void extensionStatusQuery.refetch();
+      if (data.success) {
+        toast.success(`Đã convert link ${platform === "shopee" ? "Shopee" : "Lazada"} bằng extension.`);
+      } else {
+        toast.error(data.message ?? data.errorCode ?? "Không convert được link.");
+      }
     },
     onError: (error) => {
+      setDirectResult(null);
       setDirectError(error.message);
       toast.error(error.message);
     }
-  });
-
-  const sessionActionMutation = useMutation({
-    mutationFn: (action: "start" | "stop" | "restart" | "open" | "mark-resolved") =>
-      apiPost<BrowserSessionStatus>(`/browser-sessions/shopee-main/${action}`),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["browser-session", "shopee-main"] });
-      if (currentJobId) void queryClient.invalidateQueries({ queryKey: ["browser-convert-job", currentJobId] });
-    },
-    onError: (error) => toast.error(error.message)
-  });
-
-  const retryJobMutation = useMutation({
-    mutationFn: () => apiPost<{ jobId: string; status: BrowserJobStatus; message: string }>(`/tools/convert-link/browser-convert/${currentJobId}/retry`),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["browser-convert-job", currentJobId] });
-      void queryClient.invalidateQueries({ queryKey: ["browser-session", "shopee-main"] });
-      toast.success("Đã đưa job vào hàng chờ retry.");
-    },
-    onError: (error) => toast.error(error.message)
-  });
-
-  const cancelJobMutation = useMutation({
-    mutationFn: () => apiPost<{ jobId: string; status: BrowserJobStatus; message: string }>(`/tools/convert-link/browser-convert/${currentJobId}/cancel`),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["browser-convert-job", currentJobId] });
-      void queryClient.invalidateQueries({ queryKey: ["browser-session", "shopee-main"] });
-      toast.success("Đã hủy job convert link.");
-    },
-    onError: (error) => toast.error(error.message)
   });
 
   const updateSubId = (index: number, value: string) => {
     setSubIds((current) => current.map((item, itemIndex) => itemIndex === index ? value : item));
   };
 
-  const handleDirectConvert = () => {
-    setDirectError("");
-    createBrowserJobMutation.mutate();
-  };
-
-  const handleCopy = async () => {
-    if (!browserJob?.convertedUrl) return;
+  const copyText = async (value: string, key: string) => {
+    if (!value) return;
     try {
-      await navigator.clipboard.writeText(browserJob.convertedUrl);
-      setCopyMessage("Đã copy link");
+      await navigator.clipboard.writeText(value);
+      setCopiedKey(key);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Không copy được link.");
     }
   };
 
+  const copyAll = async () => {
+    const lines = [
+      shortLink ? `Shorten link: ${shortLink}` : "",
+      fullLink ? `Full affiliate link: ${fullLink}` : ""
+    ].filter(Boolean);
+    if (lines.length === 0) return;
+    await copyText(lines.join("\n"), "all");
+  };
+
+  const retryConvert = () => {
+    setDirectError("");
+    convertMutation.mutate();
+  };
+
   return (
-    <div className="page-stack">
+    <div className="convert-page">
       <PageHeader
         title="Convert link affiliate"
-        subtitle="Zerun Admin Browser chỉ mở dashboard; Shopee/Affiliate chạy trong Zerun Controlled Browser - Shopee Main do backend mở riêng."
+        subtitle="Convert link Shopee và Lazada bằng extension đang kết nối với browser."
+        actions={(
+          <div className="convert-header-actions">
+            <Badge tone={badge.tone}>Extension: {badge.text}</Badge>
+            <Button
+              variant="outline"
+              size="sm"
+              icon={<RefreshCw size={14} aria-hidden />}
+              onClick={() => void extensionStatusQuery.refetch()}
+              disabled={extensionStatusQuery.isFetching}
+            >
+              {extensionStatus?.connected ? "Làm mới" : "Kết nối lại"}
+            </Button>
+          </div>
+        )}
       />
 
-      <div className="tabs">
-        <button type="button" className={activeTab === "direct" ? "active" : ""} onClick={() => setActiveTab("direct")}>
-          Convert trực tiếp
-        </button>
-        <button type="button" className={activeTab === "batch" ? "active" : ""} onClick={() => setActiveTab("batch")}>
-          Batch thủ công
-        </button>
-      </div>
-
-      {activeTab === "direct" ? (
-        <>
-          <SectionCard title="Convert trực tiếp qua Browser">
-            <div className="form-grid">
-              <label>
-                <Label>Nền tảng</Label>
-                <Select value="shopee" disabled>
-                  <option value="shopee">Shopee</option>
-                  <option value="lazada" disabled>Lazada (coming soon)</option>
-                  <option value="tiktok_shop" disabled>TikTok Shop (coming soon)</option>
-                </Select>
-              </label>
-              <label>
-                <Label>Kiểu link kết quả</Label>
-                <Select value={outputType} onChange={(event) => setOutputType(event.target.value as OutputType)}>
-                  <option value="shortlink">Shortlink</option>
-                  <option value="full">Full affiliate link</option>
-                </Select>
-              </label>
-              <label className="span-2">
-                <Label>URL cần convert</Label>
-                <Input
-                  value={directUrl}
-                  onChange={(event) => setDirectUrl(event.target.value)}
-                  placeholder="Dán link Shopee / s.shopee.vn / shopee.vn/..."
-                />
-              </label>
-              {subIds.map((subId, index) => (
-                <label key={index}>
-                  <Label>{`Sub_id${index + 1}`}</Label>
-                  <Input value={subId} onChange={(event) => updateSubId(index, event.target.value)} />
+      <main className="convert-shell">
+        <SectionCard title="Convert link Shopee / Lazada">
+          <div className="convert-form">
+            <div className="convert-field convert-field-full">
+              <Label>Chọn nền tảng tiếp thị liên kết</Label>
+              <div className="flex gap-4 mt-1">
+                <label className="flex items-center gap-2 cursor-pointer text-sm font-medium">
+                  <input
+                    type="radio"
+                    name="platform"
+                    value="shopee"
+                    checked={platform === "shopee"}
+                    onChange={() => setPlatform("shopee")}
+                    className="w-4 h-4 text-orange-600 focus:ring-orange-500"
+                  />
+                  Shopee
                 </label>
-              ))}
-            </div>
-            <div className="direct-subid-preview">
-              <span>Sub ID gửi đi</span>
-              <code className="code-inline">{finalSubIdPreview || "-"}</code>
-            </div>
-            {directError ? <p className="form-error-text">{directError}</p> : null}
-            <div className="actions" style={{ marginTop: 16 }}>
-              <Button icon={<Play size={16} aria-hidden />} onClick={handleDirectConvert} disabled={createBrowserJobMutation.isPending || !directUrl.trim()}>
-                Convert qua Shopee Browser
-              </Button>
-              {browserJob && !terminalStatuses.has(browserJob.status) ? (
-                <Button variant="outline" icon={<Square size={15} aria-hidden />} onClick={() => cancelJobMutation.mutate()} disabled={cancelJobMutation.isPending}>
-                  Cancel Job
-                </Button>
-              ) : null}
-              {browserJob ? <Badge tone={statusTone(browserJob.status)}>Job: {browserJob.status}</Badge> : null}
-            </div>
-          </SectionCard>
-
-          <SectionCard
-            title="Zerun Controlled Browser - Shopee Main"
-            actions={(
-              <>
-                <Button variant="outline" size="sm" onClick={() => sessionActionMutation.mutate("start")} disabled={sessionActionMutation.isPending}>Start Browser</Button>
-                <Button variant="outline" size="sm" onClick={() => sessionActionMutation.mutate("stop")} disabled={sessionActionMutation.isPending}>Stop Browser</Button>
-                <Button variant="outline" size="sm" icon={<RefreshCw size={14} aria-hidden />} onClick={() => sessionActionMutation.mutate("restart")} disabled={sessionActionMutation.isPending}>Restart Browser</Button>
-              </>
-            )}
-          >
-            <div className="browser-session-grid">
-              <MetadataField label="Status" value={session?.status ?? sessionQuery.fetchStatus} />
-              <MetadataField label="Account ID" value={session?.accountId ?? "shopee-main"} />
-              <MetadataField label="Profile path" value={session?.profilePath ?? "-"} />
-              <MetadataField label="Current URL" value={session?.currentUrl ?? "-"} />
-              <MetadataField label="Queue running job" value={session?.queueStatus.runningJobId ?? "-"} />
-              <MetadataField label="Last screenshot" value={session?.lastScreenshotPath ?? "-"} />
-              <MetadataField label="Last error" value={session?.lastError ?? "-"} />
-              <MetadataField label="Last health check" value={formatDate(session?.lastHealthCheckAt)} />
-              <MetadataField label="Captcha/login state" value={session?.captchaLoginState ?? "-"} />
-            </div>
-            <div className="actions" style={{ marginTop: 16 }}>
-              <Button variant="secondary" icon={<ExternalLink size={15} aria-hidden />} onClick={() => sessionActionMutation.mutate("open")} disabled={sessionActionMutation.isPending}>
-                Open Controlled Browser
-              </Button>
-              <Button variant="outline" onClick={() => sessionActionMutation.mutate("mark-resolved")} disabled={sessionActionMutation.isPending}>
-                Mark Captcha Resolved
-              </Button>
-              <Button variant="outline" onClick={handleDirectConvert} disabled={createBrowserJobMutation.isPending || !directUrl.trim()}>
-                Test Convert Link
-              </Button>
-              {session?.lastScreenshotPath ? (
-                <Button asChild variant="link">
-                  <a href={resolveAssetPath(session.lastScreenshotPath)} target="_blank" rel="noreferrer">Mở screenshot</a>
-                </Button>
-              ) : null}
-            </div>
-          </SectionCard>
-
-          {browserJob ? (
-            <SectionCard title="Kết quả convert">
-              <div className="result-fields">
-                <MetadataField label="Nền tảng" value="Shopee" />
-                <MetadataField label="Link gốc" value={browserJob.originalUrl} />
-                <MetadataField label="Sub ID" value={browserJob.subId || "-"} />
-                <MetadataField label="Trạng thái" value={browserJob.status} />
-                <MetadataField label="Link đã convert" value={browserJob.convertedUrl ?? "-"} />
+                <label className="flex items-center gap-2 cursor-pointer text-sm font-medium">
+                  <input
+                    type="radio"
+                    name="platform"
+                    value="lazada"
+                    checked={platform === "lazada"}
+                    onChange={() => setPlatform("lazada")}
+                    className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+                  />
+                  Lazada
+                </label>
               </div>
+            </div>
 
-              {browserJob.status === "success" && browserJob.convertedUrl ? (
-                <div className="result-output">
-                  <Textarea readOnly value={browserJob.convertedUrl} />
-                  <div className="actions">
-                    <Button icon={<Clipboard size={15} aria-hidden />} onClick={handleCopy}>Copy link</Button>
-                    {copyMessage ? <span className="copy-success"><Check size={15} aria-hidden />{copyMessage}</span> : null}
-                  </div>
+            <label className="convert-field convert-field-full">
+              <Label>URL {platform === "shopee" ? "Shopee" : "Lazada"} cần convert</Label>
+              <Input
+                value={directUrl}
+                onChange={(event) => setDirectUrl(event.target.value)}
+                placeholder={platform === "shopee" ? "Dán link Shopee hoặc s.shopee.vn..." : "Dán link Lazada hoặc s.lazada.vn..."}
+              />
+            </label>
+
+            {platform === "shopee" ? (
+              <div className="convert-subids">
+                <div className="convert-subids-head">
+                  <Label>Sub ID Shopee</Label>
+                  {finalSubIdPreview ? <span>Sub ID gửi đi: <code>{finalSubIdPreview}</code></span> : null}
                 </div>
-              ) : null}
-
-              {browserJob.status === "failed" || browserJob.status === "manual_required" ? (
-                <div className="error-panel">
-                  <MetadataField label="errorCode" value={browserJob.errorCode ?? "-"} />
-                  <MetadataField label="errorMessage" value={browserJob.errorMessage ?? "-"} />
+                <div className="convert-subid-grid">
+                  {subIds.map((subId, index) => (
+                    <label key={index} className="convert-field">
+                      <Label>{`Sub_id${index + 1}`}</Label>
+                      <Input value={subId} onChange={(event) => updateSubId(index, event.target.value)} />
+                    </label>
+                  ))}
                 </div>
-              ) : null}
-
-              {actionRequiredStatuses.has(browserJob.status) ? (
-                <div className="warning-panel">
-                  <p>Shopee cần admin xử lý captcha/login trong Zerun Controlled Browser - Shopee Main.</p>
-                  <div className="actions">
-                    <Button variant="secondary" icon={<ExternalLink size={15} aria-hidden />} onClick={() => sessionActionMutation.mutate("open")} disabled={sessionActionMutation.isPending}>
-                      Open Controlled Browser
-                    </Button>
-                    <Button variant="outline" onClick={() => sessionActionMutation.mutate("mark-resolved")} disabled={sessionActionMutation.isPending}>
-                      Mark Resolved
-                    </Button>
-                    <Button variant="outline" icon={<RotateCcw size={15} aria-hidden />} onClick={() => retryJobMutation.mutate()} disabled={retryJobMutation.isPending}>
-                      Retry Job
-                    </Button>
-                  </div>
+              </div>
+            ) : (
+              <div className="convert-subids">
+                <div className="convert-subids-head">
+                  <Label>Chọn Set Sub ID Lazada</Label>
                 </div>
-              ) : null}
+                <div className="flex flex-col gap-3 mt-1.5">
+                  <select
+                    value={selectedLazadaSetId}
+                    onChange={(e) => setSelectedLazadaSetId(e.target.value)}
+                    className="w-full rounded-md border border-line bg-panel px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    {lazadaSubIdSets.map((set) => (
+                      <option key={set.id} value={set.id}>
+                        {set.name} {set.isDefault ? "(Mặc định)" : ""}
+                      </option>
+                    ))}
+                  </select>
 
-              {browserJob.screenshotPath ? (
-                <div className="screenshot-preview">
-                  <a href={resolveAssetPath(browserJob.screenshotPath)} target="_blank" rel="noreferrer">Mở screenshot lỗi</a>
-                  <img src={resolveAssetPath(browserJob.screenshotPath)} alt="Screenshot Shopee khi convert lỗi" />
+                  {(() => {
+                    const currentSet = lazadaSubIdSets.find((s) => s.id === selectedLazadaSetId);
+                    if (!currentSet) return null;
+                    const subIdItems = [
+                      { label: "Sub 1", val: currentSet.subId1 },
+                      { label: "Sub 2", val: currentSet.subId2 },
+                      { label: "Sub 3", val: currentSet.subId3 },
+                      { label: "Sub 4", val: currentSet.subId4 },
+                      { label: "Sub 5", val: currentSet.subId5 },
+                      { label: "Sub 6", val: currentSet.subId6 }
+                    ].filter(item => item.val);
+
+                    return (
+                      <div className="flex flex-wrap items-center gap-2 p-3 rounded-lg border border-line bg-[var(--color-bg-muted)]">
+                        {subIdItems.length === 0 ? (
+                          <span className="text-xs text-muted">Set Sub ID này trống.</span>
+                        ) : (
+                          subIdItems.map((item, idx) => (
+                            <span key={idx} className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-panel border border-line text-xs font-medium text-foreground">
+                              <span className="text-muted">{item.label}:</span>
+                              <code className="font-mono text-xs">{item.val}</code>
+                            </span>
+                          ))
+                        )}
+                        {currentSet.subIdKey && (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-[var(--color-success-bg)] border border-[var(--color-success-border)] text-xs font-semibold text-[var(--color-success)] ml-auto">
+                            Đã đồng bộ Key: <code className="font-mono text-xs">{currentSet.subIdKey}</code>
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
-              ) : null}
-            </SectionCard>
-          ) : null}
-        </>
-      ) : null}
+              </div>
+            )}
 
-      {activeTab === "batch" ? (
-        <>
-          <div className="stepper">
-            {["Tạo file convert", "Nhập kết quả convert", "Xuất kết quả"].map((label, index) => (
-              <button key={label} type="button" className={step === index + 1 ? "active" : ""} onClick={() => setStep(index + 1)}>
-                {index + 1}. {label}
-              </button>
-            ))}
+            <div className="convert-actions">
+              <Button
+                icon={convertMutation.isPending ? undefined : <Play size={16} aria-hidden />}
+                onClick={() => convertMutation.mutate()}
+                disabled={convertMutation.isPending || !directUrl.trim() || !isExtensionReady}
+              >
+                {convertMutation.isPending ? "Đang convert..." : "Convert link"}
+              </Button>
+              {!extensionStatus?.connected ? <span className="convert-inline-note danger">Extension chưa kết nối.</span> : null}
+              {extensionStatus?.busy ? <span className="convert-inline-note warn">Extension đang xử lý link khác.</span> : null}
+            </div>
           </div>
 
-          {step === 1 ? (
-            <SectionCard title="1. Tạo file convert">
-              <div className="form-grid">
-                <label className="span-2">
-                  <Label>Nội dung cần detect link</Label>
-                  <Textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="Dán nội dung tiếng Việt có link Shopee/Lazada hoặc link cần kiểm tra..." />
-                </label>
-                <div className="span-2">
-                  <FileUploadDropzone label="Hoặc upload Excel/CSV" accept=".xlsx,.xls,.csv,.txt" onChange={(files) => setSourceFile(files[0] ?? null)} />
-                  {sourceFile ? <p className="table-subtle">Đã chọn: {sourceFile.name}</p> : null}
+          {hasResult ? (
+            <div ref={resultRef} tabIndex={-1} className="convert-result" aria-live="polite">
+              {directResult?.success ? (
+                <>
+                  <div className="convert-result-head">
+                    <h3>Kết quả</h3>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      icon={copiedKey === "all" ? <Check size={14} aria-hidden /> : <Clipboard size={14} aria-hidden />}
+                      onClick={copyAll}
+                      disabled={!shortLink && !fullLink}
+                    >
+                      {copiedKey === "all" ? "Đã copy" : "Copy tất cả"}
+                    </Button>
+                  </div>
+
+                  <LinkResultRow
+                    label="Shorten link"
+                    value={shortLink}
+                    copied={copiedKey === "short"}
+                    onCopy={() => void copyText(shortLink, "short")}
+                  />
+                  <LinkResultRow
+                    label="Full affiliate link"
+                    value={fullLink}
+                    copied={copiedKey === "full"}
+                    onCopy={() => void copyText(fullLink, "full")}
+                  />
+                </>
+              ) : (
+                <div className="convert-alert">
+                  <div>
+                    <strong>Không convert được link.</strong>
+                    <p>{errorMessage}</p>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={retryConvert} disabled={convertMutation.isPending || !isExtensionReady}>
+                    Thử lại
+                  </Button>
                 </div>
-                {subIds.map((subId, index) => (
-                  <label key={index}>
-                    <Label>{`Sub_id${index + 1}`}</Label>
-                    <Input value={subId} onChange={(event) => updateSubId(index, event.target.value)} />
-                  </label>
-                ))}
-              </div>
-              <div className="actions" style={{ marginTop: 16 }}>
-                <Button onClick={() => detectMutation.mutate()} disabled={detectMutation.isPending || (!text.trim() && !sourceFile)}>Detect links</Button>
-              </div>
-            </SectionCard>
+              )}
+            </div>
           ) : null}
 
-          {links.length > 0 ? (
-            <SectionCard title="Link đã phát hiện" actions={<Button variant="secondary" onClick={() => exportMutation.mutate()} disabled={!batchId}>Download Batch Custom Links.xlsx</Button>}>
-              {batchFile ? <p><a href={batchFile.fileUrl}>{batchFile.filename}</a></p> : null}
-              <AdminDataTable
-                rows={links}
-                getRowKey={(row) => row.originalUrl}
-                columns={[
-                  { key: "url", header: "Liên kết gốc", render: (row) => row.originalUrl },
-                  { key: "network", header: "Network", render: (row) => row.network },
-                  { key: "action", header: "Action", render: (row) => row.action },
-                  { key: "reason", header: "Ghi chú", render: (row) => row.reason ?? "Có thể convert" }
-                ]}
-              />
-            </SectionCard>
+          {import.meta.env.DEV ? (
+            <details className="convert-debug">
+              <summary>Debug extension</summary>
+              <dl>
+                <div><dt>WebSocket</dt><dd>{extensionStatus?.wsUrl ?? "ws://localhost:17385"}</dd></div>
+                <div><dt>Trạng thái</dt><dd>{extensionStatus?.busy ? "Đang xử lý" : "Sẵn sàng"}</dd></div>
+                <div><dt>Task hiện tại</dt><dd>{extensionStatus?.currentTaskId ?? "-"}</dd></div>
+                <div><dt>Lỗi gần nhất</dt><dd>{extensionStatus?.lastError ?? "-"}</dd></div>
+              </dl>
+            </details>
           ) : null}
+        </SectionCard>
+      </main>
+    </div>
+  );
+}
 
-          {step === 2 ? (
-            <SectionCard title="2. Nhập CSV kết quả convert">
-              <FileUploadDropzone label="Upload AffiliateBatchCustomLinks CSV" accept=".csv,.xlsx,.xls" onChange={(files) => setResultFile(files[0] ?? null)} />
-              {resultFile ? <p className="table-subtle">Đã chọn: {resultFile.name}</p> : null}
-              <div className="actions" style={{ marginTop: 16 }}>
-                <Button onClick={() => importMutation.mutate()} disabled={!batchId || !resultFile || importMutation.isPending}>Parse kết quả</Button>
-              </div>
-            </SectionCard>
-          ) : null}
-
-          {results.length > 0 ? (
-            <SectionCard title="Preview kết quả convert">
-              <AdminDataTable
-                rows={results}
-                getRowKey={(row) => row.originalUrl}
-                columns={[
-                  { key: "original", header: "Liên kết gốc", render: (row) => row.originalUrl },
-                  { key: "converted", header: "Liên kết chuyển đổi", render: (row) => row.convertedUrl ?? "-" },
-                  { key: "reason", header: "Lí do thất bại", render: (row) => row.failureReason ?? "-" }
-                ]}
-              />
-            </SectionCard>
-          ) : null}
-
-          {step === 3 ? (
-            <SectionCard title="3. Xuất kết quả cuối">
-              <div className="form-grid">
-                <label>
-                  <Label>Định dạng output</Label>
-                  <Select value={outputMode} onChange={(event) => setOutputMode(event.target.value as "text" | "xlsx")}>
-                    <option value="text">Text</option>
-                    <option value="xlsx">Excel</option>
-                  </Select>
-                </label>
-              </div>
-              <div className="actions" style={{ marginTop: 16 }}>
-                <Button onClick={() => applyMutation.mutate()} disabled={!batchId || applyMutation.isPending}>Thay link và xuất kết quả</Button>
-              </div>
-              {finalOutput?.text ? <Textarea readOnly value={finalOutput.text} style={{ marginTop: 16 }} /> : null}
-              {finalOutput?.fileUrl ? <p><a href={finalOutput.fileUrl}>{finalOutput.filename}</a></p> : null}
-            </SectionCard>
-          ) : null}
-        </>
-      ) : null}
+function LinkResultRow({
+  label,
+  value,
+  copied,
+  onCopy
+}: {
+  label: string;
+  value: string;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  return (
+    <div className="convert-link-row">
+      <Label>{label}</Label>
+      <div className="convert-link-control">
+        <Input readOnly value={value || "-"} />
+        <Button
+          variant="outline"
+          size="sm"
+          icon={copied ? <Check size={14} aria-hidden /> : <Clipboard size={14} aria-hidden />}
+          onClick={onCopy}
+          disabled={!value}
+        >
+          {copied ? "Đã copy" : "Copy"}
+        </Button>
+      </div>
     </div>
   );
 }

@@ -18,7 +18,7 @@ export type RuleResult = {
   needAi: boolean;
   links: RuleLink[];
   reasons: string[];
-  /** "safe" = đủ điều kiện auto publish nếu AI confidence cao + source cho phép. */
+  /** "safe" = đủ điều kiện auto publish nếu source cho phép và rule nội bộ không chặn. */
   safe: boolean;
 };
 
@@ -76,9 +76,9 @@ export function evaluateRules(input: RuleInput): RuleResult {
   };
 
   const networks = new Set(convertible.map((l) => detectNetwork(l.url)).filter((n) => n !== "unknown"));
-  if (networks.size > 1) requireReview("Trộn nhiều sàn — cần review.");
+  if (networks.size > 1) requireReview("Trộn nhiều sàn - AI cần kiểm tra kỹ.");
   if (input.isReply) requireReview("Tin là reply/comment.");
-  if (input.ambiguousCaption || (input.hasImage && cleaned.length < MIN_MEANINGFUL_LENGTH)) {
+  if (input.ambiguousCaption) {
     requireReview("Có ảnh nhưng caption mơ hồ.");
   }
   if (sourceProfile.trustLevel === "low") requireReview("Source trust thấp/mới.");

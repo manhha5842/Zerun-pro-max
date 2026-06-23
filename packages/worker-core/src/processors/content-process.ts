@@ -6,7 +6,9 @@ import {
   nextProcessedStatus,
   readSourceProfile,
   resolveRouting,
-  sanitizeDealText
+  sanitizeDealText,
+  detectNetwork,
+  expandUrl
 } from "@zerun/core";
 import { classifyError, logger, normalizeAffiliateCategories, realtimeBus, withRetry } from "@zerun/shared";
 import { contentProcessJobSchema, type ContentProcessJob } from "../types.js";
@@ -33,6 +35,7 @@ export async function processContent(rawJob: unknown, context: ProcessorContext)
     const content = await context.prisma.content.findUniqueOrThrow({
       where: { id: job.contentId },
       include: {
+        links: true,
         media: true,
         source: {
           include: { routingRules: { include: { target: true } } }
@@ -91,11 +94,18 @@ export async function processContent(rawJob: unknown, context: ProcessorContext)
     }
 
     // ── Bước 2: Routing resolution (cần trước AI để biết useAI) ─────────
-    const channelRoutingRules = content.sourceChannel?.sourceFlowLinks.flatMap((link) => {
+    const allActiveTargetChannels = await context.prisma.platformChannel.findMany({
+      where: { isTarget: true, isActive: true }
+    });
+    const activeFlowLinks = content.sourceChannel?.sourceFlowLinks.filter((link) => link.flow.isActive) ?? [];
+    const sourceChannelHasNoActiveFlow = Boolean(content.sourceChannelId) && activeFlowLinks.length === 0;
+    const channelRoutingRules = activeFlowLinks.flatMap((link) => {
       const flow = link.flow;
-      if (!flow.isActive) return [];
-      return flow.targets.flatMap((targetLink) => {
-        const channel = targetLink.channel;
+      const explicitTargets = flow.targets
+        .map((targetLink) => targetLink.channel)
+        .filter((channel) => channel.isActive && channel.isTarget);
+      const targetChannels = explicitTargets.length > 0 ? explicitTargets : allActiveTargetChannels;
+      return targetChannels.flatMap((channel) => {
         if (!channel.isActive || !channel.isTarget) return [];
         return [{
           targetId: channel.id,
@@ -126,7 +136,8 @@ export async function processContent(rawJob: unknown, context: ProcessorContext)
     let draftText = preparedText;
     let aiDecision: ReturnType<typeof decideContent> | null = null;
 
-    if (ruleResult.needAi && routing.useAI) {
+    const shouldUseAiReviewer = ruleResult.needAi && (routing.useAI || routing.requiresManualReview || ruleResult.verdict === "require_review");
+    if (shouldUseAiReviewer) {
       const provider = await loadAiProvider(context.prisma);
       if (provider) {
         try {
@@ -192,12 +203,21 @@ export async function processContent(rawJob: unknown, context: ProcessorContext)
       : null; // null = convert tất cả link hợp lệ
 
     for (const link of detectedLinks) {
+      const resolvedUrl = await expandUrl(link.url, followRedirectUrl);
+      const resolvedNetwork = detectNetwork(resolvedUrl);
+      const shouldUseResolvedUrl = resolvedNetwork !== "unknown" && (link.network === "unknown" || resolvedNetwork === link.network);
+      const conversionUrl = shouldUseResolvedUrl ? resolvedUrl : link.url;
+      const conversionNetwork = shouldUseResolvedUrl ? resolvedNetwork : link.network;
+      const isSupported = conversionNetwork !== "unknown";
+      const existingConverted = content.links.find((item) => item.originalUrl === link.url && item.status === "converted" && item.convertedUrl);
       let convertedUrl: string | null = null;
       let status = "detected";
       let error: string | undefined;
 
-      if (!link.supported) {
-        hasUnsupportedLinks = true;
+      if (existingConverted?.convertedUrl) {
+        convertedUrl = existingConverted.convertedUrl;
+        status = "converted";
+      } else if (!link.supported && !isSupported) {
         status = "unsupported";
       } else if (shouldConvertSet !== null && !shouldConvertSet.has(link.url)) {
         // AI quyết định không convert link này
@@ -207,12 +227,11 @@ export async function processContent(rawJob: unknown, context: ProcessorContext)
           const result = await withRetry(
             () =>
               context.registry.affiliateAdapter.convert({
-                url: link.url,
-                network: link.network,
-                campaignId: readCampaignId(content.source?.config),
-                subId: content.code
+                url: conversionUrl,
+                network: conversionNetwork,
+                campaignId: readCampaignId(content.source?.config)
               }),
-            { label: `convert:${link.network}`, retries: 2 }
+            { label: `convert:${conversionNetwork}`, retries: 2 }
           );
           convertedUrl = result.converted;
           status = result.success ? "converted" : "failed";
@@ -228,8 +247,8 @@ export async function processContent(rawJob: unknown, context: ProcessorContext)
 
       const saved = await context.prisma.contentLink.upsert({
         where: { contentId_originalUrl: { contentId: content.id, originalUrl: link.url } },
-        update: { convertedUrl, network: link.network, status, position: link.position, error },
-        create: { contentId: content.id, originalUrl: link.url, convertedUrl, network: link.network, status, position: link.position, error }
+        update: { convertedUrl, network: conversionNetwork, status, position: link.position, error },
+        create: { contentId: content.id, originalUrl: link.url, convertedUrl, network: conversionNetwork, status, position: link.position, error }
       });
       converted.push(saved);
     }
@@ -256,17 +275,19 @@ export async function processContent(rawJob: unknown, context: ProcessorContext)
     const finalText = applyConvertedLinks(cleanedDraft, converted);
 
     // Nếu AI ra quyết định → dùng nó, kết hợp với routing
-    const routingHoldReason = routing.holdReason === "no_matching_target"
-      ? "Không có đích phù hợp ngành hàng"
-      : routing.holdReason === "low_category_confidence"
-        ? "Độ chắc khi phân loại ngành thấp hơn 0.75"
-        : null;
+    const routingHoldReason = sourceChannelHasNoActiveFlow
+      ? "Kênh nguồn chưa được gắn vào luồng đăng lại đang bật"
+      : routing.holdReason === "no_matching_target"
+        ? "Không có kênh đích nào nhận ngành hàng này"
+        : routing.targetIds.length === 0
+          ? "Chưa có kênh đích nào đang bật"
+          : null;
 
     let nextStatus: string;
-    if (aiDecision) {
-      if (aiDecision.status === "review" || routing.requiresManualReview) {
-        nextStatus = "waiting_manual_convert";
-      } else if (aiDecision.status === "ready_to_publish" && routing.targetIds.length > 0) {
+    if (failedLink) {
+      nextStatus = "waiting_manual_convert";
+    } else if (aiDecision) {
+      if (aiDecision.status === "ready_to_publish" && routing.targetIds.length > 0) {
         nextStatus = "ready_to_publish";
       } else if (aiDecision.status === "ready_to_publish") {
         nextStatus = "waiting_manual_convert";
@@ -352,7 +373,7 @@ export async function processContent(rawJob: unknown, context: ProcessorContext)
     });
 
     if (nextStatus === "ready_to_publish" && !held) {
-      // With AI: auto-publish only if AI confidence ≥ 0.85 (aiDecision.autoPublish=true)
+      // With AI: auto-publish when AI says shouldPublish=true and routing has auto targets.
       // Without AI: trust routing rule directly (autoPublish + !requireReview)
       // Shadow mode / kill switch (held=true): giữ lại chờ duyệt, không đăng.
       await Promise.all(
@@ -483,5 +504,29 @@ async function isAutoPublishEnabled(prisma: ProcessorContext["prisma"]): Promise
     return true;
   } catch {
     return true;
+  }
+}
+
+async function followRedirectUrl(url: string): Promise<string> {
+  const headers = {
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+  };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const head = await fetch(url, { method: "HEAD", redirect: "follow", headers, signal: controller.signal });
+    return head.url || url;
+  } catch {
+    const getController = new AbortController();
+    const getTimeout = setTimeout(() => getController.abort(), 10_000);
+    try {
+      const get = await fetch(url, { method: "GET", redirect: "follow", headers, signal: getController.signal });
+      await get.body?.cancel().catch(() => undefined);
+      return get.url || url;
+    } finally {
+      clearTimeout(getTimeout);
+    }
+  } finally {
+    clearTimeout(timeout);
   }
 }

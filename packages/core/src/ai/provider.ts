@@ -22,7 +22,7 @@ export type AiClassifyResult = {
 
 /**
  * Interface chung cho mọi AI provider (OpenAI / DeepSeek / MiniMax / Anthropic / local).
- * Implementation cụ thể đặt ở worker hoặc adapters, nhận key từ `AiConfig`.
+ * Implementation cụ thể đặt ở worker hoặc adapters, nhận key từ Settings AI toàn hệ thống.
  */
 export interface AiProvider {
   readonly name: string;

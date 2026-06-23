@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { RefreshCw, Save, TestTube2, Eye, EyeOff, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import { apiGet, apiPost, apiPut } from "../api/client";
 import { PageHeader } from "../components/common/PageHeader";
@@ -242,7 +242,7 @@ export function AiSettingsPage() {
             {
               title: "Test rồi mới lưu",
               status: "ready",
-              description: "Bấm Test kết nối. Sau khi thấy Kết nối OK, bấm Lưu AI. Lệnh lưu hiện cập nhật trực tiếp AiConfig mà worker sử dụng.",
+              description: "Bấm Test kết nối. Sau khi thấy Kết nối OK, cấu hình AI trong Settings sẽ được lưu và worker dùng ngay cho mọi flow bật AI.",
               verification: "Kết quả hiển thị tên model và latency; worker không còn báo AI tắt."
             }
           ]}
@@ -426,7 +426,7 @@ function ShopeeCard({
                   disabled={disabled}
                 >
                   <option value="accesstrade">AccessTrade</option>
-                  <option value="web">Web UI</option>
+                  <option value="web">Web UI (Extension)</option>
                 </Select>
               </div>
               <div className="flex flex-col justify-end">
@@ -450,7 +450,7 @@ function ShopeeCard({
                   disabled={disabled}
                 >
                   <option value="accesstrade">AccessTrade</option>
-                  <option value="web">Web UI</option>
+                  <option value="web">Web UI (Extension)</option>
                 </Select>
               </div>
             )}
@@ -588,7 +588,19 @@ function LazadaCard({
   onTest: () => void;
 }) {
   const disabled = !config.enabled;
-  const { warning: subIdWarning } = mapLazadaSubIdsBySource(config.subIds, config.primarySource);
+  const defaultSet = config.subIdSets?.find((s) => s.isDefault) || config.subIdSets?.[0] || {
+    id: "default",
+    name: "Mặc định",
+    subId1: "",
+    subId2: "",
+    subId3: "",
+    subId4: "",
+    subId5: "",
+    subId6: "",
+    isDefault: true,
+    subIdKey: ""
+  };
+  const { warning: subIdWarning } = mapLazadaSubIdsBySource(defaultSet, config.primarySource);
 
   return (
     <div className="flex flex-col bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden hover:shadow-md transition-shadow">
@@ -617,14 +629,13 @@ function LazadaCard({
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>Nguồn chính</Label>
-                <Select
-                  value={config.primarySource}
+                 <Select
+                  value={config.primarySource === "lazada_api" ? "web" : config.primarySource}
                   onChange={(e) => onChange({ primarySource: e.target.value as any })}
                   disabled={disabled}
                 >
-                  <option value="lazada_api">Lazada API</option>
                   <option value="accesstrade">AccessTrade</option>
-                  <option value="web">Web UI</option>
+                  <option value="web">Web UI (Extension)</option>
                 </Select>
               </div>
               <div className="flex flex-col justify-end">
@@ -643,12 +654,12 @@ function LazadaCard({
               <div className="w-1/2">
                 <Label>Nguồn fallback</Label>
                 <Select
-                  value={config.fallbackSource}
+                  value={config.fallbackSource === "lazada_api" ? "web" : config.fallbackSource}
                   onChange={(e) => onChange({ fallbackSource: e.target.value as any })}
                   disabled={disabled}
                 >
                   <option value="accesstrade">AccessTrade</option>
-                  <option value="web">Web UI</option>
+                  <option value="web">Web UI (Extension)</option>
                 </Select>
               </div>
             )}
@@ -656,46 +667,6 @@ function LazadaCard({
 
           <div className="flex flex-col gap-3">
             <h3 className="text-sm font-semibold border-b pb-1 text-gray-700 dark:text-gray-300">Credentials</h3>
-            {config.primarySource === "lazada_api" && (
-              <>
-                <SecretInput
-                  label="Lazada App Key"
-                  value={config.appKey}
-                  onChange={(val) => onChange({ appKey: val })}
-                  disabled={disabled}
-                  placeholder="Lazada App Key"
-                />
-                <SecretInput
-                  label="Lazada App Secret"
-                  value={config.appSecret}
-                  onChange={(val) => onChange({ appSecret: val })}
-                  disabled={disabled}
-                  placeholder="Lazada App Secret"
-                />
-                <SecretInput
-                  label="Lazada Access Token"
-                  value={config.accessToken}
-                  onChange={(val) => onChange({ accessToken: val })}
-                  disabled={disabled}
-                  placeholder="Lazada Access Token"
-                />
-                <div>
-                  <Label>Lazada Region</Label>
-                  <Select
-                    value={config.region}
-                    onChange={(e) => onChange({ region: e.target.value })}
-                    disabled={disabled}
-                  >
-                    <option value="VN">Việt Nam (VN)</option>
-                    <option value="SG">Singapore (SG)</option>
-                    <option value="MY">Malaysia (MY)</option>
-                    <option value="TH">Thái Lan (TH)</option>
-                    <option value="PH">Philippines (PH)</option>
-                    <option value="ID">Indonesia (ID)</option>
-                  </Select>
-                </div>
-              </>
-            )}
             
             {(config.primarySource === "accesstrade" || config.fallbackSource === "accesstrade") && (
               <>
@@ -722,9 +693,27 @@ function LazadaCard({
           <div className="flex flex-col gap-3">
             <h3 className="text-sm font-semibold border-b pb-1 text-gray-700 dark:text-gray-300">Tracking/Sub ID</h3>
             <SubIdFields
-              subIds={config.subIds}
-              onChange={(k, val) => onChange({ subIds: { ...config.subIds, [k]: val } })}
-              maxFields={7}
+              subIds={{
+                subId1: defaultSet.subId1,
+                subId2: defaultSet.subId2,
+                subId3: defaultSet.subId3,
+                subId4: defaultSet.subId4,
+                subId5: defaultSet.subId5,
+                subId6: defaultSet.subId6,
+              }}
+              onChange={(k, val) => {
+                const nextSets = (config.subIdSets || []).map((s) => {
+                  if (s.id === defaultSet.id) {
+                    return { ...s, [k]: val };
+                  }
+                  return s;
+                });
+                if (!config.subIdSets || config.subIdSets.length === 0) {
+                  nextSets.push({ ...defaultSet, [k]: val });
+                }
+                onChange({ subIdSets: nextSets });
+              }}
+              maxFields={6}
               warning={subIdWarning}
               disabled={disabled}
             />
@@ -1433,53 +1422,6 @@ export function TelegramAlertSettingsPage() {
             <Button icon={<Save aria-hidden />} onClick={() => save.mutate()} disabled={save.isPending}>Lưu cảnh báo</Button>
             <Button variant="secondary" icon={<TestTube2 aria-hidden />} onClick={() => test.mutate()} disabled={test.isPending}>Gửi thử</Button>
             {testResult ? <Badge tone={testResult.startsWith("Đã gửi") ? "good" : "danger"}>{testResult}</Badge> : null}
-          </div>
-        </div>
-      </SectionCard>
-    </div>
-  );
-}
-
-export function AutoPublishSettingsPage() {
-  const queryClient = useQueryClient();
-  const toast = useToast();
-  const query = useQuery({ queryKey: ["settings", "auto-publish"], queryFn: () => apiGet<{ enabled: boolean }>("/settings/auto-publish") });
-  const save = useMutation({
-    mutationFn: (enabled: boolean) => apiPut<{ enabled: boolean }>("/settings/auto-publish", { enabled }),
-    onSuccess: async (data) => {
-      toast.success(data.enabled ? "Đã bật auto-publish." : "Đã tắt auto-publish.");
-      await queryClient.invalidateQueries({ queryKey: ["settings", "auto-publish"] });
-    },
-    onError: (error) => toast.error(error.message)
-  });
-  const enabled = query.data?.enabled ?? true;
-
-  return (
-    <div className="page-stack">
-      <PageHeader title="Auto-publish" subtitle="Kill switch toàn hệ thống. Khi tắt, worker vẫn phân tích nhưng giữ nội dung lại để duyệt." />
-      <SectionCard title="Cách dùng an toàn">
-        <SetupGuide
-          steps={[
-            { title: "Bật khi đã test routing", description: "Chỉ bật sau khi nguồn, target và category preview đã đúng." },
-            { title: "Tắt khi có rủi ro", description: "Nếu session lỗi, AI lỗi hoặc ngành route sai, tắt kill switch để mọi nội dung vào hàng chờ duyệt." },
-            { title: "Dùng chung với confidence", description: "Dù bật auto-publish, content có categoryConfidence < 0.75 vẫn bị giữ lại." }
-          ]}
-        />
-      </SectionCard>
-      <SectionCard title="Trạng thái">
-        <div className="simple-row">
-          <div className="simple-row-main">
-            <div className="simple-row-title">
-              <span>Auto-publish toàn hệ thống</span>
-              <Badge tone={enabled ? "good" : "warn"}>{enabled ? "Đang bật" : "Đang tắt"}</Badge>
-            </div>
-            <small>Khi tắt, worker ghi nhận wouldPublishTargets nhưng không enqueue publish.</small>
-          </div>
-          <div className="actions">
-            <Button variant="secondary" icon={<RefreshCw aria-hidden />} onClick={() => query.refetch()} disabled={query.isFetching}>Làm mới</Button>
-            <Button onClick={() => save.mutate(!enabled)} disabled={save.isPending}>
-              {enabled ? "Tắt auto-publish" : "Bật auto-publish"}
-            </Button>
           </div>
         </div>
       </SectionCard>

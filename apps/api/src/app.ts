@@ -13,15 +13,19 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { Prisma, type CrawlResult } from "@prisma/client";
 import { compare, hash } from "bcryptjs";
 import * as XLSX from "xlsx";
-import { detectLinks } from "@zerun/core";
+import { listZaloGroups } from "@zerun/adapters";
+import { detectLinks, detectNetwork, expandUrl } from "@zerun/core";
 import type { BrowserContext } from "playwright";
 import { ensureDatabaseReady, prisma } from "@zerun/db";
 import { buildPagination, fail, ok, readDesktopRuntime, realtimeBus, updateDesktopRuntimeConfig, type Platform } from "@zerun/shared";
-import { createWorkerCore, type WorkerCore, AccessTradeAffiliateAdapter, LazadaAffiliateAdapter, ShopeeAffiliateAdapter, ShopeeAffiliateIdAdapter } from "@zerun/worker-core";
+import { createWorkerCore, type WorkerCore, AccessTradeAffiliateAdapter, LazadaAffiliateAdapter, OpenAICompatibleProvider, ShopeeAffiliateAdapter, ShopeeAffiliateIdAdapter, invalidateAiProviderCache } from "@zerun/worker-core";
 import { config } from "./config.js";
-import { registerShopeeBrowserConvertRoutes } from "./shopee-browser-routes.js";
+import { zerunExtensionBridge } from "./zerun-extension-bridge.js";
 
 type AnyBody = Record<string, any>;
+
+// Copy guard: Quản lý tài khoản chỉ áp dụng cho tài khoản đăng của user.
+// Không test tài khoản nguồn ở trang Quản lý tài khoản.
 
 type BrowserLoginPlatform = "facebook" | "instagram" | "threads" | "x";
 
@@ -65,6 +69,7 @@ type ConvertLinkBatch = {
 };
 
 const convertLinkBatches = new Map<string, ConvertLinkBatch>();
+const REPOST_SOURCE_HISTORY_MAX_ITEMS = 2000;
 
 async function persistPlatformAccountSessionState(platform: BrowserLoginPlatform, accountId: string, payload: Record<string, unknown>) {
   return prisma.platformSession.upsert({
@@ -118,6 +123,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   app.decorate("workerCore", workerCore);
   app.addHook("onClose", async () => {
     await workerCore.stop();
+    await zerunExtensionBridge.stop();
     await prisma.$disconnect();
   });
 
@@ -135,6 +141,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
   await app.register(fastifyMultipart);
   await app.register(fastifyWebsocket);
+  await zerunExtensionBridge.start();
 
   app.decorate("authenticate", async (request: FastifyRequest, reply: FastifyReply) => {
     try {
@@ -266,7 +273,6 @@ async function registerProtectedRoutes(app: FastifyInstance) {
   registerRoutingRoutes(app);
   registerLinkRoutes(app);
   registerConvertLinkToolRoutes(app);
-  await registerShopeeBrowserConvertRoutes(app);
   registerScheduleRoutes(app);
   registerAccountRoutes(app);
   registerAiRoutes(app);
@@ -435,11 +441,12 @@ function registerFailedRoutes(app: FastifyInstance) {
       targetIds = [...new Set(attempts.map((item) => item.targetId))];
     }
 
-    if (targetIds.length === 0) return reply.code(400).send(fail("NO_TARGETS", "Cần chỉ định tài khoản đăng."));
+    const publishJobs = await resolvePublishJobs(targetIds);
+    if (publishJobs.length === 0) return reply.code(400).send(fail("NO_TARGETS", "Cần chỉ định tài khoản đăng."));
 
     await prisma.content.update({ where: { code }, data: { status: "ready_to_publish" } });
-    await Promise.all(targetIds.map((targetId) => app.workerCore.publishNow(content.id, targetId, "admin")));
-    return ok({ queued: true, targetCount: targetIds.length });
+    await Promise.all(publishJobs.map((job) => app.workerCore.publishNow(content.id, job.targetId, "admin", job.targetChannelId)));
+    return ok({ queued: true, targetCount: publishJobs.length });
   });
 
   app.post("/failed/:code/reschedule", async (request, reply) => {
@@ -607,13 +614,7 @@ function registerExtendedSettingsRoutes(app: FastifyInstance) {
     return ok({ saved: true, restartRequired: true, runtime: formatRuntimeSettings(runtime) });
   });
 
-  registerSettingSection(app, "/settings/ai", "ai_settings", {
-    provider: "",
-    apiKey: "",
-    model: "",
-    rewritePrompt: "Viết lại nội dung tự nhiên bằng tiếng Việt có dấu, giữ ý chính và bỏ link không hợp lệ nếu cần.",
-    removeInvalidLinkPrompt: "Xóa hoặc viết lại đoạn chứa link không hỗ trợ, không làm mất ý chính."
-  });
+  registerAiSettingsRoutes(app);
   registerSettingSection(app, "/settings/cloudinary", "cloudinary_settings", {
     keys: [],
     enabled: false
@@ -768,6 +769,79 @@ function registerExtendedSettingsRoutes(app: FastifyInstance) {
   });
 }
 
+const DEFAULT_AI_SETTINGS = {
+  provider: "",
+  apiKey: "",
+  model: "",
+  rewritePrompt: "Viết lại nội dung tự nhiên bằng tiếng Việt có dấu, giữ ý chính và bỏ link không hợp lệ nếu cần.",
+  removeInvalidLinkPrompt: "Xóa hoặc viết lại đoạn chứa link không hỗ trợ, không làm mất ý chính."
+};
+
+function normalizeString(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeBaseUrl(value: unknown) {
+  return normalizeString(value).replace(/\/+$/, "");
+}
+
+function readAiSettingsPayload(value: unknown) {
+  const body = value && typeof value === "object" && !Array.isArray(value) ? value as AnyBody : {};
+  return {
+    provider: normalizeBaseUrl(body.provider ?? body.baseUrl ?? body.endpoint),
+    apiKey: normalizeString(body.apiKey),
+    model: normalizeString(body.model),
+    rewritePrompt: normalizeString(body.rewritePrompt) || DEFAULT_AI_SETTINGS.rewritePrompt,
+    removeInvalidLinkPrompt: normalizeString(body.removeInvalidLinkPrompt) || DEFAULT_AI_SETTINGS.removeInvalidLinkPrompt
+  };
+}
+
+async function readAiSettings() {
+  const setting = await prisma.systemSetting.findUnique({ where: { key: "ai_settings" } });
+  const saved = { ...DEFAULT_AI_SETTINGS, ...((setting?.value ?? {}) as AnyBody) } as AnyBody;
+  return {
+    provider: normalizeBaseUrl(saved.baseUrl ?? saved.provider ?? saved.endpoint),
+    apiKey: normalizeString(saved.apiKey),
+    model: normalizeString(saved.model),
+    rewritePrompt: normalizeString(saved.rewritePrompt) || DEFAULT_AI_SETTINGS.rewritePrompt,
+    removeInvalidLinkPrompt: normalizeString(saved.removeInvalidLinkPrompt) || DEFAULT_AI_SETTINGS.removeInvalidLinkPrompt
+  };
+}
+
+async function saveAiSettings(settings: ReturnType<typeof readAiSettingsPayload>) {
+  await prisma.systemSetting.upsert({
+    where: { key: "ai_settings" },
+    create: { key: "ai_settings", value: settings },
+    update: { value: settings }
+  });
+  invalidateAiProviderCache();
+}
+
+function registerAiSettingsRoutes(app: FastifyInstance) {
+  app.get("/settings/ai", async () => ok(await readAiSettings()));
+
+  app.put("/settings/ai", async (request) => {
+    const settings = readAiSettingsPayload(request.body);
+    await saveAiSettings(settings);
+    return ok({ saved: true, value: settings });
+  });
+
+  app.post("/settings/ai/test-connection", async (request, reply) => {
+    const settings = readAiSettingsPayload(request.body);
+    if (!settings.provider) return reply.code(400).send(fail("AI_BASE_URL_REQUIRED", "Cần nhập Base URL của AI."));
+    if (!settings.apiKey) return reply.code(400).send(fail("AI_API_KEY_REQUIRED", "Cần nhập API key của AI."));
+
+    const provider = new OpenAICompatibleProvider({
+      baseUrl: settings.provider,
+      apiKey: settings.apiKey,
+      model: settings.model || "auto"
+    });
+    const result = await provider.testConnection();
+    if (result.ok) await saveAiSettings(settings);
+    return ok(result);
+  });
+}
+
 function formatRuntimeSettings(runtime: ReturnType<typeof readDesktopRuntime>) {
   return {
     appId: runtime.appId,
@@ -838,7 +912,8 @@ function buildContentWhere(input: AnyBody): Prisma.ContentWhereInput {
   const status = input.status ? String(input.status) : "";
 
   if (status && status !== "all") {
-    where.status = status;
+    const statuses = status.split(",").map((item) => item.trim()).filter(Boolean);
+    where.status = statuses.length > 1 ? { in: statuses } : status;
   }
 
   if (status !== "trashed" && !input.includeTrash) {
@@ -1044,24 +1119,78 @@ async function resolvePublishTargetIds(content: { id: string; platform: string; 
   return uniqueStrings(platformTargets.map((target) => target.id));
 }
 
+type PublishTargetJob = { targetId: string; targetChannelId?: string };
+
+function contentPublishText(content: { finalText?: string | null; draftText?: string | null; originalText: string }) {
+  return content.finalText ?? content.draftText ?? content.originalText;
+}
+
+function findUnconvertedPublishLinks(content: {
+  finalText?: string | null;
+  draftText?: string | null;
+  originalText: string;
+  links?: Array<{ originalUrl: string; convertedUrl?: string | null; status: string }>;
+}) {
+  const text = contentPublishText(content);
+  return (content.links ?? []).filter((link) => {
+    if (!text.includes(link.originalUrl)) return false;
+    return !link.convertedUrl || ["detected", "failed", "unsupported"].includes(link.status);
+  });
+}
+
+async function resolvePublishJobs(targetIds: string[]): Promise<PublishTargetJob[]> {
+  const requestedTargetIds = uniqueStrings(targetIds);
+  if (requestedTargetIds.length === 0) return [];
+
+  const targetChannels = await prisma.platformChannel.findMany({
+    where: { id: { in: requestedTargetIds }, isTarget: true, isActive: true },
+    select: { id: true, accountId: true }
+  });
+  const channelById = new Map(targetChannels.map((channel) => [channel.id, channel]));
+  const channelIds = new Set(targetChannels.map((channel) => channel.id));
+  const accountIds = requestedTargetIds.filter((id) => !channelIds.has(id));
+  const targetAccounts = accountIds.length > 0
+    ? await prisma.targetAccount.findMany({
+        where: { id: { in: accountIds }, isActive: true, health: { not: "paused" } },
+        select: { id: true }
+      })
+    : [];
+
+  const jobs = [
+    ...requestedTargetIds.flatMap((id) => {
+      const channel = channelById.get(id);
+      return channel ? [{ targetId: channel.accountId, targetChannelId: channel.id }] : [];
+    }),
+    ...targetAccounts.map((target) => ({ targetId: target.id, targetChannelId: undefined as string | undefined }))
+  ];
+  const seen = new Set<string>();
+  return jobs.filter((job) => {
+    const key = `${job.targetId}:${job.targetChannelId ?? ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 async function enqueueContentContinuation(
   app: FastifyInstance,
   content: { id: string; status: string; platform: string; scheduledAt: Date | null; scheduledTargets: unknown },
   action: "retry" | "resume"
 ) {
   const targetIds = await resolvePublishTargetIds(content);
-  if (targetIds.length === 0) {
+  const publishJobs = await resolvePublishJobs(targetIds);
+  if (publishJobs.length === 0) {
     await app.workerCore.processContent(content.id);
     return { processed: true, queuedPublishes: 0, queuedSchedules: 0 };
   }
 
   if (action === "resume" && content.scheduledAt && content.scheduledAt.getTime() > Date.now()) {
-    const schedules = await scheduleContentForTargets(app, content.id, targetIds, content.scheduledAt);
+    const schedules = await scheduleContentForTargets(app, content.id, uniqueStrings(publishJobs.map((job) => job.targetId)), content.scheduledAt);
     return { processed: false, queuedPublishes: 0, queuedSchedules: schedules.length };
   }
 
-  await Promise.all(targetIds.map((targetId) => app.workerCore.publishNow(content.id, targetId, "admin")));
-  return { processed: false, queuedPublishes: targetIds.length, queuedSchedules: 0 };
+  await Promise.all(publishJobs.map((job) => app.workerCore.publishNow(content.id, job.targetId, "admin", job.targetChannelId)));
+  return { processed: false, queuedPublishes: publishJobs.length, queuedSchedules: 0 };
 }
 
 function registerContentRoutes(app: FastifyInstance) {
@@ -1379,6 +1508,47 @@ function registerContentRoutes(app: FastifyInstance) {
     return ok({ success: true });
   });
 
+  app.get("/content-links", async (request) => {
+    const query = request.query as AnyBody;
+    const statuses = String(query.status ?? "failed,detected,unsupported")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const limit = Math.min(Math.max(Number(query.limit ?? 100), 1), 200);
+    const links = await prisma.contentLink.findMany({
+      where: statuses.length > 0 ? { status: { in: statuses } } : {},
+      include: { content: true },
+      orderBy: { updatedAt: "desc" },
+      take: limit
+    });
+    return ok({ links });
+  });
+
+  app.put("/content-links/:id/manual-convert", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as AnyBody;
+    const convertedUrl = String(body.convertedUrl ?? "").trim();
+    if (!convertedUrl) return reply.code(400).send(fail("BAD_REQUEST", "Cần nhập link affiliate đã convert."));
+
+    const link = await prisma.contentLink.update({
+      where: { id },
+      data: { convertedUrl, status: "converted", error: null }
+    }).catch(() => null);
+    if (!link) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy link cần xử lý."));
+
+    await prisma.content.update({
+      where: { id: link.contentId },
+      data: {
+        status: "discovered",
+        savedReason: null,
+        savedSource: null,
+        lastError: null
+      }
+    });
+    await app.workerCore.processContent(link.contentId);
+    return ok({ link, queued: true });
+  });
+
   app.post("/contents/:code/manual-link", async (request, reply) => {
     const { code } = request.params as { code: string };
     const body = request.body as AnyBody;
@@ -1414,43 +1584,64 @@ function registerContentRoutes(app: FastifyInstance) {
     const { code } = request.params as { code: string };
     const content = await prisma.content.findUnique({ where: { code } });
     if (!content) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy nội dung."));
-    const queued = await enqueueContentContinuation(app, content, "retry");
-    return ok({ queued: true, ...queued });
+    await prisma.content.update({
+      where: { id: content.id },
+      data: {
+        status: "discovered",
+        finalText: null,
+        lastError: null,
+        savedReason: null,
+        savedSource: null,
+        retryCount: { increment: 1 }
+      }
+    });
+    await app.workerCore.processContent(content.id);
+    return ok({ queued: true, processed: true, queuedPublishes: 0, message: "Đã chạy lại xử lý; content-process sẽ convert link trước khi đăng." });
   });
   app.post("/contents/:code/publish", async (request, reply) => {
     const { code } = request.params as { code: string };
     const body = request.body as AnyBody;
-    const content = await prisma.content.findUnique({ where: { code } });
+    const content = await prisma.content.findUnique({ where: { code }, include: { links: true } });
     if (!content) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy nội dung."));
+    const unconvertedLinks = findUnconvertedPublishLinks(content);
+    if (unconvertedLinks.length > 0) {
+      return reply.code(409).send(fail("LINK_NOT_CONVERTED", "Vui lòng convert link trước khi đăng. Nội dung hiện vẫn còn link gốc.", {
+        links: unconvertedLinks.map((link) => ({ originalUrl: link.originalUrl, status: link.status }))
+      }));
+    }
 
-    // Resolve target IDs: body.targetIds > content.scheduledTargets > active targets matching content.platform
+    // Resolve targets: body.targetIds > content.scheduledTargets > active PlatformChannel targets.
     // Routing by platform:
     //   facebook  → publishNow (routes to facebook adapter via publish queue)
     //   instagram → publishNow (routes to instagram adapter via publish queue)
     //   threads   → publishNow (routes to threads adapter via publish queue)
     //   default   → publishNow (routes to whichever adapter matches the target)
     // Note: fb-post queue is only for the FbCampaign/FbPostTarget system and requires a different data model.
-    let targetIds: string[] = [];
+    let requestedTargetIds: string[] = [];
     if (Array.isArray(body.targetIds) && body.targetIds.length > 0) {
-      targetIds = body.targetIds.map(String);
+      requestedTargetIds = body.targetIds.map(String);
     } else if (Array.isArray(content.scheduledTargets) && (content.scheduledTargets as unknown[]).length > 0) {
-      targetIds = (content.scheduledTargets as unknown[]).map(String);
+      requestedTargetIds = (content.scheduledTargets as unknown[]).map(String);
     } else {
-      // Fallback: find active targets matching content.platform
-      const contentPlatform = content.platform && content.platform !== "manual" ? content.platform : "facebook";
-      const platformTargets = await prisma.targetAccount.findMany({
-        where: { platform: contentPlatform, isActive: true, health: { not: "paused" } },
+      const activeTargetChannels = await prisma.platformChannel.findMany({
+        where: { isTarget: true, isActive: true },
         select: { id: true }
       });
-      targetIds = platformTargets.map((target) => target.id);
+      requestedTargetIds = activeTargetChannels.map((target) => target.id);
     }
 
-    if (targetIds.length === 0) {
-      return reply.code(400).send(fail("TARGET_REQUIRED", `Không tìm được tài khoản đích để đăng (nền tảng: ${content.platform}). Hãy chọn tài khoản đích hoặc tạo tài khoản phù hợp.`));
+    if (requestedTargetIds.length === 0) {
+      return reply.code(400).send(fail("TARGET_REQUIRED", "Chưa có kênh đích nào đang bật."));
     }
 
-    await Promise.all(targetIds.map((targetId) => app.workerCore.publishNow(content.id, targetId, "admin")));
-    return ok({ queued: true, targetCount: targetIds.length, platform: content.platform });
+    const jobs = await resolvePublishJobs(requestedTargetIds);
+
+    if (jobs.length === 0) {
+      return reply.code(400).send(fail("TARGET_REQUIRED", "Không có kênh đích nào nhận nội dung này."));
+    }
+
+    await Promise.all(jobs.map((job) => app.workerCore.publishNow(content.id, job.targetId, "admin", job.targetChannelId)));
+    return ok({ queued: true, targetCount: jobs.length, platform: content.platform });
   });
   app.post("/contents/:code/schedule", async (request, reply) => {
     const { code } = request.params as { code: string };
@@ -2270,17 +2461,43 @@ function registerLinkRoutes(app: FastifyInstance) {
     const urls = Array.isArray(body.urls) ? body.urls.map(String) : [];
     const results = await Promise.all(
       urls.map(async (url) => {
-        const detected = detectLinks(url)[0] ?? { url, network: "unknown" as const };
-        return app.workerCore.registry.affiliateAdapter.convert({
-          url,
+        const resolvedUrl = await expandUrl(url, followRedirectUrl);
+        const detected = detectLinks(resolvedUrl)[0] ?? { url: resolvedUrl, network: detectNetwork(resolvedUrl) };
+        const result = await app.workerCore.registry.affiliateAdapter.convert({
+          url: resolvedUrl,
           network: detected.network,
           campaignId: body.campaignId,
           subId: body.subId
         });
+        return { ...result, originalUrl: url, resolvedUrl };
       })
     );
     return ok({ results });
   });
+}
+
+async function followRedirectUrl(url: string): Promise<string> {
+  const headers = {
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+  };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const head = await fetch(url, { method: "HEAD", redirect: "follow", headers, signal: controller.signal });
+    return head.url || url;
+  } catch {
+    const getController = new AbortController();
+    const getTimeout = setTimeout(() => getController.abort(), 10_000);
+    try {
+      const get = await fetch(url, { method: "GET", redirect: "follow", headers, signal: getController.signal });
+      await get.body?.cancel().catch(() => undefined);
+      return get.url || url;
+    } finally {
+      clearTimeout(getTimeout);
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function readConvertToolPayload(request: FastifyRequest) {
@@ -2345,6 +2562,233 @@ function replaceAllUrls(text: string, results: ConvertLinkBatch["results"]) {
 }
 
 function registerConvertLinkToolRoutes(app: FastifyInstance) {
+  app.get("/tools/convert-link/extension-status", async () => {
+    return ok(zerunExtensionBridge.getStatus());
+  });
+
+  app.post("/tools/convert-link/extension-convert", async (request) => {
+    const body = request.body as AnyBody;
+    const url = String(body.url ?? body.originalUrl ?? "").trim();
+    const outputType = String(body.outputType ?? "shortlink") === "full" ? "full" : "shortlink";
+    const subIdsRaw = Array.isArray(body.subIds) ? body.subIds : [];
+    const subIds = subIdsRaw.map((item) => String(item ?? ""));
+    const subId = typeof body.subId === "string" ? body.subId : undefined;
+
+    // Tự động thay thế nhanh nếu link Shopee đầu vào chứa sẵn affiliate_id
+    try {
+      const setting = await prisma.systemSetting.findUnique({ where: { key: "affiliate_settings" } });
+      const affiliateConfig = (setting?.value || {}) as any;
+      const shopeeConfig = affiliateConfig.shopee;
+
+      if (shopeeConfig?.enabled && shopeeConfig.affiliateId) {
+        const urlObj = new URL(url);
+        const host = urlObj.hostname.toLowerCase().replace(/^www\./, "");
+        const isShopee = host === "shopee.vn" || host.endsWith(".shopee.vn") || host === "s.shopee.vn" || host === "shp.ee" || host === "shopee.ee";
+
+        if (isShopee) {
+          let matched = false;
+          const affiliateId = shopeeConfig.affiliateId.trim();
+
+          if (urlObj.searchParams.has("affiliate_id")) {
+            urlObj.searchParams.set("affiliate_id", affiliateId);
+            matched = true;
+          }
+          const utmMedium = urlObj.searchParams.get("utm_medium");
+          const utmSource = urlObj.searchParams.get("utm_source");
+          if (utmMedium === "affiliates" && utmSource && utmSource.startsWith("an_")) {
+            urlObj.searchParams.set("utm_source", `an_${affiliateId}`);
+            matched = true;
+          }
+
+          if (matched) {
+            const finalUrl = urlObj.toString();
+            return ok({
+              status: "DONE",
+              originalUrl: url,
+              convertedUrl: finalUrl,
+              shortLink: finalUrl,
+              longLink: finalUrl,
+              success: true,
+              via: "fast_replace"
+            });
+          }
+        }
+      }
+    } catch (e) {
+      // Bỏ qua lỗi và tiếp tục convert qua extension
+    }
+
+    // Tìm lazadaSubIdSet nếu là link Lazada
+    let lazadaSubIdSet = body.lazadaSubIdSet;
+    const isLazada = url.includes("lazada.vn") || url.includes("s.lazada.vn");
+    if (isLazada && !lazadaSubIdSet) {
+      try {
+        const setting = await prisma.systemSetting.findUnique({ where: { key: "affiliate_settings" } });
+        const affiliateConfig = (setting?.value || {}) as any;
+        const subIdSets = affiliateConfig.lazada?.subIdSets || [];
+        const defaultSet = subIdSets.find((s: any) => s.isDefault) || subIdSets[0];
+        if (defaultSet) {
+          lazadaSubIdSet = defaultSet;
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    const result = await zerunExtensionBridge.convert({ url, subIds, subId, outputType, lazadaSubIdSet });
+
+    return ok({
+      ...result,
+      originalUrl: url,
+      convertedUrl: outputType === "full" ? result.longLink ?? result.shortLink ?? null : result.shortLink ?? result.longLink ?? null,
+      success: result.status === "DONE"
+    });
+  });
+
+  app.post("/tools/convert-link/lazada/sync-subid", async (request) => {
+    const body = request.body as AnyBody;
+    const action = String(body.action ?? "").trim() as "add" | "edit" | "delete" | "set-default";
+    const template = (body.template ?? {}) as any;
+    const setId = String(body.setId ?? template.id ?? "").trim();
+
+    try {
+      const setting = await prisma.systemSetting.findUnique({ where: { key: "affiliate_settings" } });
+      const affiliateConfig = (setting?.value || { lazada: {} }) as any;
+      if (!affiliateConfig.lazada) {
+        affiliateConfig.lazada = {};
+      }
+      if (!Array.isArray(affiliateConfig.lazada.subIdSets)) {
+        // Migration từ subIds cũ
+        const oldSubIds = affiliateConfig.lazada.subIds || {
+          subId1: "", subId2: "", subId3: "", subId4: "", subId5: "", subId6: ""
+        };
+        affiliateConfig.lazada.subIdSets = [
+          {
+            id: "default",
+            name: "Mặc định",
+            subId1: oldSubIds.subId1 || "",
+            subId2: oldSubIds.subId2 || "",
+            subId3: oldSubIds.subId3 || "",
+            subId4: oldSubIds.subId4 || "",
+            subId5: oldSubIds.subId5 || "",
+            subId6: oldSubIds.subId6 || "",
+            isDefault: true,
+            subIdKey: ""
+          }
+        ];
+      }
+
+      let subIdSets = affiliateConfig.lazada.subIdSets as any[];
+
+      if (action === "set-default") {
+        if (!setId) {
+          return fail("BAD_REQUEST", "Thiếu Set ID để đặt làm mặc định.");
+        }
+        subIdSets = subIdSets.map((s) => ({
+          ...s,
+          isDefault: s.id === setId
+        }));
+        affiliateConfig.lazada.subIdSets = subIdSets;
+        // Cập nhật trường subId tương thích ngược
+        const defaultSet = subIdSets.find((s) => s.isDefault);
+        if (defaultSet) {
+          affiliateConfig.lazada.subId = JSON.stringify({
+            subId1: defaultSet.subId1,
+            subId2: defaultSet.subId2,
+            subId3: defaultSet.subId3,
+            subId4: defaultSet.subId4,
+            subId5: defaultSet.subId5,
+            subId6: defaultSet.subId6,
+          });
+        }
+        await prisma.systemSetting.upsert({
+          where: { key: "affiliate_settings" },
+          create: { key: "affiliate_settings", value: affiliateConfig },
+          update: { value: affiliateConfig }
+        });
+        return ok({ success: true, subIdSets });
+      }
+
+      // Với các action tương tác extension (add, edit, delete)
+      if (action === "add" || action === "edit" || action === "delete") {
+        const syncResult = await zerunExtensionBridge.syncLazadaSubId(action, template);
+        if (!syncResult.success && syncResult.status !== "DONE") {
+          return fail("BAD_REQUEST", syncResult.message || syncResult.error || "Extension đồng bộ thất bại.");
+        }
+
+        const subIdKey = String(syncResult.subIdKey ?? syncResult.templateKey ?? template.subIdKey ?? "").trim();
+
+        if (action === "add") {
+          const newSet = {
+            id: template.id || `set_${randomUUID()}`,
+            name: template.name || "Set mới",
+            subId1: template.subId1 || "",
+            subId2: template.subId2 || "",
+            subId3: template.subId3 || "",
+            subId4: template.subId4 || "",
+            subId5: template.subId5 || "",
+            subId6: template.subId6 || "",
+            isDefault: subIdSets.length === 0 ? true : !!template.isDefault,
+            subIdKey
+          };
+          if (newSet.isDefault) {
+            subIdSets = subIdSets.map((s) => ({ ...s, isDefault: false }));
+          }
+          subIdSets.push(newSet);
+        } else if (action === "edit") {
+          subIdSets = subIdSets.map((s) => {
+            if (s.id === template.id) {
+              return {
+                ...s,
+                name: template.name || s.name,
+                subId1: template.subId1 ?? s.subId1,
+                subId2: template.subId2 ?? s.subId2,
+                subId3: template.subId3 ?? s.subId3,
+                subId4: template.subId4 ?? s.subId4,
+                subId5: template.subId5 ?? s.subId5,
+                subId6: template.subId6 ?? s.subId6,
+                isDefault: template.isDefault ?? s.isDefault,
+                subIdKey: subIdKey || s.subIdKey
+              };
+            }
+            return s;
+          });
+        } else if (action === "delete") {
+          subIdSets = subIdSets.filter((s) => s.id !== setId && s.subIdKey !== subIdKey);
+          // Nếu xóa mất set mặc định, tự chọn set đầu tiên làm mặc định
+          if (subIdSets.length > 0 && !subIdSets.some((s) => s.isDefault)) {
+            subIdSets[0].isDefault = true;
+          }
+        }
+
+        affiliateConfig.lazada.subIdSets = subIdSets;
+        // Cập nhật trường subId tương thích ngược
+        const defaultSet = subIdSets.find((s) => s.isDefault);
+        if (defaultSet) {
+          affiliateConfig.lazada.subId = JSON.stringify({
+            subId1: defaultSet.subId1,
+            subId2: defaultSet.subId2,
+            subId3: defaultSet.subId3,
+            subId4: defaultSet.subId4,
+            subId5: defaultSet.subId5,
+            subId6: defaultSet.subId6,
+          });
+        }
+        await prisma.systemSetting.upsert({
+          where: { key: "affiliate_settings" },
+          create: { key: "affiliate_settings", value: affiliateConfig },
+          update: { value: affiliateConfig }
+        });
+
+        return ok({ success: true, subIdSets });
+      }
+
+      return fail("BAD_REQUEST", "Action không hợp lệ.");
+    } catch (e: any) {
+      return fail("INTERNAL_SERVER_ERROR", e.message || "Lỗi xử lý đồng bộ Sub ID Lazada.");
+    }
+  });
+
   app.post("/tools/convert-link/detect", async (request) => {
     const payload = await readConvertToolPayload(request);
     const subIds = parseJsonArray(payload.fields.subIds);
@@ -3474,16 +3918,266 @@ export function isSupportedAccountPlatform(platform: string) {
   return ["telegram", "x", "threads", "instagram", "facebook", "zalo-personal"].includes(platform);
 }
 
+function isRealtimeSourcePlatform(platform: string) {
+  return ["telegram", "zalo-personal"].includes(platform);
+}
+
 const UNSUPPORTED_PLATFORM = "Nền tảng không được hỗ trợ.";
 
 // contract check: _existingCredentials: current.credentials
+
+type ChannelAccountRole = "source" | "target";
+
+type ResolvedChannelOptionAccount = {
+  accountKind: ChannelAccountRole;
+  accountId: string;
+  platform: string;
+  name: string;
+  handle: string | null;
+  config: unknown;
+  credentials: unknown;
+  lookupAccountIds: string[];
+};
+
+function toPlainRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function sameLoginAccountWhere(account: { platform: string; name: string; handle: string | null }) {
+  const OR: Prisma.TargetAccountWhereInput[] = [{ name: account.name }];
+  if (account.handle) OR.push({ handle: account.handle });
+  return { platform: account.platform, OR };
+}
+
+function sameSourceLoginAccountWhere(account: { platform: string; name: string; handle: string | null }) {
+  const OR: Prisma.SourceAccountWhereInput[] = [{ name: account.name }];
+  if (account.handle) OR.push({ handle: account.handle });
+  return { platform: account.platform, OR };
+}
+
+async function resolveChannelOptionAccount(accountKind: string, accountId: string): Promise<ResolvedChannelOptionAccount | null> {
+  if (accountKind === "source") {
+    const source = await prisma.sourceAccount.findUnique({ where: { id: accountId } });
+    if (!source) return null;
+    return {
+      accountKind: "source",
+      accountId: source.id,
+      platform: source.platform,
+      name: source.name,
+      handle: source.handle,
+      config: source.config,
+      credentials: source.credentials,
+      lookupAccountIds: [source.id]
+    };
+  }
+
+  if (accountKind === "target") {
+    const target = await prisma.targetAccount.findUnique({ where: { id: accountId } });
+    if (!target) return null;
+    const linkedSource = target.linkedSourceAccountId
+      ? await prisma.sourceAccount.findUnique({ where: { id: target.linkedSourceAccountId } })
+      : null;
+    return {
+      accountKind: "target",
+      accountId: target.id,
+      platform: linkedSource?.platform ?? target.platform,
+      name: target.name,
+      handle: linkedSource?.handle ?? target.handle,
+      config: linkedSource?.config ?? target.config,
+      credentials: linkedSource?.credentials ?? target.credentials,
+      lookupAccountIds: linkedSource ? [target.id, linkedSource.id] : [target.id]
+    };
+  }
+
+  return null;
+}
+
+async function findReusableAccount(role: string, accountKind: string, accountId: string) {
+  if (role === "source") {
+    if (accountKind === "source") {
+      const source = await prisma.sourceAccount.findUnique({ where: { id: accountId } });
+      return source ? { accountId: source.id, platform: source.platform } : null;
+    }
+    const target = await prisma.targetAccount.findUnique({ where: { id: accountId } });
+    if (!target) return null;
+    if (target.linkedSourceAccountId) {
+      const source = await prisma.sourceAccount.findUnique({ where: { id: target.linkedSourceAccountId } });
+      if (source) return { accountId: source.id, platform: source.platform };
+    }
+    const existing = await prisma.sourceAccount.findFirst({ where: sameSourceLoginAccountWhere(target), orderBy: { updatedAt: "desc" } });
+    if (existing) {
+      if (!target.linkedSourceAccountId) {
+        await prisma.targetAccount.update({ where: { id: target.id }, data: { linkedSourceAccountId: existing.id } }).catch(() => null);
+      }
+      return { accountId: existing.id, platform: existing.platform };
+    }
+    const source = await prisma.sourceAccount.create({
+      data: {
+        platform: target.platform,
+        name: target.name,
+        handle: target.handle,
+        isActive: target.isActive,
+        health: target.health,
+        credentials: target.credentials as Prisma.InputJsonValue,
+        config: target.config as Prisma.InputJsonValue
+      }
+    });
+    await prisma.targetAccount.update({ where: { id: target.id }, data: { linkedSourceAccountId: source.id } }).catch(() => null);
+    return { accountId: source.id, platform: source.platform };
+  }
+
+  if (role === "target") {
+    if (accountKind === "target") {
+      const target = await prisma.targetAccount.findUnique({ where: { id: accountId } });
+      return target ? { accountId: target.id, platform: target.platform } : null;
+    }
+    const source = await prisma.sourceAccount.findUnique({ where: { id: accountId } });
+    if (!source) return null;
+    const existing = await prisma.targetAccount.findFirst({
+      where: { OR: [{ linkedSourceAccountId: source.id }, sameLoginAccountWhere(source)] },
+      orderBy: { updatedAt: "desc" }
+    });
+    if (existing) {
+      if (!existing.linkedSourceAccountId) {
+        await prisma.targetAccount.update({ where: { id: existing.id }, data: { linkedSourceAccountId: source.id } }).catch(() => null);
+      }
+      return { accountId: existing.id, platform: existing.platform };
+    }
+    const target = await prisma.targetAccount.create({
+      data: {
+        platform: source.platform,
+        name: source.name,
+        handle: source.handle,
+        isActive: source.isActive,
+        health: source.health,
+        credentials: {},
+        config: {},
+        linkedSourceAccountId: source.id
+      }
+    });
+    return { accountId: target.id, platform: target.platform };
+  }
+
+  return null;
+}
+
+async function pruneRepostSourceHistory() {
+  const oldRows = await prisma.content.findMany({
+    where: {
+      deletedAt: null,
+      sourceChannelId: { not: null }
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    skip: REPOST_SOURCE_HISTORY_MAX_ITEMS,
+    take: 10000,
+    select: { id: true }
+  });
+
+  if (oldRows.length === 0) return;
+  await prisma.content.deleteMany({
+    where: {
+      id: { in: oldRows.map((row) => row.id) },
+      status: { notIn: ["publishing"] }
+    }
+  });
+}
+
+function mapRepostSourceHistoryItem(content: AnyBody) {
+  const metadata = content.metadata && typeof content.metadata === "object" && !Array.isArray(content.metadata)
+    ? content.metadata as Record<string, unknown>
+    : {};
+  const contentPackage = metadata.contentPackage && typeof metadata.contentPackage === "object" && !Array.isArray(metadata.contentPackage)
+    ? metadata.contentPackage as Record<string, unknown>
+    : {};
+  const review = metadata.review && typeof metadata.review === "object" && !Array.isArray(metadata.review)
+    ? metadata.review as Record<string, unknown>
+    : {};
+  const ai = metadata.ai && typeof metadata.ai === "object" && !Array.isArray(metadata.ai)
+    ? metadata.ai as Record<string, unknown>
+    : {};
+  const aiAnalysis = ai.analysis && typeof ai.analysis === "object" && !Array.isArray(ai.analysis)
+    ? ai.analysis as Record<string, unknown>
+    : {};
+  const rawMessages = Array.isArray(contentPackage.rawMessages) ? contentPackage.rawMessages : [];
+  const rawMessageIds = Array.isArray(contentPackage.rawMessageIds) ? contentPackage.rawMessageIds : [];
+
+  return {
+    id: content.id,
+    code: content.code,
+    platform: content.platform,
+    sourceId: content.sourceId,
+    sourceName: content.source?.name ?? null,
+    sourceChannelId: content.sourceChannelId,
+    sourceChannelName: content.sourceChannel?.name ?? null,
+    sourceChannelExternalId: content.sourceChannel?.externalId ?? null,
+    author: content.author,
+    originalText: content.originalText,
+    draftText: content.draftText,
+    finalText: content.finalText,
+    status: content.status,
+    savedReason: content.savedReason,
+    lastError: content.lastError,
+    postedAt: content.postedAt?.toISOString?.() ?? null,
+    createdAt: content.createdAt?.toISOString?.() ?? null,
+    updatedAt: content.updatedAt?.toISOString?.() ?? null,
+    package: {
+      rawMessageCount: rawMessages.length || rawMessageIds.length || 1,
+      rawMessageIds: rawMessageIds.map(String),
+      status: typeof contentPackage.status === "string" ? contentPackage.status : null,
+      confidence: typeof contentPackage.confidence === "number" ? contentPackage.confidence : null,
+      productCount: typeof contentPackage.productCount === "number" ? contentPackage.productCount : null,
+      groupingReason: typeof contentPackage.groupingReason === "string" ? contentPackage.groupingReason : null,
+      linkCount: typeof contentPackage.linkCount === "number" ? contentPackage.linkCount : content.links?.length ?? 0,
+      mediaCount: typeof contentPackage.mediaCount === "number" ? contentPackage.mediaCount : content.media?.length ?? 0,
+      rawMessages
+    },
+    decision: {
+      primaryCategory: review.primaryCategory ?? aiAnalysis.primaryCategory ?? null,
+      categoryConfidence: review.categoryConfidence ?? aiAnalysis.categoryConfidence ?? null,
+      reason: review.routingHoldReason ?? review.heldReason ?? aiAnalysis.reason ?? content.savedReason ?? content.lastError ?? null,
+      matchedTargetCount: Array.isArray(review.matchedTargetIds) ? review.matchedTargetIds.length : 0,
+      wouldPublishTargetCount: Array.isArray(review.wouldPublishTargets) ? review.wouldPublishTargets.length : 0
+    },
+    media: (content.media ?? []).map((media: AnyBody) => ({
+      id: media.id,
+      type: media.type,
+      mimeType: media.mimeType,
+      sourceUrl: media.sourceUrl,
+      localPath: media.localPath,
+      cloudinaryUrl: media.cdnUrl
+    })),
+    links: (content.links ?? []).map((link: AnyBody) => ({
+      id: link.id,
+      originalUrl: link.originalUrl,
+      convertedUrl: link.convertedUrl,
+      network: link.network,
+      status: link.status,
+      error: link.error
+    })),
+    publishAttempts: (content.publishAttempts ?? []).map((attempt: AnyBody) => ({
+      id: attempt.id,
+      status: attempt.status,
+      targetName: attempt.targetChannel?.name ?? attempt.target?.name ?? null,
+      resultUrl: attempt.resultUrl,
+      error: attempt.error,
+      createdAt: attempt.createdAt?.toISOString?.() ?? null,
+      completedAt: attempt.completedAt?.toISOString?.() ?? null
+    }))
+  };
+}
 
 function registerRepostApiRoutes(app: FastifyInstance) {
   // GET /connected-accounts
   app.get("/connected-accounts", async () => {
     const [sources, targets] = await Promise.all([
-      prisma.sourceAccount.findMany({ orderBy: { createdAt: "desc" } }),
-      prisma.targetAccount.findMany({ orderBy: { createdAt: "desc" } })
+      prisma.sourceAccount.findMany({
+        orderBy: { createdAt: "desc" },
+        select: { id: true, platform: true, name: true, handle: true, health: true, isActive: true, lastCrawledAt: true, createdAt: true }
+      }),
+      prisma.targetAccount.findMany({
+        orderBy: { createdAt: "desc" },
+        select: { id: true, platform: true, name: true, handle: true, health: true, isActive: true, createdAt: true }
+      })
     ]);
     return ok({
       accounts: [
@@ -3492,8 +4186,10 @@ function registerRepostApiRoutes(app: FastifyInstance) {
           accountKind: "source" as const,
           platform: account.platform,
           name: account.name,
+          handle: account.handle,
           health: account.health,
           isActive: account.isActive,
+          lastCrawledAt: account.lastCrawledAt?.toISOString() ?? null,
           createdAt: account.createdAt.toISOString()
         })),
         ...targets.map((account) => ({
@@ -3501,12 +4197,86 @@ function registerRepostApiRoutes(app: FastifyInstance) {
           accountKind: "target" as const,
           platform: account.platform,
           name: account.name,
+          handle: account.handle,
           health: account.health,
           isActive: account.isActive,
           createdAt: account.createdAt.toISOString()
         }))
       ]
     });
+  });
+
+  // GET /channel-options
+  app.get("/channel-options", async (request, reply) => {
+    const query = request.query as AnyBody;
+    const accountKind = String(query.accountKind ?? "");
+    const accountId = String(query.accountId ?? "");
+
+    if (!["source", "target"].includes(accountKind) || !accountId) {
+      return reply.code(400).send(fail("BAD_REQUEST", "Thiếu accountKind hoặc accountId."));
+    }
+
+    const account = await resolveChannelOptionAccount(accountKind, accountId);
+
+    if (!account) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy tài khoản."));
+
+    const knownChannels = await prisma.platformChannel.findMany({
+      where: { accountId: { in: account.lookupAccountIds } },
+      select: { externalId: true, name: true, channelType: true }
+    });
+    const knownNameByExternalId = new Map(knownChannels.map((channel) => [channel.externalId, channel.name]));
+    const options = new Map<string, { externalId: string; name: string; channelType: string }>();
+    const addOption = (externalId: unknown, name?: unknown, channelType = "group") => {
+      if (typeof externalId !== "string" && typeof externalId !== "number") return;
+      const id = String(externalId).trim();
+      if (!id) return;
+      options.set(id, {
+        externalId: id,
+        name: typeof name === "string" && name.trim() ? name.trim() : knownNameByExternalId.get(id) ?? id,
+        channelType
+      });
+    };
+
+    for (const channel of knownChannels) {
+      addOption(channel.externalId, channel.name, channel.channelType);
+    }
+
+    const config = account.config && typeof account.config === "object" && !Array.isArray(account.config)
+      ? account.config as Record<string, unknown>
+      : {};
+
+    if (account.platform === "zalo-personal") {
+      try {
+        const groups = await listZaloGroups({
+          id: account.accountId,
+          platform: "zalo-personal",
+          name: account.name,
+          handle: account.handle,
+          credentials: toPlainRecord(account.credentials),
+          config: toPlainRecord(account.config)
+        });
+        for (const group of groups) addOption(group.id, group.name, "group");
+      } catch {
+        // Fall back to saved threadIds/known channels when the current session cannot list groups.
+      }
+      addOption(config.threadId, knownNameByExternalId.get(String(config.threadId ?? "")) ?? account.name, "group");
+      const threadIds = Array.isArray(config.threadIds) ? config.threadIds : [];
+      for (const threadId of threadIds) addOption(threadId, undefined, "group");
+    }
+
+    if (account.platform === "telegram") {
+      addOption(account.handle, account.name, "channel");
+      const sources = Array.isArray(config.sources) ? config.sources : [];
+      for (const source of sources) {
+        if (typeof source === "string" || typeof source === "number") addOption(source, undefined, "channel");
+        if (source && typeof source === "object" && !Array.isArray(source)) {
+          const item = source as Record<string, unknown>;
+          addOption(item.externalId ?? item.handle ?? item.username ?? item.source, item.name ?? item.title, "channel");
+        }
+      }
+    }
+
+    return ok({ channels: Array.from(options.values()) });
   });
 
   // GET /channels
@@ -3521,17 +4291,12 @@ function registerRepostApiRoutes(app: FastifyInstance) {
   });
 
   // POST /channels/bulk
-  app.post("/channels/bulk", async (request) => {
+  app.post("/channels/bulk", async (request, reply) => {
     const body = request.body as AnyBody;
     const { role, accountKind, accountId, channels } = body;
-    
-    let platform = "unknown";
-    if (accountKind === "source") {
-      const acc = await prisma.sourceAccount.findUnique({ where: { id: accountId } });
-      if (acc) platform = acc.platform;
-    } else {
-      const acc = await prisma.targetAccount.findUnique({ where: { id: accountId } });
-      if (acc) platform = acc.platform;
+    const resolvedAccount = await findReusableAccount(String(role), String(accountKind), String(accountId));
+    if (!resolvedAccount) {
+      return reply.code(404).send(fail("ACCOUNT_NOT_FOUND", "Không tìm thấy tài khoản đăng nhập để thêm kênh."));
     }
 
     const created = [];
@@ -3539,15 +4304,15 @@ function registerRepostApiRoutes(app: FastifyInstance) {
       const record = await prisma.platformChannel.upsert({
         where: {
           accountKind_accountId_externalId: {
-            accountKind: role,
-            accountId,
+            accountKind: String(role),
+            accountId: resolvedAccount.accountId,
             externalId: String(channel.externalId)
           }
         },
         create: {
-          accountKind: role,
-          accountId,
-          platform,
+          accountKind: String(role),
+          accountId: resolvedAccount.accountId,
+          platform: resolvedAccount.platform,
           externalId: String(channel.externalId),
           name: String(channel.name),
           channelType: String(channel.channelType ?? "group"),
@@ -3595,26 +4360,99 @@ function registerRepostApiRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
     const channel = await prisma.platformChannel.findUnique({ where: { id } });
     if (!channel) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy kênh."));
+    if (channel.accountKind === "source" && isRealtimeSourcePlatform(channel.platform)) {
+      return ok({ message: "Kênh nguồn này đang chạy bằng realtime listener; không tạo job polling." });
+    }
     await app.workerCore.triggerCrawl(channel.accountId, "admin");
-    return ok({ message: "Đã đưa kênh vào hàng chờ lấy tin." });
+    return ok({ message: "Đã tạo job lấy tin. Xem tiến độ ở Worker jobs / Logs, chọn queue Crawl." });
   });
 
-  // GET /settings/auto-publish
-  app.get("/settings/auto-publish", async () => {
-    const setting = await prisma.systemSetting.findUnique({ where: { key: "auto_publish" } });
-    const data = (setting?.value ?? {}) as Record<string, unknown>;
-    return ok({ enabled: data.enabled ?? false });
-  });
+  // GET /repost-flows/source-history
+  app.get("/repost-flows/source-history", async (request, reply) => {
+    const query = request.query as AnyBody;
+    const page = Math.max(Number(query.page ?? 1), 1);
+    const limit = Math.min(Math.max(Number(query.limit ?? 20), 1), 50);
+    const flowId = String(query.flowId ?? "").trim();
+    const sourceChannelId = String(query.sourceChannelId ?? "all").trim();
+    const status = String(query.status ?? "all").trim();
+    const keyword = String(query.keyword ?? "").trim();
 
-  // PUT /settings/auto-publish
-  app.put("/settings/auto-publish", async (request) => {
-    const body = request.body as AnyBody;
-    await prisma.systemSetting.upsert({
-      where: { key: "auto_publish" },
-      create: { key: "auto_publish", value: { enabled: Boolean(body.enabled) } },
-      update: { value: { enabled: Boolean(body.enabled) } }
-    });
-    return ok({ saved: true });
+    await pruneRepostSourceHistory();
+
+    let flowSourceChannelIds: string[] | null = null;
+    if (flowId && flowId !== "all") {
+      const flow = await prisma.repostFlow.findUnique({
+        where: { id: flowId },
+        include: { sources: { select: { channelId: true } } }
+      });
+      if (!flow) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy flow đăng lại."));
+      flowSourceChannelIds = flow.sources.map((source) => source.channelId);
+    }
+
+    const where: Prisma.ContentWhereInput = {
+      deletedAt: null,
+      sourceChannelId: { not: null }
+    };
+
+    if (flowSourceChannelIds) {
+      where.sourceChannelId = flowSourceChannelIds.length > 0 ? { in: flowSourceChannelIds } : "__no_source_channel__";
+    }
+    if (sourceChannelId && sourceChannelId !== "all") {
+      where.sourceChannelId = flowSourceChannelIds
+        ? flowSourceChannelIds.includes(sourceChannelId) ? sourceChannelId : "__no_source_channel__"
+        : sourceChannelId;
+    }
+    if (status && status !== "all") {
+      const statuses = status.split(",").map((item) => item.trim()).filter(Boolean);
+      if (statuses.length === 1) where.status = statuses[0];
+      if (statuses.length > 1) where.status = { in: statuses };
+    }
+    if (keyword) {
+      const contains = { contains: keyword, mode: "insensitive" as const };
+      where.OR = [
+        { code: contains },
+        { originalText: contains },
+        { finalText: contains },
+        { draftText: contains },
+        { author: contains },
+        { savedReason: contains },
+        { lastError: contains }
+      ];
+    }
+
+    const [total, statusGroups, contents] = await Promise.all([
+      prisma.content.count({ where }),
+      prisma.content.groupBy({ by: ["status"], where, _count: { _all: true } }),
+      prisma.content.findMany({
+        where,
+        include: {
+          source: { select: { id: true, name: true, platform: true, handle: true } },
+          sourceChannel: true,
+          media: { orderBy: { createdAt: "asc" } },
+          links: { orderBy: { createdAt: "asc" } },
+          publishAttempts: {
+            orderBy: { createdAt: "desc" },
+            include: {
+              target: { select: { id: true, name: true, platform: true, handle: true } },
+              targetChannel: true
+            }
+          }
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        skip: (page - 1) * limit,
+        take: limit
+      })
+    ]);
+
+    const pagination = buildPagination(page, limit, total);
+    return ok({
+      items: contents.map(mapRepostSourceHistoryItem),
+      summary: {
+        maxItems: REPOST_SOURCE_HISTORY_MAX_ITEMS,
+        statusCounts: Object.fromEntries(statusGroups.map((group) => [group.status, group._count._all]))
+      },
+      pagination
+    }, pagination);
   });
 
   // GET /repost-flows
@@ -3755,31 +4593,13 @@ function registerRepostApiRoutes(app: FastifyInstance) {
   // POST /accounts/:kind/:id/session/zalo-qr
   app.post("/accounts/:kind/:id/session/zalo-qr", async (request) => {
     const { kind, id } = request.params as { kind: string; id: string };
-    const sessionDir = path.resolve(process.cwd(), "storage/sessions", kind, id);
-    if (!existsSync(sessionDir)) mkdirSync(sessionDir, { recursive: true });
-    
-    const qrPath = path.join(sessionDir, "qr.png");
-    writeFileSync(qrPath, "mock-qr-code-data");
-    
     await prisma.platformSession.upsert({
       where: { platform_accountKind_accountId: { platform: "zalo-personal", accountKind: kind, accountId: id } },
-      create: { platform: "zalo-personal", accountKind: kind, accountId: id, status: "open_for_login", cookiePath: qrPath, data: { qrReady: true, qrUpdatedAt: new Date().toISOString() } },
-      update: { status: "open_for_login", cookiePath: qrPath, data: { qrReady: true, qrUpdatedAt: new Date().toISOString() } }
+      create: { platform: "zalo-personal", accountKind: kind, accountId: id, status: "login_required", data: { qrReady: false, error: "Chưa có luồng tạo QR Zalo thật." } },
+      update: { status: "login_required", data: { qrReady: false, error: "Chưa có luồng tạo QR Zalo thật." } }
     });
 
-    setTimeout(async () => {
-      await prisma.platformSession.update({
-        where: { platform_accountKind_accountId: { platform: "zalo-personal", accountKind: kind, accountId: id } },
-        data: { status: "login_ok", data: { qrReady: true, status: "login_ok" } }
-      }).catch(() => null);
-      if (kind === "source") {
-        await prisma.sourceAccount.update({ where: { id }, data: { health: "healthy", isActive: true } }).catch(() => null);
-      } else {
-        await prisma.targetAccount.update({ where: { id }, data: { health: "healthy", isActive: true } }).catch(() => null);
-      }
-    }, 6000);
-
-    return ok({ session: { status: "open_for_login", data: { qrReady: true, qrUpdatedAt: new Date().toISOString() } } });
+    return ok({ session: { status: "login_required", data: { qrReady: false, error: "Chưa có luồng tạo QR Zalo thật." } } });
   });
 
   // POST /accounts/:kind/:id/session/telegram/start

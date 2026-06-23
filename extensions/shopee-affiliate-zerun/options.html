@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Zerun Shopee Affiliate Options</title>
+    <link rel="stylesheet" href="styles/popup.css" />
+  </head>
+  <body>
+    <main class="shell wide">
+      <header>
+        <div>
+          <p class="eyebrow">Cấu hình</p>
+          <h1>Zerun Shopee Affiliate</h1>
+        </div>
+      </header>
+
+      <section class="panel">
+        <label>
+          WebSocket URL
+          <input id="wsUrl" type="text" />
+        </label>
+        <label>
+          Request timeout (ms)
+          <input id="requestTimeoutMs" type="number" min="5000" step="1000" />
+        </label>
+        <label>
+          Reconnect delay (ms)
+          <input id="reconnectDelayMs" type="number" min="1000" step="500" />
+        </label>
+        <label>
+          Max retry
+          <input id="maxRetry" type="number" min="0" max="5" />
+        </label>
+        <label class="check">
+          <input id="autoConnect" type="checkbox" />
+          Tự kết nối Zerun khi mở extension
+        </label>
+        <p class="hint">Khi bấm convert mà chưa có tab Shopee Affiliate, extension sẽ tự mở tab affiliate và yêu cầu bạn bấm convert lại sau khi trang sẵn sàng.</p>
+        <button id="saveButton" type="button">Lưu cấu hình</button>
+      </section>
+
+      <p id="message" class="message"></p>
+    </main>
+    <script src="js/options.js"></script>
+  </body>
+</html>

@@ -1,7 +1,7 @@
-import type { ListenerHandle, RawSourceItem } from "@zerun/adapters";
+import type { ListenerHandle, RawMedia, RawSourceItem } from "@zerun/adapters";
 import type { AdapterRegistry } from "@zerun/adapters";
 import type { PrismaClient } from "@zerun/db";
-import { computeContentHashes } from "@zerun/core";
+import { computeContentHashes, groupRawMessagesIntoPackages, type ContentPackage, type RawMessageForGrouping } from "@zerun/core";
 import { classifyError, logger, realtimeBus } from "@zerun/shared";
 import type { ContentProcessJob } from "../types.js";
 import { makeContentCode, toAdapterAccount } from "./helpers.js";
@@ -15,6 +15,7 @@ const SUPERVISE_INTERVAL_MS = 60_000;
 /** Backoff reconnect: tránh login dồn dập khi credentials hỏng. */
 const RECONNECT_BASE_MS = 5_000;
 const RECONNECT_MAX_MS = 5 * 60_000;
+const REALTIME_BUFFER_WINDOW_MS = Math.max(5_000, Number(process.env.REPOST_MESSAGE_BUFFER_MS ?? 15_000));
 
 /**
  * Quản lý vòng đời realtime listener cho các platform push-based (zca-js, ...).
@@ -28,6 +29,7 @@ export class RealtimeListenerManager {
   private readonly desired = new Map<string, DesiredAccount>();
   private readonly reconnectFails = new Map<string, number>();
   private readonly reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly messageBuffers = new Map<string, RealtimeMessageBuffer>();
   private superviseTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
 
@@ -69,6 +71,8 @@ export class RealtimeListenerManager {
     }
     for (const timer of this.reconnectTimers.values()) clearTimeout(timer);
     this.reconnectTimers.clear();
+    for (const buffer of this.messageBuffers.values()) clearTimeout(buffer.timer);
+    this.messageBuffers.clear();
     this.desired.clear();
     this.reconnectFails.clear();
 
@@ -190,82 +194,7 @@ export class RealtimeListenerManager {
 
       if (existing) return; // đã có (cùng nguồn), bỏ qua
 
-      // Dedup chéo nguồn qua contentHash (giống source-crawl.ts)
-      const links = item.text.match(/https?:\/\/\S+/g) ?? [];
-      const hashes = computeContentHashes(item.text, links);
-      const dedupWindowStart = new Date(Date.now() - DEDUP_WINDOW_HOURS * 60 * 60 * 1000);
-
-      const duplicate = await (this.prisma as any).content.findFirst({
-        where: {
-          contentHash: hashes.linkHash,
-          createdAt: { gte: dedupWindowStart },
-          status: { notIn: ["duplicate", "skipped", "rejected"] }
-        },
-        select: { id: true }
-      });
-
-      if (duplicate) {
-        const dupContent = await this.prisma.content.create({
-          data: {
-            code: makeContentCode(),
-            platform: item.platform,
-            sourceId,
-            sourceChannelId: sourceChannel?.id,
-            externalId,
-            sourceUrl: item.originalUrl,
-            author: item.author,
-            originalText: item.text,
-            status: "duplicate" as never,
-            postedAt: item.postedAt,
-            contentHash: hashes.linkHash,
-            duplicateOfId: duplicate.id,
-            metadata: { ...(item.metadata ?? {}), sourceChannelId: sourceChannel?.id ?? null, sourceChannelName: sourceChannel?.name ?? null } as never
-          } as never
-        });
-        logger.debug(`Realtime: tin trùng ${dupContent.code} của ${duplicate.id}`);
-        return;
-      }
-
-      const content = await this.prisma.content.create({
-        data: {
-          code: makeContentCode(),
-          platform: item.platform,
-          sourceId,
-          sourceChannelId: sourceChannel?.id,
-          externalId,
-          sourceUrl: item.originalUrl,
-          author: item.author,
-          originalText: item.text,
-          status: "discovered",
-          postedAt: item.postedAt,
-          contentHash: hashes.linkHash,
-          metadata: { ...(item.metadata ?? {}), sourceChannelId: sourceChannel?.id ?? null, sourceChannelName: sourceChannel?.name ?? null } as never,
-          media: {
-            create: item.media.map((m) => ({
-              type: m.type,
-              mimeType: m.mimeType,
-              sourceUrl: m.url,
-              localPath: m.localPath,
-              metadata: (m.metadata ?? {}) as never
-            }))
-          }
-        } as never
-      });
-
-      realtimeBus.emitEvent({
-        type: "content:new",
-        contentId: content.id,
-        code: content.code,
-        platform: item.platform,
-        createdAt: new Date().toISOString()
-      });
-
-      await this.enqueueContentProcess({ version: 1, contentId: content.id });
-
-      logger.debug(`Realtime: tin mới từ ${item.platform}`, {
-        contentId: content.id,
-        externalId
-      });
+      this.bufferRealtimeItem({ sourceId, item, channel: sourceChannel, externalId });
     } catch (error) {
       const classified = classifyError(error);
       logger.error("Lỗi xử lý realtime item", {
@@ -275,10 +204,214 @@ export class RealtimeListenerManager {
       });
     }
   }
+
+  private bufferRealtimeItem(entry: Omit<RealtimeBufferedEntry, "rawMessage">) {
+    const rawMessage = toRawMessageForGrouping(entry.item, entry.sourceId, entry.channel);
+    const bufferKey = [
+      entry.sourceId,
+      entry.channel?.id ?? "__default__",
+      rawMessage.senderId ?? "unknown"
+    ].join(":");
+    const existing = this.messageBuffers.get(bufferKey);
+    if (existing) clearTimeout(existing.timer);
+
+    const nextEntries = [...(existing?.entries ?? []), { ...entry, rawMessage }];
+    const timer = setTimeout(() => void this.flushRealtimeBuffer(bufferKey), REALTIME_BUFFER_WINDOW_MS);
+    timer.unref?.();
+    this.messageBuffers.set(bufferKey, { entries: nextEntries, timer });
+  }
+
+  private async flushRealtimeBuffer(bufferKey: string) {
+    const buffer = this.messageBuffers.get(bufferKey);
+    if (!buffer) return;
+    this.messageBuffers.delete(bufferKey);
+
+    try {
+      const rawEntryById = new Map(buffer.entries.map((entry) => [entry.rawMessage.id, entry]));
+      const contentPackages = groupRawMessagesIntoPackages(buffer.entries.map((entry) => entry.rawMessage));
+      for (const contentPackage of contentPackages) {
+        const packageEntries = contentPackage.rawMessageIds
+          .map((id) => rawEntryById.get(id))
+          .filter((entry): entry is RealtimeBufferedEntry => Boolean(entry));
+        if (packageEntries.length === 0) continue;
+        await this.persistRealtimePackage(contentPackage, packageEntries);
+      }
+    } catch (error) {
+      const classified = classifyError(error);
+      logger.error("Lỗi flush content package realtime", { bufferKey, error: classified.message });
+    }
+  }
+
+  private async persistRealtimePackage(contentPackage: ContentPackage, packageEntries: RealtimeBufferedEntry[]) {
+    const firstEntry = packageEntries[0];
+    const externalId = externalIdForPackage(contentPackage, firstEntry.channel);
+    const existing = await this.prisma.content.findUnique({
+      where: {
+        platform_sourceId_externalId: {
+          platform: contentPackage.platform as never,
+          sourceId: firstEntry.sourceId,
+          externalId
+        }
+      },
+      select: { id: true }
+    });
+    if (existing) return;
+
+    const hashes = computeContentHashes(contentPackage.groupedText, contentPackage.links);
+    const dedupWindowStart = new Date(Date.now() - DEDUP_WINDOW_HOURS * 60 * 60 * 1000);
+    const duplicate = await (this.prisma as any).content.findFirst({
+      where: {
+        contentHash: hashes.linkHash,
+        createdAt: { gte: dedupWindowStart },
+        status: { notIn: ["duplicate", "skipped", "rejected"] }
+      },
+      select: { id: true }
+    });
+
+    if (duplicate) {
+      const dupContent = await this.prisma.content.create({
+        data: {
+          code: makeContentCode(),
+          platform: contentPackage.platform,
+          sourceId: firstEntry.sourceId,
+          sourceChannelId: firstEntry.channel?.id,
+          externalId,
+          sourceUrl: contentPackage.links[0] ?? firstEntry.item.originalUrl,
+          author: contentPackage.senderName,
+          originalText: contentPackage.groupedText,
+          status: "duplicate" as never,
+          postedAt: firstEntry.item.postedAt,
+          contentHash: hashes.linkHash,
+          duplicateOfId: duplicate.id,
+          metadata: buildContentPackageMetadata(contentPackage, packageEntries, firstEntry.channel) as never
+        } as never
+      });
+      logger.debug(`Realtime: content package trùng ${dupContent.code} của ${duplicate.id}`);
+      return;
+    }
+
+    const content = await this.prisma.content.create({
+      data: {
+        code: makeContentCode(),
+        platform: contentPackage.platform,
+        sourceId: firstEntry.sourceId,
+        sourceChannelId: firstEntry.channel?.id,
+        externalId,
+        sourceUrl: contentPackage.links[0] ?? firstEntry.item.originalUrl,
+        author: contentPackage.senderName,
+        originalText: contentPackage.groupedText,
+        status: "discovered",
+        postedAt: firstEntry.item.postedAt,
+        contentHash: hashes.linkHash,
+        metadata: buildContentPackageMetadata(contentPackage, packageEntries, firstEntry.channel) as never,
+        media: {
+          create: contentPackage.media.map((media) => ({
+            type: media.type,
+            mimeType: media.mimeType,
+            sourceUrl: media.url,
+            localPath: media.localPath,
+            metadata: (media.metadata ?? {}) as never
+          }))
+        }
+      } as never
+    });
+
+    realtimeBus.emitEvent({
+      type: "content:new",
+      contentId: content.id,
+      code: content.code,
+      platform: contentPackage.platform as never,
+      createdAt: new Date().toISOString()
+    });
+
+    await this.enqueueContentProcess({ version: 1, contentId: content.id });
+    logger.debug(`Realtime: content package mới từ ${contentPackage.platform}`, {
+      contentId: content.id,
+      externalId,
+      rawMessageIds: contentPackage.rawMessageIds
+    });
+  }
 }
 
 function readMetadataString(metadata: unknown, key: string) {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
   const value = (metadata as Record<string, unknown>)[key];
   return typeof value === "string" || typeof value === "number" ? String(value) : null;
+}
+
+type SourceChannelForPackage = { id: string; name: string; externalId: string } | null;
+type RealtimeBufferedEntry = {
+  sourceId: string;
+  item: RawSourceItem;
+  channel: SourceChannelForPackage;
+  externalId: string;
+  rawMessage: RawMessageForGrouping;
+};
+type RealtimeMessageBuffer = {
+  entries: RealtimeBufferedEntry[];
+  timer: ReturnType<typeof setTimeout>;
+};
+
+function toRawMessageForGrouping(item: RawSourceItem, sourceId: string, channel: SourceChannelForPackage): RawMessageForGrouping {
+  const senderId = readMetadataString(item.metadata, "senderId")
+    ?? readMetadataString(item.metadata, "fromId")
+    ?? item.author
+    ?? "unknown";
+  const senderName = readMetadataString(item.metadata, "senderName") ?? item.author ?? senderId;
+  return {
+    id: channel ? `${channel.id}:${item.externalId}` : item.externalId,
+    platform: item.platform,
+    sourceId,
+    sourceChannelId: channel?.id ?? null,
+    senderId,
+    senderName,
+    text: item.text,
+    media: item.media as RawMedia[],
+    links: extractLinks(item.text),
+    replyToMessageId: readMetadataString(item.metadata, "replyToMessageId") ?? readMetadataString(item.metadata, "replyTo"),
+    mediaGroupId: readMetadataString(item.metadata, "mediaGroupId") ?? readMetadataString(item.metadata, "media_group_id"),
+    createdAt: item.postedAt ?? new Date(),
+    originalUrl: item.originalUrl,
+    metadata: item.metadata ?? {}
+  };
+}
+
+function externalIdForPackage(contentPackage: ContentPackage, channel: SourceChannelForPackage) {
+  if (contentPackage.rawMessageIds.length === 1) return contentPackage.rawMessageIds[0];
+  const prefix = channel ? `${channel.id}:` : "";
+  return `${prefix}pkg:${contentPackage.rawMessageIds.join("+")}`;
+}
+
+function buildContentPackageMetadata(contentPackage: ContentPackage, packageEntries: RealtimeBufferedEntry[], channel: SourceChannelForPackage) {
+  const firstMetadata = packageEntries[0]?.item.metadata ?? {};
+  return {
+    ...firstMetadata,
+    sourceChannelId: channel?.id ?? null,
+    sourceChannelName: channel?.name ?? null,
+    contentPackage: {
+      rawMessageIds: contentPackage.rawMessageIds,
+      status: contentPackage.status,
+      confidence: contentPackage.confidence,
+      productCount: contentPackage.productCount,
+      groupingReason: contentPackage.groupingReason,
+      linkCount: contentPackage.links.length,
+      mediaCount: contentPackage.media.length,
+      rawMessages: packageEntries.map(({ item, rawMessage }) => ({
+        id: rawMessage.id,
+        externalId: item.externalId,
+        senderId: rawMessage.senderId,
+        senderName: rawMessage.senderName,
+        text: rawMessage.text,
+        mediaCount: rawMessage.media.length,
+        links: rawMessage.links ?? [],
+        replyToMessageId: rawMessage.replyToMessageId ?? null,
+        mediaGroupId: rawMessage.mediaGroupId ?? null,
+        createdAt: rawMessage.createdAt.toISOString()
+      }))
+    }
+  };
+}
+
+function extractLinks(text: string) {
+  return text.match(/https?:\/\/\S+/g) ?? [];
 }

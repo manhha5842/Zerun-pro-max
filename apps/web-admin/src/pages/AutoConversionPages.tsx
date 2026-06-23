@@ -144,7 +144,7 @@ export function AutoConversionRulesPage() {
   const actionMutation = useMutation({
     mutationFn: ({ id, action }: { id: string; action: "pause" | "resume" | "run-now" | "test" }) => {
       const path = action === "run-now" ? "run-now" : action;
-      return apiPost(`/auto-conversion/rules/${id}/${path}`, action === "test" ? { sampleText: "Bài mẫu có link https://shopee.vn/demo và https://google.com/form" } : {});
+      return apiPost(`/auto-conversion/rules/${id}/${path}`, {});
     },
     onSuccess: async () => {
       await Promise.all([

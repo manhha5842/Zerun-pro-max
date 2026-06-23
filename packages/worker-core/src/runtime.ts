@@ -6,7 +6,6 @@ import {
   AffiliateRouter,
   createRealAdapterRegistry,
   LazadaAffiliateAdapter,
-  ShopeeAffiliateAdapter,
   type AdapterRegistry,
   type AffiliateAdapter
 } from "@zerun/adapters";
@@ -156,6 +155,77 @@ class StaticFailureAffiliateAdapter implements AffiliateAdapter {
       success: false,
       error: this.message
     };
+  }
+}
+
+class ExtensionAffiliateAdapter implements AffiliateAdapter {
+  constructor(private readonly network: "shopee" | "lazada") {}
+
+  detect() {
+    return [];
+  }
+
+  async convert(input: Parameters<AffiliateAdapter["convert"]>[0]) {
+    const apiBase = (process.env.ZERUN_API_BASE_URL ?? `http://127.0.0.1:${process.env.PORT ?? 3001}/api/v1`).replace(/\/+$/, "");
+    logger.info(`${this.network} extension convert: gửi yêu cầu`, {
+      url: input.url,
+      subId: input.subId ?? null
+    });
+    try {
+      const response = await fetch(`${apiBase}/tools/convert-link/extension-convert`, {
+        method: "POST",
+        headers: { "content-type": "application/json; charset=UTF-8", "accept": "application/json" },
+        body: JSON.stringify({
+          url: input.url,
+          subId: input.subId,
+          outputType: "shortlink"
+        })
+      });
+      const payload = await response.json() as {
+        success?: boolean;
+        data?: {
+          success?: boolean;
+          convertedUrl?: string | null;
+          shortLink?: string | null;
+          longLink?: string | null;
+          errorCode?: string | null;
+          message?: string | null;
+        };
+        error?: { message?: string };
+      };
+      const data = payload.data;
+      const converted = data?.convertedUrl ?? data?.shortLink ?? data?.longLink ?? null;
+      if (payload.success && data?.success && converted) {
+        logger.info(`${this.network} extension convert: thành công`, {
+          url: input.url,
+          converted
+        });
+        return { original: input.url, converted, network: this.network, success: true };
+      }
+      logger.warn(`${this.network} extension convert: thất bại`, {
+        url: input.url,
+        error: data?.message ?? data?.errorCode ?? payload.error?.message ?? `Extension ${this.network} chưa trả link`
+      });
+      return {
+        original: input.url,
+        converted: null,
+        network: this.network,
+        success: false,
+        error: data?.message ?? data?.errorCode ?? payload.error?.message ?? `Extension ${this.network} chưa trả link`
+      };
+    } catch (error) {
+      logger.warn(`${this.network} extension convert: lỗi gọi API bridge`, {
+        url: input.url,
+        error: error instanceof Error ? error.message : `Không gọi được extension ${this.network}`
+      });
+      return {
+        original: input.url,
+        converted: null,
+        network: this.network,
+        success: false,
+        error: error instanceof Error ? error.message : `Không gọi được extension ${this.network}`
+      };
+    }
   }
 }
 
@@ -309,6 +379,21 @@ async function createConfiguredAdapterRegistry(prisma: PrismaClient) {
           : fallback;
       };
 
+      let subId = typeof record.subId === "string" ? record.subId.trim() : defaults.subId;
+      if (key === "lazada" && Array.isArray(record.subIdSets)) {
+        const defaultSet = record.subIdSets.find((s: any) => s.isDefault) || record.subIdSets[0];
+        if (defaultSet) {
+          subId = JSON.stringify({
+            subId1: defaultSet.subId1 || "",
+            subId2: defaultSet.subId2 || "",
+            subId3: defaultSet.subId3 || "",
+            subId4: defaultSet.subId4 || "",
+            subId5: defaultSet.subId5 || "",
+            subId6: defaultSet.subId6 || "",
+          });
+        }
+      }
+
       return {
         enabled: typeof record.enabled === "boolean" ? record.enabled : defaults.enabled,
         primary: readProvider("primary", defaults.primary),
@@ -316,7 +401,7 @@ async function createConfiguredAdapterRegistry(prisma: PrismaClient) {
         fallback: readProvider("fallback", defaults.fallback),
         affiliateId: typeof record.affiliateId === "string" ? record.affiliateId.trim() : defaults.affiliateId,
         campaignId: typeof record.campaignId === "string" ? record.campaignId.trim() : defaults.campaignId,
-        subId: typeof record.subId === "string" ? record.subId.trim() : defaults.subId,
+        subId,
         accessTradeToken: typeof record.accessTradeToken === "string" ? record.accessTradeToken.trim() : (defaults as any).accessTradeToken,
         appKey: typeof record.appKey === "string" ? record.appKey.trim() : (defaults as any).appKey,
         appSecret: typeof record.appSecret === "string" ? record.appSecret.trim() : (defaults as any).appSecret,
@@ -373,11 +458,7 @@ async function createConfiguredAdapterRegistry(prisma: PrismaClient) {
       const shopeeCampaign = shopeeConfig.campaignId || read("accessTradeCampaignId") || undefined;
       if (provider === "affiliate_id") return new ShopeeAffiliateIdAdapter(shopeeConfig.affiliateId || read("shopeeAffiliateId"));
       if (provider === "web") {
-        return new ShopeeAffiliateAdapter({
-          mode: "web",
-          accessTradeToken: shopeeToken,
-          accessTradeCampaignId: shopeeCampaign
-        });
+        return new ExtensionAffiliateAdapter("shopee");
       }
       return makeAccessTrade(shopeeToken, shopeeCampaign);
     };
@@ -402,7 +483,7 @@ async function createConfiguredAdapterRegistry(prisma: PrismaClient) {
         }
         return new StaticFailureAffiliateAdapter("lazada", "Thiếu Lazada API credentials");
       }
-      if (provider === "web") return new StaticFailureAffiliateAdapter("lazada", "Lazada web/session chưa được nối vào worker");
+      if (provider === "web") return new ExtensionAffiliateAdapter("lazada");
       return makeAccessTrade(lazadaATToken, lazadaATCampaign);
     };
 

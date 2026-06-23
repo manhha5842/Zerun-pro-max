@@ -31,7 +31,7 @@ type ConvertedResult = {
 
 export function QuickConvertLinkPage() {
   const toast = useToast();
-  const [text, setText] = useState("Deal Mẹ & Bé hôm nay: https://shope.ee/example");
+  const [text, setText] = useState("");
   const [links, setLinks] = useState<DetectedLink[]>([]);
   const [results, setResults] = useState<ConvertedResult[]>([]);
 

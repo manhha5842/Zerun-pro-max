@@ -1,6 +1,7 @@
 export * from "./content/status.js";
 export * from "./content/caption.js";
 export * from "./content/sanitize.js";
+export * from "./content/grouping.js";
 export * from "./links/detect.js";
 export * from "./links/dedup.js";
 export * from "./routing/resolve.js";

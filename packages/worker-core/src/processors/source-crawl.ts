@@ -1,4 +1,5 @@
-import { computeContentHashes } from "@zerun/core";
+import { computeContentHashes, groupRawMessagesIntoPackages, type ContentPackage, type RawMessageForGrouping } from "@zerun/core";
+import type { RawMedia, RawSourceItem } from "@zerun/adapters";
 import { classifyError, logger, realtimeBus } from "@zerun/shared";
 import { sourceCrawlJobSchema, type SourceCrawlJob } from "../types.js";
 import type { ProcessorContext } from "./context.js";
@@ -50,18 +51,30 @@ export async function processSourceCrawl(rawJob: unknown, context: ProcessorCont
     }));
     const items = crawlResults.flat();
 
-    let createdCount = 0;
-    let existingCount = 0;
-    for (const entry of items) {
+    const rawEntries = items.map((entry) => {
       const { item, channel } = entry;
       if (source.platform === "telegram") {
         updateTelegramCursor(nextTelegramCursorByChannel, getCursorKey(channel), item.externalId);
       }
-      const externalId = channel ? `${channel.id}:${item.externalId}` : item.externalId;
+      return { ...entry, rawMessage: toRawMessageForGrouping(item, source.id, channel) };
+    });
+    const rawEntryById = new Map(rawEntries.map((entry) => [entry.rawMessage.id, entry]));
+    const contentPackages = groupRawMessagesIntoPackages(rawEntries.map((entry) => entry.rawMessage));
+
+    let createdCount = 0;
+    let existingCount = 0;
+    for (const contentPackage of contentPackages) {
+      const packageEntries = contentPackage.rawMessageIds
+        .map((id) => rawEntryById.get(id))
+        .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+      const firstEntry = packageEntries[0];
+      if (!firstEntry) continue;
+      const { channel } = firstEntry;
+      const externalId = externalIdForPackage(contentPackage, channel);
       const existing = await context.prisma.content.findUnique({
         where: {
           platform_sourceId_externalId: {
-            platform: item.platform,
+            platform: contentPackage.platform,
             sourceId: source.id,
             externalId
           }
@@ -73,12 +86,12 @@ export async function processSourceCrawl(rawJob: unknown, context: ProcessorCont
         await context.prisma.content.update({
           where: { id: existing.id },
           data: {
-            originalText: item.text,
-            sourceUrl: item.originalUrl,
-            author: item.author,
-            postedAt: item.postedAt,
+            originalText: contentPackage.groupedText,
+            sourceUrl: contentPackage.links[0] ?? firstEntry.item.originalUrl,
+            author: contentPackage.senderName,
+            postedAt: firstEntry.item.postedAt,
             sourceChannelId: channel?.id,
-            metadata: { ...(item.metadata ?? {}), sourceChannelId: channel?.id ?? null, sourceChannelName: channel?.name ?? null } as any
+            metadata: buildContentPackageMetadata(contentPackage, packageEntries, channel) as any
           }
         });
         if (existing.status === "discovered" || existing.status === "failed") {
@@ -88,8 +101,8 @@ export async function processSourceCrawl(rawJob: unknown, context: ProcessorCont
       }
 
       // Tầng 2: dedup chéo nguồn qua contentHash
-      const links = item.text.match(/https?:\/\/\S+/g) ?? [];
-      const hashes = computeContentHashes(item.text, links);
+      const links = contentPackage.links;
+      const hashes = computeContentHashes(contentPackage.groupedText, links);
       const dedupWindowStart = new Date(Date.now() - DEDUP_WINDOW_HOURS * 60 * 60 * 1000);
 
       const duplicate = await (context.prisma as any).content.findFirst({
@@ -106,18 +119,18 @@ export async function processSourceCrawl(rawJob: unknown, context: ProcessorCont
         const dupContent = await context.prisma.content.create({
           data: {
             code: makeContentCode(),
-            platform: item.platform,
+            platform: contentPackage.platform,
             sourceId: source.id,
             sourceChannelId: channel?.id,
             externalId,
-            sourceUrl: item.originalUrl,
-            author: item.author,
-            originalText: item.text,
+            sourceUrl: contentPackage.links[0] ?? firstEntry.item.originalUrl,
+            author: contentPackage.senderName,
+            originalText: contentPackage.groupedText,
             status: "duplicate" as never,
-            postedAt: item.postedAt,
+            postedAt: firstEntry.item.postedAt,
             contentHash: hashes.linkHash,
             duplicateOfId: duplicate.id,
-            metadata: { ...(item.metadata ?? {}), sourceChannelId: channel?.id ?? null, sourceChannelName: channel?.name ?? null } as any
+            metadata: buildContentPackageMetadata(contentPackage, packageEntries, channel) as any
           } as any
         });
         logger.debug(`Content ${dupContent.code} là bản trùng của ${duplicate.id}`);
@@ -127,19 +140,19 @@ export async function processSourceCrawl(rawJob: unknown, context: ProcessorCont
       const content = await context.prisma.content.create({
         data: {
           code: makeContentCode(),
-          platform: item.platform,
+          platform: contentPackage.platform,
           sourceId: source.id,
           sourceChannelId: channel?.id,
           externalId,
-          sourceUrl: item.originalUrl,
-          author: item.author,
-          originalText: item.text,
+          sourceUrl: contentPackage.links[0] ?? firstEntry.item.originalUrl,
+          author: contentPackage.senderName,
+          originalText: contentPackage.groupedText,
           status: "discovered",
-          postedAt: item.postedAt,
+          postedAt: firstEntry.item.postedAt,
           contentHash: hashes.linkHash,
-          metadata: { ...(item.metadata ?? {}), sourceChannelId: channel?.id ?? null, sourceChannelName: channel?.name ?? null } as any,
+          metadata: buildContentPackageMetadata(contentPackage, packageEntries, channel) as any,
           media: {
-            create: item.media.map((media) => ({
+            create: contentPackage.media.map((media) => ({
               type: media.type,
               mimeType: media.mimeType,
               sourceUrl: media.url,
@@ -155,7 +168,7 @@ export async function processSourceCrawl(rawJob: unknown, context: ProcessorCont
         type: "content:new",
         contentId: content.id,
         code: content.code,
-        platform: item.platform,
+        platform: contentPackage.platform as never,
         createdAt: new Date().toISOString()
       });
 
@@ -217,6 +230,83 @@ function readNumberMap(value: unknown): Record<string, number> {
     if (Number.isFinite(parsed) && parsed > 0) result[key] = parsed;
   }
   return result;
+}
+
+type SourceChannelForPackage = { id: string; name: string; externalId: string } | null;
+type PackageEntry = {
+  item: RawSourceItem;
+  channel: SourceChannelForPackage;
+  rawMessage: RawMessageForGrouping;
+};
+
+function toRawMessageForGrouping(item: RawSourceItem, sourceId: string, channel: SourceChannelForPackage): RawMessageForGrouping {
+  const senderId = readMetadataString(item.metadata, "senderId")
+    ?? readMetadataString(item.metadata, "fromId")
+    ?? item.author
+    ?? "unknown";
+  const senderName = readMetadataString(item.metadata, "senderName") ?? item.author ?? senderId;
+  return {
+    id: channel ? `${channel.id}:${item.externalId}` : item.externalId,
+    platform: item.platform,
+    sourceId,
+    sourceChannelId: channel?.id ?? null,
+    senderId,
+    senderName,
+    text: item.text,
+    media: item.media as RawMedia[],
+    links: extractLinks(item.text),
+    replyToMessageId: readMetadataString(item.metadata, "replyToMessageId") ?? readMetadataString(item.metadata, "replyTo"),
+    mediaGroupId: readMetadataString(item.metadata, "mediaGroupId") ?? readMetadataString(item.metadata, "media_group_id"),
+    createdAt: item.postedAt ?? new Date(),
+    originalUrl: item.originalUrl,
+    metadata: item.metadata ?? {}
+  };
+}
+
+function externalIdForPackage(contentPackage: ContentPackage, channel: SourceChannelForPackage) {
+  if (contentPackage.rawMessageIds.length === 1) return contentPackage.rawMessageIds[0];
+  const prefix = channel ? `${channel.id}:` : "";
+  return `${prefix}pkg:${contentPackage.rawMessageIds.join("+")}`;
+}
+
+function buildContentPackageMetadata(contentPackage: ContentPackage, packageEntries: PackageEntry[], channel: SourceChannelForPackage) {
+  const firstMetadata = packageEntries[0]?.item.metadata ?? {};
+  return {
+    ...firstMetadata,
+    sourceChannelId: channel?.id ?? null,
+    sourceChannelName: channel?.name ?? null,
+    contentPackage: {
+      rawMessageIds: contentPackage.rawMessageIds,
+      status: contentPackage.status,
+      confidence: contentPackage.confidence,
+      productCount: contentPackage.productCount,
+      groupingReason: contentPackage.groupingReason,
+      linkCount: contentPackage.links.length,
+      mediaCount: contentPackage.media.length,
+      rawMessages: packageEntries.map(({ item, rawMessage }) => ({
+        id: rawMessage.id,
+        externalId: item.externalId,
+        senderId: rawMessage.senderId,
+        senderName: rawMessage.senderName,
+        text: rawMessage.text,
+        mediaCount: rawMessage.media.length,
+        links: rawMessage.links ?? [],
+        replyToMessageId: rawMessage.replyToMessageId ?? null,
+        mediaGroupId: rawMessage.mediaGroupId ?? null,
+        createdAt: rawMessage.createdAt.toISOString()
+      }))
+    }
+  };
+}
+
+function readMetadataString(metadata: unknown, key: string) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const value = (metadata as Record<string, unknown>)[key];
+  return typeof value === "string" || typeof value === "number" ? String(value) : null;
+}
+
+function extractLinks(text: string) {
+  return text.match(/https?:\/\/\S+/g) ?? [];
 }
 
 function getCursorKey(channel: { id: string } | null) {

@@ -1,0 +1,159 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - text: Zerun
+        - paragraph [ref=e10]: Đăng lại theo ngành
+      - button "Thu gọn sidebar" [ref=e11] [cursor=pointer]: ‹
+    - navigation "Điều hướng chính" [ref=e12]:
+      - generic [ref=e13]:
+        - generic [ref=e14]: Tổng quan
+        - generic [ref=e15]:
+          - link "Dashboard" [ref=e16] [cursor=pointer]:
+            - /url: /dashboard
+            - img [ref=e17]
+            - generic [ref=e19]: Dashboard
+          - link "Worker jobs / Logs" [ref=e20] [cursor=pointer]:
+            - /url: /worker-jobs
+            - img [ref=e21]
+            - generic [ref=e23]: Worker jobs / Logs
+      - generic [ref=e24]:
+        - generic [ref=e25]: Đăng lại
+        - generic [ref=e26]:
+          - link "Luồng đăng lại" [ref=e27] [cursor=pointer]:
+            - /url: /repost/flow
+            - img [ref=e28]
+            - generic [ref=e30]: Luồng đăng lại
+          - link "Hàng chờ cần xử lý" [ref=e31] [cursor=pointer]:
+            - /url: /repost/review
+            - img [ref=e32]
+            - generic [ref=e34]: Hàng chờ cần xử lý
+          - link "Link lỗi cần xử lý" [ref=e35] [cursor=pointer]:
+            - /url: /repost/manual-links
+            - img [ref=e36]
+            - generic [ref=e38]: Link lỗi cần xử lý
+          - link "Lịch sử đăng lại" [ref=e39] [cursor=pointer]:
+            - /url: /repost/history
+            - img [ref=e40]
+            - generic [ref=e42]: Lịch sử đăng lại
+      - generic [ref=e43]:
+        - generic [ref=e44]: Tài khoản & Kênh
+        - generic [ref=e45]:
+          - link "Quản lý kênh" [ref=e46] [cursor=pointer]:
+            - /url: /accounts
+            - img [ref=e47]
+            - generic [ref=e49]: Quản lý kênh
+          - link "Tài khoản đăng nhập" [ref=e50] [cursor=pointer]:
+            - /url: /accounts/login
+            - img [ref=e51]
+            - generic [ref=e53]: Tài khoản đăng nhập
+      - generic [ref=e54]:
+        - generic [ref=e55]: Cài đặt
+        - generic [ref=e56]:
+          - link "AI" [ref=e57] [cursor=pointer]:
+            - /url: /settings/ai
+            - img [ref=e58]
+            - generic [ref=e60]: AI
+          - link "Affiliate" [ref=e61] [cursor=pointer]:
+            - /url: /settings/affiliate
+            - img [ref=e62]
+            - generic [ref=e64]: Affiliate
+          - link "Cảnh báo Telegram" [ref=e65] [cursor=pointer]:
+            - /url: /settings/telegram-alert
+            - img [ref=e66]
+            - generic [ref=e68]: Cảnh báo Telegram
+      - generic [ref=e69]:
+        - generic [ref=e70]: Công cụ
+        - link "Convert link affiliate" [ref=e72] [cursor=pointer]:
+          - /url: /tools/convert-link
+          - img [ref=e73]
+          - generic [ref=e75]: Convert link affiliate
+    - generic [ref=e77]:
+      - generic [ref=e78]: Z
+      - generic [ref=e79]:
+        - generic [ref=e80]: Zerun
+        - generic [ref=e81]: Extension Shopee Affiliate
+  - main [ref=e82]:
+    - generic [ref=e83]:
+      - generic [ref=e85]:
+        - heading "Convert link affiliate" [level=1] [ref=e86]
+        - paragraph [ref=e87]: Zerun dùng extension Shopee Affiliate trong browser thật. Extension gọi API nền, không mở sản phẩm, không mở Custom Link UI và không tự focus tab affiliate.
+      - generic [ref=e88]:
+        - button "Convert trực tiếp" [ref=e89] [cursor=pointer]
+        - button "Batch thủ công" [ref=e90] [cursor=pointer]
+      - generic [ref=e91]:
+        - generic [ref=e92]:
+          - generic [ref=e93]:
+            - heading "Extension Shopee Affiliate" [level=2] [ref=e94]
+            - paragraph [ref=e95]: Extension kết nối WebSocket với Zerun tại cổng 17385. Tab affiliate chỉ dùng làm session nền khi background fetch không đủ cookie/context.
+          - button "Làm mới" [ref=e97] [cursor=pointer]:
+            - img
+            - text: Làm mới
+        - generic [ref=e98]:
+          - generic [ref=e99]:
+            - generic [ref=e100]:
+              - generic [ref=e101]: Kết nối
+              - strong [ref=e102]: Chưa kết nối
+            - generic [ref=e103]:
+              - generic [ref=e104]: WebSocket
+              - strong [ref=e105]: ws://127.0.0.1:17385
+            - generic [ref=e106]:
+              - generic [ref=e107]: Trạng thái
+              - strong [ref=e108]: Sẵn sàng
+            - generic [ref=e109]:
+              - generic [ref=e110]: Task đang chạy
+              - strong [ref=e111]: "-"
+            - generic [ref=e112]:
+              - generic [ref=e113]: Lỗi gần nhất
+              - strong [ref=e114]: "-"
+            - generic [ref=e115]:
+              - generic [ref=e116]: Kết quả gần nhất
+              - strong [ref=e117]: "-"
+          - generic [ref=e118]:
+            - generic [ref=e119]: Extension chưa kết nối
+            - button "Open Affiliate Login" [ref=e120] [cursor=pointer]:
+              - img
+              - text: Open Affiliate Login
+      - generic [ref=e121]:
+        - heading "Convert trực tiếp bằng extension" [level=2] [ref=e124]
+        - generic [ref=e125]:
+          - generic [ref=e126]:
+            - generic [ref=e127]:
+              - text: Nền tảng
+              - combobox "Nền tảng" [disabled] [ref=e128]:
+                - option "Shopee" [selected]
+                - option "Lazada (coming soon)" [disabled]
+                - option "TikTok Shop (coming soon)" [disabled]
+            - generic [ref=e129]:
+              - text: Kiểu link kết quả
+              - combobox "Kiểu link kết quả" [ref=e130]:
+                - option "Shortlink" [selected]
+                - option "Full affiliate link"
+            - generic [ref=e131]:
+              - text: URL cần convert
+              - textbox "URL cần convert" [ref=e132]:
+                - /placeholder: Dán link Shopee / s.shopee.vn / shopee.vn/...
+            - generic [ref=e133]:
+              - text: Sub_id1
+              - textbox "Sub_id1" [ref=e134]
+            - generic [ref=e135]:
+              - text: Sub_id2
+              - textbox "Sub_id2" [ref=e136]
+            - generic [ref=e137]:
+              - text: Sub_id3
+              - textbox "Sub_id3" [ref=e138]
+            - generic [ref=e139]:
+              - text: Sub_id4
+              - textbox "Sub_id4" [ref=e140]
+            - generic [ref=e141]:
+              - text: Sub_id5
+              - textbox "Sub_id5" [ref=e142]
+          - generic [ref=e143]:
+            - generic [ref=e144]: Sub ID gửi đi
+            - code [ref=e145]: "-"
+          - generic [ref=e146]:
+            - button "Convert bằng extension" [disabled]:
+              - img
+              - text: Convert bằng extension
+            - generic [ref=e147]: Cần mở extension hoặc bật auto connect
