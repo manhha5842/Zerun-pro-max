@@ -365,9 +365,8 @@ async function createAffiliateLinkViaAffiliateTab(task) {
   return parseBatchCustomLinkResponse(payload, task.url, task.subIds, "affiliate_tab", meta);
 }
 
-async function expandAndCleanLink(url) {
+async function expandLinkOnly(url) {
   let resolvedUrl = url;
-  
   try {
     const parsedUrl = new URL(url);
     const host = parsedUrl.hostname.toLowerCase();
@@ -402,22 +401,70 @@ async function expandAndCleanLink(url) {
   } catch (e) {
     console.error("Lỗi expand link:", e);
   }
-
-  try {
-    const parsed = new URL(resolvedUrl);
-    const paramsToDelete = [
-      "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
-      "gads_t_sig", "gclid", "fbclid", "twclid", "msclkid",
-      "affiliate_id", "sub_id", "subid", "subId", "sub_id1", "sub_id2", "sub_id3", "sub_id4", "sub_id5", "sub_id6",
-      "exlaz", "dsource", "laz_share_info", "laz_token", "c", "t"
-    ];
-    paramsToDelete.forEach(key => parsed.searchParams.delete(key));
-    resolvedUrl = parsed.toString();
-  } catch (e) {
-    // Keep resolvedUrl.
-  }
-  
   return resolvedUrl;
+}
+
+function cleanLinkOnly(url) {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    const isShopee = host === "shopee.vn" || host.endsWith(".shopee.vn") || host === "s.shopee.vn" || host === "shp.ee" || host === "shopee.ee";
+    if (isShopee) {
+      parsed.search = "";
+    } else {
+      const paramsToDelete = [
+        "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+        "gads_t_sig", "gclid", "fbclid", "twclid", "msclkid",
+        "affiliate_id", "sub_id", "subid", "subId", "sub_id1", "sub_id2", "sub_id3", "sub_id4", "sub_id5", "sub_id6",
+        "exlaz", "dsource", "laz_share_info", "laz_token", "c", "t"
+      ];
+      paramsToDelete.forEach(key => parsed.searchParams.delete(key));
+    }
+    return parsed.toString();
+  } catch (e) {
+    return url;
+  }
+}
+
+function buildManualShopeeAffiliateLink(targetUrl, affiliateId, subIdsInput, subIdInput, configShopee) {
+  const cleanUrl = cleanLinkOnly(targetUrl);
+  const encodedUrl = encodeURIComponent(cleanUrl);
+
+  let subId = "";
+  if (subIdInput) {
+    subId = subIdInput;
+  } else if (subIdsInput) {
+    if (Array.isArray(subIdsInput)) {
+      subId = subIdsInput.map(s => String(s || "").trim()).filter(Boolean).join("-");
+    } else if (typeof subIdsInput === "object") {
+      subId = [
+        subIdsInput.subId1,
+        subIdsInput.subId2,
+        subIdsInput.subId3,
+        subIdsInput.subId4,
+        subIdsInput.subId5
+      ].map(s => String(s || "").trim()).filter(Boolean).join("-");
+    }
+  }
+
+  if (!subId && configShopee && configShopee.subIds) {
+    const s = configShopee.subIds;
+    subId = [s.subId1, s.subId2, s.subId3, s.subId4, s.subId5]
+      .map(val => String(val || "").trim())
+      .filter(Boolean)
+      .join("-");
+  }
+
+  let result = `https://s.shopee.vn/an_redir?origin_link=${encodedUrl}&affiliate_id=${affiliateId.trim()}`;
+  if (subId) {
+    result += `&sub_id=${encodeURIComponent(subId)}`;
+  }
+  return result;
+}
+
+async function expandAndCleanLink(url) {
+  const expanded = await expandLinkOnly(url);
+  return cleanLinkOnly(expanded);
 }
 
 async function createLazadaAffiliateLink(cleanedUrl, subIds, config, lazadaSubIdSet = null) {
@@ -781,11 +828,16 @@ async function findLazadaAffiliateTab(sourceUrl) {
 
 async function createAffiliateLink(task, configInput) {
   const config = mergeConfig(configInput || await loadZerunConfig());
-  const cleanedUrl = await expandAndCleanLink(task.url);
-  const isLazada = cleanedUrl.includes("lazada.vn") || cleanedUrl.includes("lazada.com");
+  
+  // 1. Chỉ giải mã link rút gọn để lấy link gốc dài
+  const resolvedUrl = await expandLinkOnly(task.url);
+  const isLazada = resolvedUrl.includes("lazada.vn") || resolvedUrl.includes("lazada.com");
+
+  // 2. Làm sạch link trước khi convert qua API (Shopee xoá sạch query params, Lazada xoá theo blacklist)
+  const cleanedUrl = cleanLinkOnly(resolvedUrl);
 
   if (isLazada) {
-    return createLazadaAffiliateLink(cleanedUrl, task.subIds, config);
+    return createLazadaAffiliateLink(cleanedUrl, task.subIds, config, task.lazadaSubIdSet);
   }
 
   const shopeeTask = { ...task, url: cleanedUrl };
@@ -794,12 +846,42 @@ async function createAffiliateLink(task, configInput) {
   if (config.apiMode !== "affiliate_tab_only") {
     lastResult = await createAffiliateLinkViaBackgroundFetch(shopeeTask);
     if (lastResult.ok) return lastResult;
-    if (config.apiMode === "background_only") return lastResult;
+    if (config.apiMode === "background_only") {
+      if (task.shopeeAffiliateId) {
+        const fallbackUrl = buildManualShopeeAffiliateLink(cleanedUrl, task.shopeeAffiliateId, task.subIds, task.subId, config.shopee);
+        return {
+          ok: true,
+          status: "DONE",
+          sourceUrl: task.url,
+          shortLink: fallbackUrl,
+          longLink: fallbackUrl,
+          rawLongLink: fallbackUrl,
+          convertedUrl: fallbackUrl,
+          via: "manual_fallback"
+        };
+      }
+      return lastResult;
+    }
   }
 
   if (config.apiMode !== "background_only") {
     lastResult = await createAffiliateLinkViaAffiliateTab(shopeeTask);
-    if (lastResult.ok || lastResult.status === "NEED_LOGIN") return lastResult;
+    if (lastResult.ok) return lastResult;
+  }
+
+  // Fallback sang convert thủ công nếu extension không convert được qua API
+  if (task.shopeeAffiliateId) {
+    const fallbackUrl = buildManualShopeeAffiliateLink(cleanedUrl, task.shopeeAffiliateId, task.subIds, task.subId, config.shopee);
+    return {
+      ok: true,
+      status: "DONE",
+      sourceUrl: task.url,
+      shortLink: fallbackUrl,
+      longLink: fallbackUrl,
+      rawLongLink: fallbackUrl,
+      convertedUrl: fallbackUrl,
+      via: "manual_fallback"
+    };
   }
 
   return lastResult || {

@@ -227,6 +227,7 @@ const ZerunWS = (() => {
       url: message.url,
       subIds: message.subIds,
       lazadaSubIdSet: message.lazadaSubIdSet,
+      shopeeAffiliateId: message.shopeeAffiliateId,
       outputType: message.outputType || "shortlink"
     };
 

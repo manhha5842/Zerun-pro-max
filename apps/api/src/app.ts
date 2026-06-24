@@ -626,6 +626,7 @@ function registerExtendedSettingsRoutes(app: FastifyInstance) {
     unknownLinkAction: "saved_for_review"
   });
 
+
   app.post("/settings/affiliate/test-conversion", async (request) => {
     const body = request.body as AnyBody;
     const platform = String(body.platform ?? "");
@@ -638,23 +639,6 @@ function registerExtendedSettingsRoutes(app: FastifyInstance) {
 
     try {
       if (platform === "shopee") {
-        let isFullAffiliate = false;
-        try {
-          const urlObj = new URL(testUrl);
-          if (urlObj.searchParams.has("affiliate_id")) isFullAffiliate = true;
-          const utmMedium = urlObj.searchParams.get("utm_medium");
-          const utmSource = urlObj.searchParams.get("utm_source");
-          if (utmMedium === "affiliates" && utmSource && utmSource.startsWith("an_")) isFullAffiliate = true;
-        } catch {
-          // ignore
-        }
-
-        if (isFullAffiliate && configData.replaceAffiliateId && configData.affiliateId) {
-          const adapter = new ShopeeAffiliateIdAdapter(configData.affiliateId);
-          const result = await adapter.convert({ url: testUrl, network: "shopee" });
-          return ok({ success: result.success, converted: result.converted, error: result.error });
-        }
-
         const makeAdapter = (source: string) => {
           if (source === "web") {
             return new ShopeeAffiliateAdapter({
@@ -689,6 +673,23 @@ function registerExtendedSettingsRoutes(app: FastifyInstance) {
             campaignId: configData.campaignId || undefined,
             subId: configData.subId || undefined
           });
+        }
+
+        // Fallback convert thủ công nếu các phương thức trên thất bại và có affiliateId
+        if (!result.success && configData.affiliateId) {
+          try {
+            const resolvedUrl = await expandUrl(testUrl, followRedirectUrl);
+            const fallbackUrl = buildManualShopeeAffiliateLink(
+              resolvedUrl,
+              configData.affiliateId,
+              undefined,
+              configData.subId,
+              configData
+            );
+            return ok({ success: true, converted: fallbackUrl, via: "manual_fallback" });
+          } catch (e) {
+            // ignore
+          }
         }
 
         return ok({ success: result.success, converted: result.converted, error: result.error });
@@ -2561,6 +2562,46 @@ function replaceAllUrls(text: string, results: ConvertLinkBatch["results"]) {
   }, text);
 }
 
+function cleanShopeeUrlParameters(urlStr: string): string {
+  try {
+    const url = new URL(urlStr);
+    url.search = "";
+    return url.toString();
+  } catch {
+    return urlStr;
+  }
+}
+
+function buildManualShopeeAffiliateLink(
+  targetUrl: string,
+  affiliateId: string,
+  subIdsInput?: string[],
+  subIdInput?: string,
+  shopeeConfig?: any
+): string {
+  const cleanUrl = cleanShopeeUrlParameters(targetUrl);
+  const encodedUrl = encodeURIComponent(cleanUrl);
+
+  let subId = "";
+  if (subIdInput) {
+    subId = subIdInput;
+  } else if (subIdsInput && subIdsInput.some(Boolean)) {
+    subId = subIdsInput.map(s => s.trim()).filter(Boolean).join("-");
+  } else if (shopeeConfig?.subIds) {
+    const s = shopeeConfig.subIds;
+    subId = [s.subId1, s.subId2, s.subId3, s.subId4, s.subId5]
+      .map(val => String(val || "").trim())
+      .filter(Boolean)
+      .join("-");
+  }
+
+  let result = `https://s.shopee.vn/an_redir?origin_link=${encodedUrl}&affiliate_id=${affiliateId.trim()}`;
+  if (subId) {
+    result += `&sub_id=${encodeURIComponent(subId)}`;
+  }
+  return result;
+}
+
 function registerConvertLinkToolRoutes(app: FastifyInstance) {
   app.get("/tools/convert-link/extension-status", async () => {
     return ok(zerunExtensionBridge.getStatus());
@@ -2574,74 +2615,86 @@ function registerConvertLinkToolRoutes(app: FastifyInstance) {
     const subIds = subIdsRaw.map((item) => String(item ?? ""));
     const subId = typeof body.subId === "string" ? body.subId : undefined;
 
-    // Tự động thay thế nhanh nếu link Shopee đầu vào chứa sẵn affiliate_id
+    // Load Shopee Config từ DB để dùng cho fallback hoặc Lazada subId
+    let shopeeConfig: any = null;
+    let lazadaSubIdSet = body.lazadaSubIdSet;
+    const isLazada = url.includes("lazada.vn") || url.includes("s.lazada.vn");
+    const isShopee = url.includes("shopee.vn") || url.includes("shp.ee") || url.includes("shopee.ee") || url.includes("shopee.");
+
     try {
       const setting = await prisma.systemSetting.findUnique({ where: { key: "affiliate_settings" } });
       const affiliateConfig = (setting?.value || {}) as any;
-      const shopeeConfig = affiliateConfig.shopee;
+      shopeeConfig = affiliateConfig.shopee;
 
-      if (shopeeConfig?.enabled && shopeeConfig.affiliateId) {
-        const urlObj = new URL(url);
-        const host = urlObj.hostname.toLowerCase().replace(/^www\./, "");
-        const isShopee = host === "shopee.vn" || host.endsWith(".shopee.vn") || host === "s.shopee.vn" || host === "shp.ee" || host === "shopee.ee";
-
-        if (isShopee) {
-          let matched = false;
-          const affiliateId = shopeeConfig.affiliateId.trim();
-
-          if (urlObj.searchParams.has("affiliate_id")) {
-            urlObj.searchParams.set("affiliate_id", affiliateId);
-            matched = true;
-          }
-          const utmMedium = urlObj.searchParams.get("utm_medium");
-          const utmSource = urlObj.searchParams.get("utm_source");
-          if (utmMedium === "affiliates" && utmSource && utmSource.startsWith("an_")) {
-            urlObj.searchParams.set("utm_source", `an_${affiliateId}`);
-            matched = true;
-          }
-
-          if (matched) {
-            const finalUrl = urlObj.toString();
-            return ok({
-              status: "DONE",
-              originalUrl: url,
-              convertedUrl: finalUrl,
-              shortLink: finalUrl,
-              longLink: finalUrl,
-              success: true,
-              via: "fast_replace"
-            });
-          }
-        }
-      }
-    } catch (e) {
-      // Bỏ qua lỗi và tiếp tục convert qua extension
-    }
-
-    // Tìm lazadaSubIdSet nếu là link Lazada
-    let lazadaSubIdSet = body.lazadaSubIdSet;
-    const isLazada = url.includes("lazada.vn") || url.includes("s.lazada.vn");
-    if (isLazada && !lazadaSubIdSet) {
-      try {
-        const setting = await prisma.systemSetting.findUnique({ where: { key: "affiliate_settings" } });
-        const affiliateConfig = (setting?.value || {}) as any;
+      if (isLazada && !lazadaSubIdSet) {
         const subIdSets = affiliateConfig.lazada?.subIdSets || [];
         const defaultSet = subIdSets.find((s: any) => s.isDefault) || subIdSets[0];
         if (defaultSet) {
           lazadaSubIdSet = defaultSet;
         }
-      } catch (e) {
-        // ignore
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    const shopeeAffiliateId = (shopeeConfig?.enabled && shopeeConfig.affiliateId) ? shopeeConfig.affiliateId.trim() : "";
+
+    let result: any = null;
+    let convertError: any = null;
+
+    try {
+      result = await zerunExtensionBridge.convert({
+        url,
+        subIds,
+        subId,
+        outputType,
+        lazadaSubIdSet,
+        shopeeAffiliateId
+      });
+    } catch (error) {
+      convertError = error;
+    }
+
+    // Nếu Extension convert thành công -> Trả về kết quả từ Extension
+    if (result && result.status === "DONE") {
+      return ok({
+        ...result,
+        originalUrl: url,
+        convertedUrl: outputType === "full" ? result.longLink ?? result.shortLink ?? null : result.shortLink ?? result.longLink ?? null,
+        success: true
+      });
+    }
+
+    // Nếu Extension lỗi/không kết nối, và là Shopee có cấu hình affiliateId -> Fallback thủ công
+    if (isShopee && shopeeAffiliateId) {
+      try {
+        const resolvedUrl = await expandUrl(url, followRedirectUrl);
+        const fallbackUrl = buildManualShopeeAffiliateLink(resolvedUrl, shopeeAffiliateId, subIds, subId, shopeeConfig);
+        return ok({
+          status: "DONE",
+          originalUrl: url,
+          convertedUrl: fallbackUrl,
+          shortLink: fallbackUrl,
+          longLink: fallbackUrl,
+          rawLongLink: fallbackUrl,
+          success: true,
+          via: "manual_fallback"
+        });
+      } catch (fallbackErr) {
+        // ignore and let it fail below
       }
     }
 
-    const result = await zerunExtensionBridge.convert({ url, subIds, subId, outputType, lazadaSubIdSet });
-
+    // Nếu không fallback được, trả về lỗi nguyên bản
+    const message = result?.message || (convertError instanceof Error ? convertError.message : "Extension không trả kết quả.");
+    const errorCode = result?.errorCode || "EXTENSION_ERROR";
     return ok({
-      ...result,
+      status: result?.status || "FAILED",
       originalUrl: url,
-      convertedUrl: outputType === "full" ? result.longLink ?? result.shortLink ?? null : result.shortLink ?? result.longLink ?? null,
-      success: result.status === "DONE"
+      convertedUrl: null,
+      success: false,
+      errorCode,
+      message
     });
   });
 

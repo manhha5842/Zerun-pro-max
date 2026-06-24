@@ -158,8 +158,49 @@ class StaticFailureAffiliateAdapter implements AffiliateAdapter {
   }
 }
 
+function cleanShopeeUrlParameters(urlStr: string): string {
+  try {
+    const url = new URL(urlStr);
+    url.search = "";
+    return url.toString();
+  } catch {
+    return urlStr;
+  }
+}
+
+function buildManualShopeeAffiliateLink(
+  targetUrl: string,
+  affiliateId: string,
+  subIdInput?: string,
+  shopeeConfig?: any
+): string {
+  const cleanUrl = cleanShopeeUrlParameters(targetUrl);
+  const encodedUrl = encodeURIComponent(cleanUrl);
+
+  let subId = "";
+  if (subIdInput) {
+    subId = subIdInput;
+  } else if (shopeeConfig?.subIds) {
+    const s = shopeeConfig.subIds;
+    subId = [s.subId1, s.subId2, s.subId3, s.subId4, s.subId5]
+      .map(val => String(val || "").trim())
+      .filter(Boolean)
+      .join("-");
+  }
+
+  let result = `https://s.shopee.vn/an_redir?origin_link=${encodedUrl}&affiliate_id=${affiliateId.trim()}`;
+  if (subId) {
+    result += `&sub_id=${encodeURIComponent(subId)}`;
+  }
+  return result;
+}
+
 class ExtensionAffiliateAdapter implements AffiliateAdapter {
-  constructor(private readonly network: "shopee" | "lazada") {}
+  constructor(
+    private readonly network: "shopee" | "lazada",
+    private readonly shopeeAffiliateId?: string,
+    private readonly shopeeConfig?: any
+  ) {}
 
   detect() {
     return [];
@@ -202,6 +243,14 @@ class ExtensionAffiliateAdapter implements AffiliateAdapter {
         });
         return { original: input.url, converted, network: this.network, success: true };
       }
+
+      // Fallback convert thủ công khi extension trả về kết quả lỗi
+      if (this.network === "shopee" && this.shopeeAffiliateId) {
+        const fallback = buildManualShopeeAffiliateLink(input.url, this.shopeeAffiliateId, input.subId, this.shopeeConfig);
+        logger.info(`shopee extension convert: fallback thành công`, { url: input.url, fallback });
+        return { original: input.url, converted: fallback, network: "shopee" as const, success: true };
+      }
+
       logger.warn(`${this.network} extension convert: thất bại`, {
         url: input.url,
         error: data?.message ?? data?.errorCode ?? payload.error?.message ?? `Extension ${this.network} chưa trả link`
@@ -214,6 +263,13 @@ class ExtensionAffiliateAdapter implements AffiliateAdapter {
         error: data?.message ?? data?.errorCode ?? payload.error?.message ?? `Extension ${this.network} chưa trả link`
       };
     } catch (error) {
+      // Fallback convert thủ công khi API lỗi
+      if (this.network === "shopee" && this.shopeeAffiliateId) {
+        const fallback = buildManualShopeeAffiliateLink(input.url, this.shopeeAffiliateId, input.subId, this.shopeeConfig);
+        logger.info(`shopee extension convert: fallback thành công khi API lỗi`, { url: input.url, fallback });
+        return { original: input.url, converted: fallback, network: "shopee" as const, success: true };
+      }
+
       logger.warn(`${this.network} extension convert: lỗi gọi API bridge`, {
         url: input.url,
         error: error instanceof Error ? error.message : `Không gọi được extension ${this.network}`
@@ -458,7 +514,11 @@ async function createConfiguredAdapterRegistry(prisma: PrismaClient) {
       const shopeeCampaign = shopeeConfig.campaignId || read("accessTradeCampaignId") || undefined;
       if (provider === "affiliate_id") return new ShopeeAffiliateIdAdapter(shopeeConfig.affiliateId || read("shopeeAffiliateId"));
       if (provider === "web") {
-        return new ExtensionAffiliateAdapter("shopee");
+        return new ExtensionAffiliateAdapter(
+          "shopee",
+          shopeeConfig.affiliateId || read("shopeeAffiliateId"),
+          shopeeConfig
+        );
       }
       return makeAccessTrade(shopeeToken, shopeeCampaign);
     };
@@ -503,11 +563,9 @@ async function createConfiguredAdapterRegistry(prisma: PrismaClient) {
 
     const providers: Partial<Record<LinkNetwork, AffiliateAdapter>> = {};
     if (shopeeConfig.enabled) {
-      const fastAffiliateId = shopeeConfig.affiliateId || read("shopeeAffiliateId");
       providers.shopee = makeChain(
         shopeeConfig,
-        makeShopeeProvider,
-        fastAffiliateId ? [new ShopeeAffiliateIdAdapter(fastAffiliateId, true)] : []
+        makeShopeeProvider
       );
     }
     if (lazadaConfig.enabled) providers.lazada = makeChain(lazadaConfig, makeLazadaProvider);

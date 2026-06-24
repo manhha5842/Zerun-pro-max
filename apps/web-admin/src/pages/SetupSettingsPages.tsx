@@ -487,27 +487,16 @@ function ShopeeCard({
           </div>
 
           <div className="flex flex-col gap-3">
-            <h3 className="text-sm font-semibold border-b pb-1 text-gray-700 dark:text-gray-300">Quy tắc xử lý link</h3>
-            <label className="checkbox-row">
-              <input
-                type="checkbox"
-                checked={config.replaceAffiliateId}
-                onChange={(e) => onChange({ replaceAffiliateId: e.target.checked })}
+            <h3 className="text-sm font-semibold border-b pb-1 text-gray-700 dark:text-gray-300">Thông tin Affiliate</h3>
+            <div>
+              <Label>Shopee Affiliate ID</Label>
+              <Input
+                value={config.affiliateId}
+                onChange={(e) => onChange({ affiliateId: e.target.value })}
                 disabled={disabled}
+                placeholder="Nhập affiliate_id để convert và làm fallback thủ công"
               />
-              <span className="text-xs">Thay affiliateId khi gặp link Shopee affiliate gốc</span>
-            </label>
-            {config.replaceAffiliateId && (
-              <div>
-                <Label>Shopee Affiliate ID mới</Label>
-                <Input
-                  value={config.affiliateId}
-                  onChange={(e) => onChange({ affiliateId: e.target.value })}
-                  disabled={disabled}
-                  placeholder="Nhập affiliate_id mới để thay"
-                />
-              </div>
-            )}
+            </div>
           </div>
 
           <div className="flex flex-col gap-3">

@@ -12,6 +12,7 @@ export type ExtensionConvertInput = {
   subId?: string;
   outputType?: "shortlink" | "full";
   lazadaSubIdSet?: any;
+  shopeeAffiliateId?: string;
 };
 
 export type ExtensionConvertResult = {
@@ -343,6 +344,7 @@ export class ZerunExtensionBridge {
         url: input.url,
         subIds: normalizeSubIds(input),
         lazadaSubIdSet: input.lazadaSubIdSet,
+        shopeeAffiliateId: input.shopeeAffiliateId,
         outputType: input.outputType ?? "shortlink"
       });
     });

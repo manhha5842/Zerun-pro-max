@@ -100,30 +100,11 @@ export function buildShopeeSubId(subIds: ShopeeSubIds): string {
 
 // 2. Thay affiliate_id Shopee nếu URL là link affiliate đầy đủ
 export function replaceShopeeAffiliateIdIfFullAffiliateUrl(urlStr: string, affiliateId: string): string {
-  if (!affiliateId?.trim()) return urlStr;
-  try {
-    const url = new URL(urlStr);
-    let matched = false;
-    if (url.searchParams.has("affiliate_id")) {
-      url.searchParams.set("affiliate_id", affiliateId.trim());
-      matched = true;
-    }
-    const utmMedium = url.searchParams.get("utm_medium");
-    const utmSource = url.searchParams.get("utm_source");
-    if (utmMedium === "affiliates" && utmSource && utmSource.startsWith("an_")) {
-      url.searchParams.set("utm_source", `an_${affiliateId.trim()}`);
-      matched = true;
-    }
-    return matched ? url.toString() : urlStr;
-  } catch {
-    return urlStr;
-  }
+  // Gỡ bỏ tính năng thay thế nhanh affiliate_id
+  return urlStr;
 }
 
 export function normalizeShopeeAffiliateUrl(url: string, config: ShopeeConfig): string {
-  if (config.replaceAffiliateId) {
-    return replaceShopeeAffiliateIdIfFullAffiliateUrl(url, config.affiliateId);
-  }
   return url;
 }
 
@@ -497,7 +478,7 @@ export function fromOldPayload(oldPayload: any): NewAffiliateConfig {
       accessTradeToken: shopee.accessTradeToken || accessTradeToken,
       campaignId: shopee.campaignId || accessTradeCampaignId,
       affiliateId: shopee.affiliateId || oldPayload?.shopeeAffiliateId || "",
-      replaceAffiliateId: shopee.replaceAffiliateId ?? !!(shopee.affiliateId || oldPayload?.shopeeAffiliateId),
+      replaceAffiliateId: false,
       outputType: shopee.outputType || "shortlink",
       subIds: shopeeSubIds,
       testUrl: "https://shopee.vn/san-pham-mau?affiliate_id=old_id",
