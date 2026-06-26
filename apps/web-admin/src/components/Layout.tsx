@@ -99,7 +99,7 @@ export function Layout() {
             <div className="footer-avatar">Z</div>
             <div>
               <div className="footer-title">Zerun</div>
-              <div className="footer-subtitle">Extension Shopee Affiliate</div>
+              <div className="footer-subtitle">Zerun Extension</div>
             </div>
           </div>
         </div>

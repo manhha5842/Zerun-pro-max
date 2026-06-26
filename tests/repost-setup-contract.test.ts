@@ -141,7 +141,6 @@ describe("repost account setup contract", () => {
     expect(flowPage).not.toContain("Dùng tất cả kênh đích active");
     expect(flowPage).not.toContain("Phạm vi đăng");
     expect(flowPage).not.toContain("targetScope");
-    expect(flowPage).toContain("Chạy thử flow");
     expect(flowPage).toContain("Nguồn → Gom tin → AI → Đổi link → Route → Đăng");
     expect(flowPage).toContain("Kênh đích");
     expect(flowPage).not.toContain("source channels");

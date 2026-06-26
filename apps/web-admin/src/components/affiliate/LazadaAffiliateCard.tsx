@@ -77,7 +77,7 @@ export function LazadaAffiliateCard({ config, tests, isSaving, onChange, onSave,
   }, [defaultSet]);
 
   const methods = useMemo<Array<AffiliateMethodOption<LazadaMethod>>>(() => [
-    { value: "web", label: "Extension Lazada Affiliate", status: testAwareStatus(true, tests.web) },
+    { value: "web", label: "Zerun Extension", status: testAwareStatus(true, tests.web) },
     { value: "accesstrade", label: "AccessTrade", status: testAwareStatus(accessTradeConfigured, tests.accesstrade) }
   ], [accessTradeConfigured, tests]);
 
@@ -206,7 +206,7 @@ export function LazadaAffiliateCard({ config, tests, isSaving, onChange, onSave,
     <>
       <PlatformAffiliateCard<LazadaMethod>
         platformName="Lazada"
-        description="Convert link Lazada thông qua Extension (Web UI) hoặc AccessTrade. Lazada API chính thức không còn được hỗ trợ."
+        description="Convert link Lazada thông qua Extension hoặc AccessTrade. Lazada API chính thức không còn được hỗ trợ."
         accent="#1a71ff"
         enabled={config.enabled}
         status={platformStatus(config.enabled, methods)}
@@ -222,7 +222,7 @@ export function LazadaAffiliateCard({ config, tests, isSaving, onChange, onSave,
       >
         <AffiliateMethodCard
           id="lazada-web"
-          title="Extension Lazada Affiliate"
+          title="Zerun Extension"
           description="Dùng extension đang cài trong Chrome/Edge để convert link Lazada bằng session Lazada Adsense hiện có."
           requirement="Yêu cầu: extension đã kết nối WebSocket ws://localhost:17385 và tài khoản Lazada Adsense đã đăng nhập trong browser."
           status={methods[0].status}

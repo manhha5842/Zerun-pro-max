@@ -130,9 +130,6 @@ describe("simplified repost pipeline", () => {
     expect(flowPage).not.toContain("Phạm vi đăng");
     expect(flowPage).not.toContain("Flow này đang dùng tất cả kênh đích active.");
     expect(flowPage).not.toContain("Flow này chỉ dùng");
-    expect(flowPage).toContain("Chạy thử flow");
-    expect(flowPage).toContain("Gom gói");
-    expect(flowPage).toContain("Final action");
     expect(flowPage).not.toContain("sourceSummary.polling");
     expect(flowPage).not.toContain("NODE_CONFIG_STORAGE_KEY");
     expect(flowPage).not.toContain("Bật lọc trùng");
@@ -202,8 +199,8 @@ describe("simplified repost pipeline", () => {
     expect(publishProcessor).toContain("existingActiveAttempt");
     expect(publishProcessor).toContain("duplicateSuccess");
     const workerRuntime = read("packages/worker-core/src/runtime.ts");
-    expect(workerRuntime).toContain("Shopee extension convert: gửi yêu cầu");
-    expect(workerRuntime).toContain("Shopee extension convert: thất bại");
+    expect(workerRuntime).toContain("extension convert: gửi yêu cầu");
+    expect(workerRuntime).toContain("extension convert: thất bại");
   });
 
   it("records a source-flow problem instead of blaming targets when a channel is not linked to a flow", () => {

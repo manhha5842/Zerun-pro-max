@@ -351,7 +351,7 @@ export function RepostAccountsPage({ kind }: { kind: AccountKind }) {
             { key: "health", header: "Kết nối", render: (row) => <Badge tone={row.health === "healthy" ? "good" : row.health === "failed" ? "danger" : "neutral"}>{row.health}</Badge> },
             { key: "active", header: "Trạng thái", render: (row) => <Badge tone={row.isActive ? "good" : "neutral"}>{row.isActive ? "Đang bật" : "Tạm tắt"}</Badge> },
             { key: "actions", header: "Thao tác", render: (row) => <div className="row-actions">
-              <Button size="sm" variant="secondary" icon={<PencilLine aria-hidden />} onClick={() => editAccount(row)}>Kết nối lại</Button>
+              {row.health !== "healthy" ? <Button size="sm" variant="secondary" icon={<PencilLine aria-hidden />} onClick={() => editAccount(row)}>Kết nối lại</Button> : null}
               <Button size="sm" variant="secondary" icon={<TestTube2 aria-hidden />} onClick={() => testAccount.mutate(row.id)}>Kiểm tra</Button>
               <Button size="sm" variant="ghost" onClick={() => toggleAccount.mutate({ id: row.id, isActive: !row.isActive })}>{row.isActive ? "Tắt" : "Bật"}</Button>
               <Button size="sm" variant="danger" icon={<Trash2 aria-hidden />} onClick={() => removeAccount.mutate(row.id)}>Xóa</Button>

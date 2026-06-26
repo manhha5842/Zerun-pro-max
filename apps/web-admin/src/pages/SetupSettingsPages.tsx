@@ -80,7 +80,7 @@ type TelegramSettings = {
 };
 
 const providerLabels: Record<AffiliateProvider, string> = {
-  web: "Web/session",
+  web: "Chrome Extension",
   api: "API chính thức",
   accesstrade: "AccessTrade",
   affiliate_id: "Thay affiliate_id"
@@ -426,7 +426,7 @@ function ShopeeCard({
                   disabled={disabled}
                 >
                   <option value="accesstrade">AccessTrade</option>
-                  <option value="web">Web UI (Extension)</option>
+                  <option value="web">Chrome Extension</option>
                 </Select>
               </div>
               <div className="flex flex-col justify-end">
@@ -450,7 +450,7 @@ function ShopeeCard({
                   disabled={disabled}
                 >
                   <option value="accesstrade">AccessTrade</option>
-                  <option value="web">Web UI (Extension)</option>
+                  <option value="web">Chrome Extension</option>
                 </Select>
               </div>
             )}
@@ -624,7 +624,7 @@ function LazadaCard({
                   disabled={disabled}
                 >
                   <option value="accesstrade">AccessTrade</option>
-                  <option value="web">Web UI (Extension)</option>
+                  <option value="web">Chrome Extension</option>
                 </Select>
               </div>
               <div className="flex flex-col justify-end">
@@ -648,7 +648,7 @@ function LazadaCard({
                   disabled={disabled}
                 >
                   <option value="accesstrade">AccessTrade</option>
-                  <option value="web">Web UI (Extension)</option>
+                  <option value="web">Chrome Extension</option>
                 </Select>
               </div>
             )}
@@ -1239,10 +1239,10 @@ export function LegacyAffiliateSettingsPage() {
               verification: "Tài khoản publisher đã được duyệt chiến dịch và Campaign ID không rỗng."
             },
             {
-              title: "Cấu hình Shopee qua AccessTrade",
+              title: "Cấu hình Shopee qua Chrome Extension / AccessTrade",
               status: "ready",
-              description: "Phase hiện tại chỉ hỗ trợ ổn định mode accesstrade. Web mode cần session affiliate Shopee và chưa được nối vào UI.",
-              verification: "Shopee mode là Qua AccessTrade."
+              description: "Hệ thống hỗ trợ chuyển đổi qua Chrome Extension hoặc API AccessTrade. Khi dùng Extension, cần bật Extension và giữ tab Shopee Affiliate hoạt động.",
+              verification: "Shopee mode là Chrome Extension hoặc AccessTrade."
             },
             {
               title: "Lazada Open Platform",

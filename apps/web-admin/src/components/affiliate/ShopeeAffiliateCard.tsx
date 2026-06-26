@@ -50,7 +50,7 @@ export function ShopeeAffiliateCard({ config, tests, isSaving, onChange, onSave,
   const methods = useMemo<Array<AffiliateMethodOption<ShopeeMethod>>>(() => [
     {
       value: "web",
-      label: "Web UI / Shopee Affiliate Dashboard",
+      label: "Zerun Extension",
       status: testAwareStatus(true, tests.web)
     },
     {
@@ -67,7 +67,7 @@ export function ShopeeAffiliateCard({ config, tests, isSaving, onChange, onSave,
   return (
     <PlatformAffiliateCard<ShopeeMethod>
       platformName="Shopee"
-      description="Convert link Shopee thông qua Extension (Web UI) hoặc AccessTrade. Tự động thay thế nóng nếu link có sẵn affiliate_id."
+      description="Convert link Shopee thông qua Extension hoặc AccessTrade. Tự động thay thế nóng nếu link có sẵn affiliate_id."
       accent="#ee4d2d"
       enabled={config.enabled}
       status={platformStatus(config.enabled, methods)}
@@ -83,27 +83,20 @@ export function ShopeeAffiliateCard({ config, tests, isSaving, onChange, onSave,
     >
       <AffiliateMethodCard
         id="shopee-web"
-        title="Extension Shopee Affiliate"
+        title="Zerun Extension"
         description="Dùng extension đang cài trong Chrome/Edge để gọi batchCustomLink bằng session Shopee Affiliate hiện có."
         requirement="Yêu cầu: extension đã kết nối WebSocket ws://localhost:17385 và tài khoản Shopee Affiliate đã đăng nhập trong browser."
         status={methods[0].status}
         expanded={expanded.web}
         disabled={!config.enabled}
-        testLabel="Test Web UI"
+        testLabel="Test Extension"
         testLoading={tests.web?.loading}
-        result={tests.web?.status === "passed" ? tests.web.message ?? "Web UI test thành công." : null}
-        error={tests.web?.status === "failed" ? tests.web.message ?? "Web UI test thất bại." : null}
+        result={tests.web?.status === "passed" ? tests.web.message ?? "Extension test thành công." : null}
+        error={tests.web?.status === "failed" ? tests.web.message ?? "Extension test thất bại." : null}
         onToggle={() => setMethodExpanded("web")}
         onTest={() => onTest("web")}
       >
         <div className="form-grid">
-          <label>
-            <Label>Kiểu link kết quả</Label>
-            <Select value={config.outputType} onChange={(event) => onChange({ outputType: event.target.value as ShopeeConfig["outputType"] })}>
-              <option value="shortlink">Shortlink</option>
-              <option value="full">Full affiliate link</option>
-            </Select>
-          </label>
           <label>
             <Label>Shopee Affiliate ID để tự thay thế nhanh</Label>
             <Input value={config.affiliateId} onChange={(event) => onChange({ affiliateId: event.target.value, replaceAffiliateId: true })} disabled={!config.enabled} placeholder="Nhập affiliate_id của bạn" />

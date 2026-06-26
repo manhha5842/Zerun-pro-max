@@ -167,7 +167,7 @@ export class ZerunExtensionBridge {
     socket.on("close", () => {
       if (this.socket === socket) {
         this.socket = null;
-        this.failPendingRequests("EXTENSION_DISCONNECTED", "Extension Shopee Affiliate đã ngắt kết nối Zerun.");
+        this.failPendingRequests("EXTENSION_DISCONNECTED", "Zerun Extension đã ngắt kết nối Zerun.");
       }
       logger.warn("Zerun extension đã ngắt kết nối");
     });
@@ -252,7 +252,7 @@ export class ZerunExtensionBridge {
       return {
         success: false,
         errorCode: "EXTENSION_DISCONNECTED",
-        message: "Extension Shopee Affiliate chưa kết nối Zerun."
+        message: "Zerun Extension chưa kết nối Zerun."
       };
     }
 
@@ -302,7 +302,7 @@ export class ZerunExtensionBridge {
         sourceUrl: input.url,
         convertedUrl: null,
         errorCode: "EXTENSION_DISCONNECTED",
-        message: "Extension Shopee Affiliate chưa kết nối Zerun."
+        message: "Zerun Extension chưa kết nối Zerun."
       });
     }
 
@@ -369,7 +369,7 @@ export class ZerunExtensionBridge {
         else socket.close?.(4000, "Heartbeat timeout");
         if (this.socket === socket) {
           this.socket = null;
-          this.failPendingRequests("EXTENSION_DISCONNECTED", "Extension Shopee Affiliate không phản hồi heartbeat.");
+          this.failPendingRequests("EXTENSION_DISCONNECTED", "Zerun Extension không phản hồi heartbeat.");
         }
         return;
       }

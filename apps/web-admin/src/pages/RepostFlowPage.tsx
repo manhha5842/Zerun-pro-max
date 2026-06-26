@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Bot, CheckCircle2, ChevronDown, ChevronUp, Link2, PackageCheck, Play, Plus, RefreshCw, Route, Send, Trash2 } from "lucide-react";
+import { Bot, CheckCircle2, ChevronDown, ChevronUp, Link2, PackageCheck, Plus, RefreshCw, Route, Send, Trash2 } from "lucide-react";
 import { apiDelete, apiGet, apiPost, apiPut } from "../api/client";
 import { EmptyState } from "../components/common/EmptyState";
 import { PageHeader } from "../components/common/PageHeader";
@@ -11,7 +11,6 @@ import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Label } from "../components/ui/Label";
 import { Select } from "../components/ui/Select";
-import { Textarea } from "../components/ui/Textarea";
 import { useToast } from "../components/ui/Toast";
 import { isImageMedia, isVideoMedia, mediaPathOf, mediaUrlOf } from "../utils/media";
 import { formatDateTime, platformLabel, type Pagination, type PlatformChannel, type RepostFlow, type RepostSourceHistoryItem } from "./repostTypes";
@@ -28,12 +27,6 @@ type FlowDraft = {
   autoPublish: boolean;
   requireReview: boolean;
   isActive: boolean;
-};
-
-type DryRunLine = {
-  step: string;
-  result: string;
-  tone: "good" | "warn" | "danger" | "neutral";
 };
 
 const EMPTY_CHANNELS: PlatformChannel[] = [];
@@ -84,22 +77,10 @@ function readFlowDraft(flow: RepostFlow): FlowDraft {
   };
 }
 
-function channelStatus(channel: PlatformChannel) {
-  const metadata = channel.metadata && typeof channel.metadata === "object" && !Array.isArray(channel.metadata)
-    ? channel.metadata as Record<string, unknown>
-    : {};
-  return {
-    mode: typeof metadata.realtimeStatus === "string" ? metadata.realtimeStatus : "Realtime",
-    lastMessageAt: typeof metadata.lastMessageAt === "string" ? metadata.lastMessageAt : null,
-    lastCrawledAt: typeof metadata.lastCrawledAt === "string" ? metadata.lastCrawledAt : null,
-    lastError: typeof metadata.lastError === "string" ? metadata.lastError : null
-  };
-}
-
 function countTargets(targets: PlatformChannel[]) {
   return {
-    all: targets.filter((target) => target.isActive && target.filterMode === "all").length,
-    category: targets.filter((target) => target.isActive && target.filterMode === "category").length
+    all: targets.filter((target) => target.filterMode === "all").length,
+    category: targets.filter((target) => target.filterMode === "category").length
   };
 }
 
@@ -139,11 +120,8 @@ export function RepostFlowPage() {
   const toast = useToast();
   const [selectedFlowId, setSelectedFlowId] = useState<string | null>(null);
   const [selectedStep, setSelectedStep] = useState<PipelineStepId>("source");
-  const [showSourceDetails, setShowSourceDetails] = useState(false);
   const [draft, setDraft] = useState<FlowDraft>(defaultDraft);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [dryRunText, setDryRunText] = useState("Lẹ, đang giảm https://s.shopee.vn/abc");
-  const [dryRunTimeline, setDryRunTimeline] = useState<DryRunLine[]>([]);
   const [historyPage, setHistoryPage] = useState(1);
   const [historyStatus, setHistoryStatus] = useState("all");
   const [historySourceId, setHistorySourceId] = useState("all");
@@ -184,16 +162,9 @@ export function RepostFlowPage() {
   const selectedFlow = selectedFlowId ? flows.find((flow) => flow.id === selectedFlowId) ?? null : null;
   const selectedSources = useMemo(() => sources.filter((source) => draft.sourceChannelIds.includes(source.id)), [draft.sourceChannelIds, sources]);
   const selectedTargets = useMemo(() => targets.filter((target) => draft.targetChannelIds.includes(target.id)), [draft.targetChannelIds, targets]);
-  const routingTargets = selectedTargets.filter((target) => target.isActive);
+  const routingTargets = selectedTargets;
   const targetSummary = countTargets(routingTargets);
-  const sourceStatusRows = selectedSources.map((source) => ({ channel: source, status: channelStatus(source) }));
-  const sourceSummary = {
-    active: selectedSources.filter((source) => source.isActive).length,
-    realtime: sourceStatusRows.filter((item) => item.status.mode.toLowerCase().includes("realtime")).length,
-    polling: sourceStatusRows.filter((item) => !item.status.mode.toLowerCase().includes("realtime")).length,
-    errors: sourceStatusRows.filter((item) => item.status.lastError).length
-  };
-  const errorCount = sourceSummary.errors + (routingTargets.length === 0 ? 1 : 0);
+  const errorCount = routingTargets.length === 0 ? 1 : 0;
   const flowSummary = routingTargets.length === 0
     ? `Tin từ ${pluralSource(selectedSources.length)} chưa thể đăng vì không có kênh đích nào đang bật.`
     : targetSummary.all > 0
@@ -212,7 +183,6 @@ export function RepostFlowPage() {
     if (!selectedFlow) return;
     setDraft(readFlowDraft(selectedFlow));
     setSaveState("saved");
-    setDryRunTimeline([]);
   }, [selectedFlow]);
 
   useEffect(() => {
@@ -270,12 +240,6 @@ export function RepostFlowPage() {
     },
     onError: (error) => toast.error(error.message)
   });
-  const testCrawl = useMutation({
-    mutationFn: (channelIds: string[]) => Promise.all(channelIds.map((channelId) => apiPost<{ message: string }>(`/channels/${channelId}/test-crawl`, {}))),
-    onSuccess: (results) => toast.success(results[0]?.message ?? "Realtime listener đang theo dõi các nguồn đã chọn."),
-    onError: (error) => toast.error(error.message)
-  });
-
   const saveDraft = () => {
     if (!selectedFlow) return;
     setSaveState("saving");
@@ -291,31 +255,8 @@ export function RepostFlowPage() {
     setSaveState("idle");
   };
 
-  const runDryRun = () => {
-    const text = dryRunText.trim();
-    const hasCommerceLink = /(shopee|lazada|tiktok|s\.shopee|c\.lazada)/i.test(text);
-    const shouldPublish = hasCommerceLink || /deal|sale|giảm|mã|voucher/i.test(text);
-    const matchedTargets = routingTargets.map((target) => target.name);
-    const linkResult = hasCommerceLink ? "converted" : "skipped";
-    const finalAction = !shouldPublish
-      ? "skipped"
-      : routingTargets.length === 0
-        ? "choose target"
-        : hasCommerceLink
-          ? "publish"
-          : "skipped";
-
-    setDryRunTimeline([
-      { step: "Gom gói", result: "Gom 1 tin trong cửa sổ 2 phút.", tone: "good" },
-      { step: "AI", result: `shouldPublish=${shouldPublish ? "true" : "false"} · category=general · reason=${shouldPublish ? "Có tín hiệu deal hoặc link mua hàng." : "Không thấy tín hiệu deal đủ rõ."}`, tone: shouldPublish ? "good" : "warn" },
-      { step: "Link", result: hasCommerceLink ? "converted · link sẽ được thay bằng affiliate." : "skipped · không có link Shopee/Lazada/TikTok.", tone: hasCommerceLink ? "good" : "neutral" },
-      { step: "Target", result: matchedTargets.length > 0 ? matchedTargets.join(", ") : "Không có kênh đích nào đang bật.", tone: matchedTargets.length > 0 ? "good" : "danger" },
-      { step: "Final action", result: finalAction, tone: finalAction === "publish" ? "good" : finalAction === "choose target" ? "danger" : "warn" }
-    ]);
-  };
-
   const pipelineSteps: Array<{ id: PipelineStepId; label: string; status: StepStatus; detail: string; icon: ReactNode }> = [
-    { id: "source", label: "Nguồn", status: selectedSources.length === 0 ? "warning" : sourceSummary.errors > 0 ? "error" : "ok", detail: `${sourceSummary.active} nguồn đang bật · ${sourceSummary.realtime} realtime · ${sourceSummary.errors} lỗi`, icon: <PackageCheck aria-hidden /> },
+    { id: "source", label: "Nguồn", status: selectedSources.length === 0 ? "warning" : "ok", detail: `${selectedSources.length} nguồn đang bật trong flow.`, icon: <PackageCheck aria-hidden /> },
     { id: "group", label: "Gom tin", status: "ok", detail: "Bật · cửa sổ 2 phút · AI hỗ trợ khi khó ghép", icon: <PackageCheck aria-hidden /> },
     { id: "ai", label: "AI", status: draft.useAI ? "ok" : "disabled", detail: "deal-analysis-vNext · output shouldPublish/category/rewrite", icon: <Bot aria-hidden /> },
     { id: "link", label: "Đổi link", status: "ok", detail: "Theo Affiliate Settings · link lỗi chuyển Manual Links", icon: <Link2 aria-hidden /> },
@@ -333,9 +274,6 @@ export function RepostFlowPage() {
           <>
             <Button variant="secondary" icon={<RefreshCw aria-hidden />} onClick={() => { void sourcesQuery.refetch(); void targetsQuery.refetch(); void flowsQuery.refetch(); }}>
               Làm mới
-            </Button>
-            <Button variant="secondary" icon={<Play aria-hidden />} onClick={runDryRun}>
-              Chạy thử flow
             </Button>
             <Button icon={<Plus aria-hidden />} onClick={() => createFlow.mutate()} disabled={createFlow.isPending}>
               Tạo luồng
@@ -430,66 +368,17 @@ export function RepostFlowPage() {
       </SectionCard>
 
       <SectionCard
-        title="Chạy thử flow"
-        description="Dán một tin mẫu để xem pipeline quyết định gì trước khi publish thật."
-        actions={<Button icon={<Play aria-hidden />} onClick={runDryRun}>Chạy thử</Button>}
+        title="Nguồn đang lấy tin"
+        description="Chọn nguồn cho flow. Nguồn được chọn là đang bật, bỏ chọn là tắt."
       >
-        <Textarea value={dryRunText} onChange={(event) => setDryRunText(event.target.value)} />
-        {dryRunTimeline.length > 0 ? (
-          <div className="flow-dry-run-timeline">
-            {dryRunTimeline.map((item) => (
-              <div className="flow-dry-run-line" key={item.step}>
-                <Badge tone={item.tone}>{item.step}</Badge>
-                <span>{item.result}</span>
-              </div>
-            ))}
-          </div>
-        ) : null}
+        <ChannelPicker channels={sources} selectedIds={draft.sourceChannelIds} kind="source" onToggle={toggleChannel} compact />
       </SectionCard>
 
       <SectionCard
-        title="Nguồn đang lấy tin"
-        description={`${sourceSummary.active} nguồn đang bật · ${sourceSummary.realtime} realtime · ${sourceSummary.errors} lỗi`}
-        actions={
-          <>
-            <Button variant="secondary" onClick={() => setShowSourceDetails((current) => !current)}>
-              {showSourceDetails ? "Ẩn chi tiết nguồn" : "Xem chi tiết nguồn"}
-            </Button>
-            <Button variant="secondary" onClick={() => testCrawl.mutate(selectedSources.map((source) => source.id))} disabled={testCrawl.isPending || selectedSources.length === 0}>
-              Kiểm tra realtime
-            </Button>
-          </>
-        }
+        title="Kênh đích của flow"
+        description="Dùng cùng cách chọn với nguồn. Kênh được chọn là đang bật, bỏ chọn là tắt."
       >
-        <div className="flow-source-summary">
-          <Metric label="Nguồn đang bật" value={sourceSummary.active} />
-          <Metric label="Realtime" value={sourceSummary.realtime} />
-          <Metric label="Lỗi" value={sourceSummary.errors} tone={sourceSummary.errors > 0 ? "danger" : "good"} />
-        </div>
-        <ChannelPicker channels={sources} selectedIds={draft.sourceChannelIds} kind="source" onToggle={toggleChannel} compact />
-        {showSourceDetails ? (
-          <div className="flow-source-table">
-            {sourceStatusRows.map(({ channel, status }) => (
-              <div className="flow-source-row" key={channel.id}>
-                <strong>{channel.name}</strong>
-                <span>{platformLabel(channel.platform)}</span>
-                <span>{status.mode}</span>
-                <span>Tin gần nhất: {formatDateTime(status.lastMessageAt)}</span>
-                <span>Cập nhật gần nhất: {formatDateTime(status.lastMessageAt ?? status.lastCrawledAt)}</span>
-                <Badge tone={status.lastError ? "danger" : "good"}>{status.lastError ? "Có lỗi" : "Ổn"}</Badge>
-              </div>
-            ))}
-          </div>
-        ) : null}
-      </SectionCard>
-
-      <SectionCard title="Kênh đích của flow">
-        <div className={routingTargets.length > 0 ? "flow-info-note good" : "flow-info-note warn"}>
-          <strong>{routingTargets.length > 0 ? `Flow này đăng vào ${pluralTarget(routingTargets.length)} đã chọn.` : "Flow này chưa chọn kênh đích active."}</strong>
-          <span>Chỉ các kênh được chọn bên dưới mới nhận bài từ flow này. Kênh nhận tất cả: {targetSummary.all}. Kênh theo ngành: {targetSummary.category}.</span>
-        </div>
-        <ChannelPicker channels={targets} selectedIds={draft.targetChannelIds} kind="target" onToggle={toggleChannel} />
-        <TargetList targets={routingTargets} />
+        <ChannelPicker channels={targets} selectedIds={draft.targetChannelIds} kind="target" onToggle={toggleChannel} compact />
       </SectionCard>
 
       <SectionCard
@@ -528,7 +417,7 @@ export function RepostFlowPage() {
         {sourceHistoryQuery.isLoading ? (
           <EmptyState title="Đang tải lịch sử" description="Đang đọc các package đã crawl và trạng thái xử lý." />
         ) : historyItems.length === 0 ? (
-          <EmptyState title="Chưa có log lấy nguồn tin" description="Bấm kiểm tra realtime hoặc chờ worker crawl nguồn để xem package, ảnh và trạng thái tại đây." />
+          <EmptyState title="Chưa có log lấy nguồn tin" description="Chờ worker crawl nguồn để xem package, ảnh và trạng thái tại đây." />
         ) : (
           <div className="flow-history-list">
             {historyItems.map((item) => (
@@ -706,33 +595,6 @@ function Metric({ label, value, tone = "neutral" }: { label: string; value: numb
   );
 }
 
-function TargetList({ targets }: { targets: PlatformChannel[] }) {
-  if (targets.length === 0) {
-    return (
-      <div className="flow-info-note danger">
-        <AlertTriangle aria-hidden />
-        <span>Không có kênh đích nào đang bật.</span>
-      </div>
-    );
-  }
-  return (
-    <div className="flow-target-list">
-      {targets.map((target) => (
-        <div className="flow-target-row" key={target.id}>
-          <div>
-            <strong>{target.name}</strong>
-            <span>{platformLabel(target.platform)} · {target.externalId}</span>
-          </div>
-          <Badge tone={target.filterMode === "all" ? "good" : "warn"}>{targetBadgeText(target)}</Badge>
-          <span className="table-subtle">
-            {target.filterMode === "all" ? `${target.name} nhận tất cả bài.` : `${target.name} chỉ nhận ngành phù hợp.`}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function ChannelPicker({
   channels,
   selectedIds,
@@ -761,7 +623,7 @@ function ChannelPicker({
             </div>
             <div className="actions">
               {kind === "target" ? <Badge tone={channel.filterMode === "category" ? "warn" : "good"}>{targetBadgeText(channel)}</Badge> : null}
-              <Badge tone={channel.isActive ? "good" : "neutral"}>{channel.isActive ? "Đang bật" : "Tạm tắt"}</Badge>
+              <Badge tone={selected ? "good" : "neutral"}>{selected ? "Đang bật" : "Tắt"}</Badge>
               {selected ? <CheckCircle2 aria-hidden /> : null}
             </div>
           </button>
