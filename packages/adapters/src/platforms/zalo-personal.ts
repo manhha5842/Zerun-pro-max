@@ -154,6 +154,122 @@ export type ZaloGroupOption = {
   memberCount: number;
 };
 
+export type ZaloLastMessage = {
+  msgId: string;
+  content: string;
+  senderName: string;
+  senderId: string;
+  timestamp: Date;
+  hasMedia: boolean;
+};
+
+export type ZaloConnectionCheck = {
+  connected: boolean;
+  groupName?: string;
+  memberCount?: number;
+  lastMessage?: ZaloLastMessage;
+  error?: string;
+  errorCode?: string;
+};
+
+export async function checkZaloGroupConnection(account: AdapterAccount, threadId: string): Promise<ZaloConnectionCheck> {
+  const api = await createZaloClient().login(readCredentials(account));
+
+  let groupName: string | undefined;
+  let memberCount: number | undefined;
+
+  // Bước 1: Kiểm tra group có tồn tại và có quyền truy cập không (bắt buộc)
+  try {
+    const groupInfo = await api.getGroupInfo(threadId);
+    const gridInfo = groupInfo.gridInfoMap?.[threadId];
+    
+    if (!gridInfo) {
+      return {
+        connected: false,
+        error: "Không tìm thấy thông tin nhóm. Có thể đã bị xóa hoặc không còn quyền truy cập.",
+        errorCode: "GROUP_NOT_FOUND"
+      };
+    }
+
+    groupName = gridInfo.name;
+    memberCount = Number(gridInfo.totalMember ?? 0);
+  } catch (groupInfoError) {
+    const errorMessage = (groupInfoError as Error).message;
+    
+    // Phân biệt lỗi thật sự vs lỗi do Zalo limit API
+    if (errorMessage.includes("404")) {
+      return {
+        connected: false,
+        error: "Không tìm thấy nhóm. Có thể đã bị xóa, bị kick khỏi nhóm, hoặc nhóm không còn tồn tại.",
+        errorCode: "GROUP_NOT_FOUND"
+      };
+    }
+    
+    // Lỗi khác (403, timeout, etc) - vẫn thử bước tiếp theo
+    console.warn("getGroupInfo lỗi, thử cách khác:", errorMessage);
+  }
+
+  // Bước 2: Thử lấy tin nhắn cuối cùng (không bắt buộc - một số group Zalo không cho phép)
+  let lastMessage: ZaloLastMessage | undefined;
+  let historyWarning: string | undefined;
+  
+  try {
+    const history = await api.getGroupChatHistory(threadId, 1);
+    if (history?.groupMsgs && history.groupMsgs.length > 0) {
+      const lastMsg = history.groupMsgs[0];
+      const msgData = lastMsg.data;
+      const msgId = typeof msgData.msgId === "string" || typeof msgData.msgId === "number" ? String(msgData.msgId) : null;
+      
+      if (msgId) {
+        const content = extractZaloText(msgData as unknown as Record<string, unknown>);
+        const mediaUrls = extractZaloMedia(msgData as unknown as Record<string, unknown>);
+
+        lastMessage = {
+          msgId,
+          content: content || "(Không có nội dung văn bản)",
+          senderName: typeof msgData.dName === "string" ? msgData.dName : "Unknown",
+          senderId: typeof msgData.uidFrom === "string" ? msgData.uidFrom : "",
+          timestamp: new Date(Number(msgData.ts) || Date.now()),
+          hasMedia: mediaUrls.length > 0
+        };
+      }
+    }
+  } catch (historyError) {
+    // Lỗi getGroupChatHistory KHÔNG phải lỗi kết nối
+    // Một số group Zalo (đặc biệt group mới, secret group) không cho phép API này
+    // Nhưng group vẫn nhận tin nhắn realtime được
+    const errorMessage = (historyError as Error).message;
+    
+    if (errorMessage.includes("404")) {
+      historyWarning = "Nhóm tồn tại nhưng không lấy được lịch sử tin nhắn (API bị giới hạn bởi Zalo).";
+    } else if (errorMessage.includes("403")) {
+      historyWarning = "Nhóm tồn tại nhưng không có quyền xem lịch sử tin nhắn.";
+    } else {
+      historyWarning = `Nhóm tồn tại nhưng không lấy được lịch sử: ${errorMessage}`;
+    }
+    
+    console.warn("getGroupChatHistory lỗi:", errorMessage);
+  }
+
+  // Trả về thành công nếu đã xác nhận group tồn tại
+  return {
+    connected: true,
+    groupName,
+    memberCount,
+    lastMessage,
+    warning: historyWarning
+  };
+}
+
+// Giữ function cũ để tương thích ngược
+export async function fetchZaloGroupLastMessage(account: AdapterAccount, threadId: string): Promise<ZaloLastMessage | null> {
+  const result = await checkZaloGroupConnection(account, threadId);
+  if (!result.connected || !result.lastMessage) {
+    throw new Error(result.error || "Không lấy được tin nhắn nhóm");
+  }
+  return result.lastMessage;
+}
+
 export async function listZaloGroups(account: AdapterAccount): Promise<ZaloGroupOption[]> {
   const api = await createZaloClient().login(readCredentials(account));
   const response = await api.getAllGroups();

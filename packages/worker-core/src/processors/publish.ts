@@ -166,18 +166,22 @@ export async function processPublish(rawJob: unknown, context: ProcessorContext)
     return;
   }
 
-  const attemptNo = (await context.prisma.publishAttempt.count({
-    where: { contentId: job.contentId, ...publishAttemptTargetWhere(publishTarget.targetId, publishTarget.targetChannelId) }
-  })) + 1;
-  const attempt = await context.prisma.publishAttempt.create({
-    data: {
-      contentId: job.contentId,
-      targetId: publishTarget.targetId,
-      ...(publishTarget.targetChannelId ? { targetChannelId: publishTarget.targetChannelId } : {}),
-      attemptNo,
-      status: "running",
-      startedAt
-    }
+  const attempt = await context.prisma.$transaction(async (tx) => {
+    const lastAttempt = await tx.publishAttempt.findFirst({
+      where: { contentId: job.contentId, ...publishAttemptTargetWhere(publishTarget.targetId, publishTarget.targetChannelId) },
+      orderBy: { attemptNo: "desc" }
+    });
+    const attemptNo = (lastAttempt?.attemptNo ?? 0) + 1;
+    return tx.publishAttempt.create({
+      data: {
+        contentId: job.contentId,
+        targetId: publishTarget.targetId,
+        ...(publishTarget.targetChannelId ? { targetChannelId: publishTarget.targetChannelId } : {}),
+        attemptNo,
+        status: "running",
+        startedAt
+      }
+    });
   });
 
   let targetPlatform: string | undefined;

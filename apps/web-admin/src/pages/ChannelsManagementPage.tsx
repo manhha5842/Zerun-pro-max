@@ -269,10 +269,40 @@ export function ChannelsManagementPage() {
     onError: (error) => toast.error(error.message)
   });
 
-  const checkSession = useMutation({
-    mutationFn: ({ kind, id }: { kind: AccountKind; id: string }) => apiGet(`/accounts/${kind}/${id}/session`),
-    onSuccess: () => toast.success("Đã kiểm tra session tài khoản."),
-    onError: (error) => toast.error(error.message)
+  const testConnection = useMutation({
+    mutationFn: (id: string) => apiPost<{ connected: boolean; message: string; groupName?: string; memberCount?: number; lastMessage?: { content: string; senderName: string; timestamp: string; hasMedia: boolean }; warning?: string; errorCode?: string }>(`/channels/${id}/test-connection`, {}),
+    onSuccess: (data) => {
+      if (data.connected) {
+        if (data.lastMessage) {
+          const time = new Date(data.lastMessage.timestamp).toLocaleString("vi-VN");
+          const mediaInfo = data.lastMessage.hasMedia ? " [có media]" : "";
+          toast.success(`${data.groupName ? `Nhóm "${data.groupName}" (${data.memberCount ?? 0} thành viên)` : "Kết nối thành công"}\nTin cuối (${time}): "${data.lastMessage.content.slice(0, 100)}${data.lastMessage.content.length > 100 ? "..." : ""}"${mediaInfo}`);
+        } else if (data.warning) {
+          // Có warning nhưng vẫn kết nối được
+          toast.warning(`${data.groupName ? `Nhóm "${data.groupName}"` : "Kết nối thành công"}\n⚠️ ${data.warning}`);
+        } else {
+          toast.success(data.message || `Kết nối thành công! Nhóm "${data.groupName || ''}"`);
+        }
+      } else {
+        // Hiển thị thông báo lỗi rõ ràng hơn dựa trên errorCode
+        let errorTitle = "Lỗi kết nối";
+        let errorMessage = data.message || "Không thể kết nối đến nhóm.";
+
+        if (data.errorCode === "GROUP_NOT_FOUND") {
+          errorTitle = "Nhóm không tìm thấy";
+          errorMessage = "Nhóm có thể đã bị xóa, bạn bị kick khỏi nhóm, hoặc nhóm không còn tồn tại. Hãy xóa kênh này và thêm lại nếu cần.";
+        } else if (data.errorCode === "ACCESS_DENIED") {
+          errorTitle = "Không có quyền truy cập";
+          errorMessage = "Tài khoản không có quyền truy cập nhóm này.";
+        } else if (data.errorCode === "AUTH_FAILED") {
+          errorTitle = "Phiên đăng nhập hết hạn";
+          errorMessage = "Vui lòng đăng nhập lại tài khoản Zalo trong phần Quản lý tài khoản.";
+        }
+
+        toast.error(`${errorTitle}: ${errorMessage}`);
+      }
+    },
+    onError: (error) => toast.error(`Lỗi: ${error.message}`)
   });
 
   const editTargetFilter = (channel: UnifiedChannel) => {
@@ -427,22 +457,21 @@ export function ChannelsManagementPage() {
               header: "Actions",
               render: (row) => {
                 const account = row.account;
-                const accountInfo = account ? splitAccountKey(accountKey(account)) : null;
                 return (
                   <div className="row-actions">
                     {row.role === "source" ? (
                       <Button size="sm" variant="secondary" icon={<TestTube2 aria-hidden />} onClick={() => testCrawl.mutate(row.id)} disabled={testCrawl.isPending || !row.isActive}>
-                        Kiểm tra
+                        Test crawl
                       </Button>
                     ) : null}
                     <Button
                       size="sm"
                       variant="secondary"
-                      icon={<RefreshCw aria-hidden />}
-                      onClick={() => accountInfo && checkSession.mutate(accountInfo)}
-                      disabled={!accountInfo || checkSession.isPending}
+                      icon={<TestTube2 aria-hidden />}
+                      onClick={() => testConnection.mutate(row.id)}
+                      disabled={testConnection.isPending}
                     >
-                      Check session
+                      Kiểm tra kết nối
                     </Button>
                     {row.role === "target" ? (
                       <Button size="sm" variant="secondary" icon={<Filter aria-hidden />} onClick={() => editTargetFilter(row)}>

@@ -4420,6 +4420,62 @@ function registerRepostApiRoutes(app: FastifyInstance) {
     return ok({ message: "Đã tạo job lấy tin. Xem tiến độ ở Worker jobs / Logs, chọn queue Crawl." });
   });
 
+  // POST /channels/:id/test-connection - Kiểm tra kết nối bằng cách lấy tin nhắn cuối cùng của group
+  app.post("/channels/:id/test-connection", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const channel = await prisma.platformChannel.findUnique({ where: { id } });
+    if (!channel) return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy kênh."));
+
+    // Chỉ hỗ trợ Zalo personal cho việc kiểm tra kết nối
+    if (channel.platform !== "zalo-personal") {
+      return ok({
+        connected: false,
+        message: "Chỉ hỗ trợ kiểm tra kết nối Zalo cá nhân."
+      });
+    }
+
+    // Lấy account để tạo adapter account
+    const account = channel.accountKind === "source"
+      ? await prisma.sourceAccount.findUnique({ where: { id: channel.accountId } })
+      : await prisma.targetAccount.findUnique({ where: { id: channel.accountId } });
+
+    if (!account) {
+      return reply.code(404).send(fail("NOT_FOUND", "Không tìm thấy tài khoản."));
+    }
+
+    const credentials = (account.credentials ?? {}) as Record<string, unknown>;
+    const adapterAccount = {
+      id: String(account.id),
+      platform: "zalo-personal" as const,
+      name: String(account.name),
+      handle: account.handle ? String(account.handle) : null,
+      credentials,
+      config: { ...((account.config ?? {}) as Record<string, unknown>), threadId: channel.externalId }
+    };
+
+    const { checkZaloGroupConnection } = await import("@zerun/adapters");
+    const result = await checkZaloGroupConnection(adapterAccount, channel.externalId);
+
+    return ok({
+      connected: result.connected,
+      message: result.connected 
+        ? result.warning 
+          ? `Kết nối thành công! Nhóm "${result.groupName || 'Unknown'}" có ${result.memberCount ?? 0} thành viên.\n⚠️ ${result.warning}`
+          : `Kết nối thành công! Nhóm "${result.groupName || 'Unknown'}" có ${result.memberCount ?? 0} thành viên.`
+        : result.error,
+      groupName: result.groupName,
+      memberCount: result.memberCount,
+      lastMessage: result.lastMessage ? {
+        content: result.lastMessage.content,
+        senderName: result.lastMessage.senderName,
+        timestamp: result.lastMessage.timestamp.toISOString(),
+        hasMedia: result.lastMessage.hasMedia
+      } : undefined,
+      warning: result.warning,
+      errorCode: result.errorCode
+    });
+  });
+
   // GET /repost-flows/source-history
   app.get("/repost-flows/source-history", async (request, reply) => {
     const query = request.query as AnyBody;

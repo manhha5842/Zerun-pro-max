@@ -149,11 +149,12 @@ export class RealtimeListenerManager {
   }
 
   private async withRealtimeConfig(account: DesiredAccount): Promise<DesiredAccount> {
-    if (account.platform !== "telegram") return account;
+    // Lấy channels từ database cho cả Telegram và Zalo
     const channels = await this.prisma.platformChannel.findMany({
       where: { accountKind: "source", accountId: account.id, isSource: true, isActive: true },
       select: { externalId: true }
     });
+
     const config = account.config && typeof account.config === "object" && !Array.isArray(account.config)
       ? { ...(account.config as Record<string, unknown>) }
       : {};
@@ -163,11 +164,15 @@ export class RealtimeListenerManager {
     const credentialSource = typeof credentials.source === "string" && credentials.source.trim() ? credentials.source.trim() : null;
     const listenSources = channels.map((channel) => channel.externalId).filter(Boolean);
     if (listenSources.length === 0 && credentialSource) listenSources.push(credentialSource);
+
+    // Telegram dùng listenSources, Zalo dùng threadIds
+    const configKey = account.platform === "telegram" ? "listenSources" : "threadIds";
+
     return {
       ...account,
       config: {
         ...config,
-        listenSources
+        [configKey]: listenSources
       }
     };
   }
@@ -179,6 +184,18 @@ export class RealtimeListenerManager {
       });
       const itemThreadId = readMetadataString(item.metadata, "threadId");
       const sourceChannel = sourceChannels.find((channel) => channel.externalId === itemThreadId) ?? null;
+      
+      // Debug logging
+      if (itemThreadId) {
+        const matchingChannel = sourceChannels.find((channel) => channel.externalId === itemThreadId);
+        if (!matchingChannel) {
+          logger.warn(`Realtime: tin nhắn từ threadId=${itemThreadId} không khớp với channels nào`, {
+            sourceId,
+            availableChannels: sourceChannels.map((c) => ({ id: c.id, externalId: c.externalId, name: c.name }))
+          });
+        }
+      }
+      
       if (sourceChannels.length > 0 && !sourceChannel) return;
       const externalId = sourceChannel ? `${sourceChannel.id}:${item.externalId}` : item.externalId;
       const existing = await this.prisma.content.findUnique({
