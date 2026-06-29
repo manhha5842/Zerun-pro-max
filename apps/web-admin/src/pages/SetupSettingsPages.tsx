@@ -77,6 +77,8 @@ type TelegramSettings = {
   enabled: boolean;
   botToken: string;
   chatId: string;
+  notifyOnError: boolean;
+  notifyOnPublish: boolean;
 };
 
 const providerLabels: Record<AffiliateProvider, string> = {
@@ -1328,7 +1330,7 @@ export function LegacyAffiliateSettingsPage() {
 
 export function TelegramAlertSettingsPage() {
   const toast = useToast();
-  const [form, setForm] = useState<TelegramSettings>({ enabled: false, botToken: "", chatId: "" });
+  const [form, setForm] = useState<TelegramSettings>({ enabled: false, botToken: "", chatId: "", notifyOnError: true, notifyOnPublish: false });
   const [testResult, setTestResult] = useState("");
   const query = useQuery({ queryKey: ["settings", "telegram"], queryFn: () => apiGet<TelegramSettings>("/settings/telegram") });
 
@@ -1399,7 +1401,7 @@ export function TelegramAlertSettingsPage() {
               <option value="false">Đang tắt</option>
             </Select>
           </label>
-          <label>
+          <label className="span-2">
             <Label>Chat ID</Label>
             <Input value={form.chatId} onChange={(event) => setForm((current) => ({ ...current, chatId: event.target.value }))} placeholder="-100..." />
           </label>
@@ -1407,6 +1409,27 @@ export function TelegramAlertSettingsPage() {
             <Label>Bot token</Label>
             <Input type="password" value={form.botToken} onChange={(event) => setForm((current) => ({ ...current, botToken: event.target.value }))} />
           </label>
+          <div className="span-2">
+            <Label>Các loại thông báo</Label>
+            <div className="checkbox-group">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={form.notifyOnError}
+                  onChange={(e) => setForm((current) => ({ ...current, notifyOnError: e.target.checked }))}
+                />
+                <span>Nhận thông báo lỗi (session lỗi, worker thất bại...)</span>
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={form.notifyOnPublish}
+                  onChange={(e) => setForm((current) => ({ ...current, notifyOnPublish: e.target.checked }))}
+                />
+                <span>Nhận thông báo khi đăng bài thành công</span>
+              </label>
+            </div>
+          </div>
           <div className="span-2 actions">
             <Button icon={<Save aria-hidden />} onClick={() => save.mutate()} disabled={save.isPending}>Lưu cảnh báo</Button>
             <Button variant="secondary" icon={<TestTube2 aria-hidden />} onClick={() => test.mutate()} disabled={test.isPending}>Gửi thử</Button>

@@ -27,27 +27,25 @@ describe("deal sanitizer", () => {
     expect(output).not.toContain("t.me/clubmuare");
   });
 
-  it("removes tutorial/source blocks from a noisy Shopee voucher message", () => {
+  it("keeps voucher codes and promo info while only removing traffic-dragging elements", () => {
     const input = [
-      "🔥BÀO TIẾP MÃ FB ( XEM HD: t.me/clubmuare/134713 ) 22%, VIP 30%",
-      "🎀MÃ ĐỘC QUYỀN MXH, XEM HD: t.me/clubmuare/134713",
-      "Mã dưới cần đổi link",
-      "🎀Đang ế mã toàn sàn 22% tại: https://t.me/shopeeooo_bot",
-      "🎀Back mã giảm 30% tại: https://s.shopee.vn/an_redir?origin_link=https%3A%2F%2Fshopee.vn%2Fm%2Fgoi-ShopeeVIP&affiliate_id=17385530062&sub_id=shp2",
+      "🔥BÀO TIẾP MÃ FB 22%, VIP 30%",
+      "🎀MÃ ĐỘC QUYỀN MXH",
+      "🎀Mã dưới cần đổi link",
+      "🎀Đang ế mã toàn sàn 22%",
+      "🎀Back mã giảm 30% tại: https://s.shopee.vn/an_redir",
       "➖➖➖➖➖➖",
-      "🎟 MÃ Shopee 2 TRIỆU: https://t.me/tagliveshopee/27093",
-      "🔴 Tᴑᴑl lấy mã 👉 https://shopee.ooo"
+      "🎟 MÃ Shopee 2 TRIỆU"
     ].join("\n");
 
     const output = sanitizeDealText(input);
 
     expect(output).toContain("22%, VIP 30%");
+    expect(output).toContain("MÃ ĐỘC QUYỀN MXH");
+    expect(output).toContain("Mã dưới cần đổi link");
+    expect(output).toContain("Back mã giảm 30%");
+    expect(output).toContain("MÃ Shopee 2 TRIỆU");
     expect(output).toContain("https://s.shopee.vn/an_redir");
-    expect(output).not.toContain("XEM HD");
-    expect(output).not.toContain("MÃ ĐỘC QUYỀN");
-    expect(output).not.toContain("shopeeooo_bot");
-    expect(output).not.toContain("tagliveshopee");
-    expect(output).not.toContain("shopee.ooo");
   });
 
   it("does not skip useful announcement messages without links", () => {

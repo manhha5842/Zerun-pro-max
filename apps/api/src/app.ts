@@ -13,7 +13,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { Prisma, type CrawlResult } from "@prisma/client";
 import { compare, hash } from "bcryptjs";
 import * as XLSX from "xlsx";
-import { listZaloGroups } from "@zerun/adapters";
+import { listTelegramDialogs, listZaloGroups } from "@zerun/adapters";
 import { detectLinks, detectNetwork, expandUrl } from "@zerun/core";
 import type { BrowserContext } from "playwright";
 import { ensureDatabaseReady, prisma } from "@zerun/db";
@@ -761,6 +761,68 @@ function registerExtendedSettingsRoutes(app: FastifyInstance) {
     }
   });
 
+  app.post("/settings/maintenance/run", async (request) => {
+    const body = request.body as AnyBody;
+    const kind = (body.kind as "media" | "orphan" | "all") ?? "all";
+    const retentionDays = Math.max(1, Math.min(365, Number(body.retentionDays ?? 30)));
+    const dryRun = Boolean(body.dryRun);
+
+    await app.workerCore!.runMaintenance({ kind, retentionDays, dryRun });
+    return ok({
+      queued: true,
+      kind,
+      retentionDays,
+      dryRun,
+      message: dryRun ? "Dry-run cleanup đã được queue. Kiểm tra activity log để xem kết quả." : "Cleanup đã được queue. Kiểm tra activity log để xem kết quả."
+    });
+  });
+
+  app.get("/settings/maintenance/stats", async () => {
+    const mediaDir = process.env.MEDIA_STORAGE_DIR ?? process.env.MEDIA_UPLOAD_ROOT ?? "storage/media";
+    const { promises: fs } = await import("fs");
+
+    let totalFiles = 0;
+    let totalSize = 0;
+
+    async function countFiles(dir: string): Promise<void> {
+      try {
+        const entries = await fs.readdir(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = `${dir}/${entry.name}`;
+          if (entry.isDirectory()) {
+            await countFiles(fullPath);
+          } else if (entry.isFile()) {
+            const stats = await fs.stat(fullPath);
+            totalFiles++;
+            totalSize += stats.size;
+          }
+        }
+      } catch {
+        // Ignore errors
+      }
+    }
+
+    await countFiles(mediaDir);
+
+    const dbMediaCount = await prisma.mediaAsset.count({ where: { localPath: { not: null } } });
+    const oldActivityCount = await prisma.activityLog.count({
+      where: { createdAt: { lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } }
+    });
+
+    return ok({
+      media: {
+        directory: mediaDir,
+        totalFiles,
+        totalSize,
+        totalSizeFormatted: formatBytes(totalSize),
+        dbReferencedCount: dbMediaCount
+      },
+      logs: {
+        oldActivityCount30Days: oldActivityCount
+      }
+    });
+  });
+
   app.post("/settings/ai/test", async (request) => {
     const body = request.body as AnyBody;
     return ok({
@@ -856,6 +918,14 @@ function formatRuntimeSettings(runtime: ReturnType<typeof readDesktopRuntime>) {
   };
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
+}
+
 function readRuntimeBoolean(value: unknown, fallback: boolean) {
   if (typeof value === "boolean") return value;
   if (typeof value === "string") return value === "true" || value === "1" || value === "on";
@@ -867,15 +937,38 @@ function registerTelegramSettingsRoutes(app: FastifyInstance) {
   app.get("/settings/telegram", async () => {
     const setting = await prisma.systemSetting.findUnique({ where: { key: "telegram_notify" } });
     const data = (setting?.value ?? {}) as Record<string, unknown>;
-    return ok({ botToken: data.botToken ?? "", chatId: data.chatId ?? "", enabled: data.enabled ?? false });
+    return ok({
+      botToken: data.botToken ?? "",
+      chatId: data.chatId ?? "",
+      enabled: data.enabled ?? false,
+      notifyOnError: data.notifyOnError ?? true,
+      notifyOnPublish: data.notifyOnPublish ?? false
+    });
   });
 
   app.put("/settings/telegram", async (request) => {
     const body = request.body as AnyBody;
     await prisma.systemSetting.upsert({
       where: { key: "telegram_notify" },
-      create: { key: "telegram_notify", value: { botToken: String(body.botToken ?? ""), chatId: String(body.chatId ?? ""), enabled: Boolean(body.enabled) } },
-      update: { value: { botToken: String(body.botToken ?? ""), chatId: String(body.chatId ?? ""), enabled: Boolean(body.enabled) } }
+      create: {
+        key: "telegram_notify",
+        value: {
+          botToken: String(body.botToken ?? ""),
+          chatId: String(body.chatId ?? ""),
+          enabled: Boolean(body.enabled),
+          notifyOnError: Boolean(body.notifyOnError ?? true),
+          notifyOnPublish: Boolean(body.notifyOnPublish ?? false)
+        }
+      },
+      update: {
+        value: {
+          botToken: String(body.botToken ?? ""),
+          chatId: String(body.chatId ?? ""),
+          enabled: Boolean(body.enabled),
+          notifyOnError: Boolean(body.notifyOnError ?? true),
+          notifyOnPublish: Boolean(body.notifyOnPublish ?? false)
+        }
+      }
     });
     return ok({ saved: true });
   });
@@ -4278,21 +4371,22 @@ function registerRepostApiRoutes(app: FastifyInstance) {
       select: { externalId: true, name: true, channelType: true }
     });
     const knownNameByExternalId = new Map(knownChannels.map((channel) => [channel.externalId, channel.name]));
-    const options = new Map<string, { externalId: string; name: string; channelType: string }>();
-    const addOption = (externalId: unknown, name?: unknown, channelType = "group") => {
+    const allKnownRefs = new Set(knownChannels.map((channel) => channel.externalId));
+    const options = new Map<string, { externalId: string; name: string; channelType: string; reference?: string }>();
+    const addOption = (externalId: unknown, name?: unknown, channelType = "group", reference?: string) => {
       if (typeof externalId !== "string" && typeof externalId !== "number") return;
       const id = String(externalId).trim();
       if (!id) return;
+      if (knownNameByExternalId.has(id)) return;
+      const normalizedRef = reference?.startsWith("@") ? reference.slice(1) : reference;
+      if (normalizedRef && allKnownRefs.has(`@${normalizedRef}`)) return;
       options.set(id, {
         externalId: id,
-        name: typeof name === "string" && name.trim() ? name.trim() : knownNameByExternalId.get(id) ?? id,
-        channelType
+        name: typeof name === "string" && name.trim() ? name.trim() : id,
+        channelType,
+        ...(reference ? { reference } : {})
       });
     };
-
-    for (const channel of knownChannels) {
-      addOption(channel.externalId, channel.name, channel.channelType);
-    }
 
     const config = account.config && typeof account.config === "object" && !Array.isArray(account.config)
       ? account.config as Record<string, unknown>
@@ -4318,13 +4412,23 @@ function registerRepostApiRoutes(app: FastifyInstance) {
     }
 
     if (account.platform === "telegram") {
-      addOption(account.handle, account.name, "channel");
+      try {
+        const dialogs = await listTelegramDialogs(toPlainRecord(account.credentials));
+        for (const dialog of dialogs) {
+          if (!dialog.reference.startsWith("@")) continue;
+          addOption(dialog.reference, dialog.name, dialog.type);
+        }
+      } catch {
+        // Fall back to saved sources when the current session cannot list dialogs.
+      }
       const sources = Array.isArray(config.sources) ? config.sources : [];
       for (const source of sources) {
-        if (typeof source === "string" || typeof source === "number") addOption(source, undefined, "channel");
+        if (typeof source === "string" && source.startsWith("@")) addOption(source, undefined, "channel");
+        if (typeof source === "number") continue;
         if (source && typeof source === "object" && !Array.isArray(source)) {
           const item = source as Record<string, unknown>;
-          addOption(item.externalId ?? item.handle ?? item.username ?? item.source, item.name ?? item.title, "channel");
+          const username = String(item.externalId ?? item.handle ?? item.username ?? item.source ?? "");
+          if (username.startsWith("@")) addOption(username, item.name ?? item.title, "channel");
         }
       }
     }

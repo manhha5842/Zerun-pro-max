@@ -6,9 +6,11 @@ const DEFAULT_ZERUN_CONFIG = {
   requestTimeoutMs: 15000,
   maxRetry: 1,
   affiliateTabUrl: "https://affiliate.shopee.vn/dashboard",
-  apiMode: "background_first",
+  // tab: Chỉ dùng tab-injected, user phải mở tab thủ công trước
+  // Background fetch đã bị loại bỏ hoàn toàn vì rủi ro bị khóa tài khoản
+  apiMode: "tab",
   keepAffiliateTabInBackground: true,
-  autoOpenLoginTab: true,
+  autoOpenLoginTab: false,
   focusAffiliateTabOnLoginRequired: false
 };
 
@@ -221,47 +223,6 @@ async function parseBatchCustomLinkResponse(payload, originalLink, subIds, via, 
     via,
     meta
   };
-}
-
-async function readResponseJson(response) {
-  const text = await response.text();
-  try {
-    return { text, json: text ? JSON.parse(text) : {} };
-  } catch {
-    return { text, json: { raw: text } };
-  }
-}
-
-async function createAffiliateLinkViaBackgroundFetch(task) {
-  const response = await fetch(BATCH_CUSTOM_LINK_ENDPOINT, {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      "content-type": "application/json; charset=UTF-8",
-      "accept": "application/json"
-    },
-    body: JSON.stringify(buildBatchCustomLinkPayload(task.url, task.subIds))
-  });
-  const { text, json } = await readResponseJson(response);
-  const meta = { httpStatus: response.status };
-
-  if (response.status === 401 || response.status === 403 || isLoginRequiredPayload(json)) {
-    return loginRequiredResult(task.url, "background_fetch", undefined, meta);
-  }
-
-  if (!response.ok) {
-    return {
-      ok: false,
-      status: "FAILED",
-      sourceUrl: task.url,
-      via: "background_fetch",
-      meta,
-      errorCode: `HTTP_${response.status}`,
-      message: text || `Shopee Affiliate API lỗi HTTP ${response.status}.`
-    };
-  }
-
-  return parseBatchCustomLinkResponse(json, task.url, task.subIds, "background_fetch", meta);
 }
 
 async function createAffiliateLinkViaAffiliateTab(task) {
@@ -841,35 +802,15 @@ async function createAffiliateLink(task, configInput) {
   }
 
   const shopeeTask = { ...task, url: cleanedUrl };
-  let lastResult = null;
 
-  if (config.apiMode !== "affiliate_tab_only") {
-    lastResult = await createAffiliateLinkViaBackgroundFetch(shopeeTask);
-    if (lastResult.ok) return lastResult;
-    if (config.apiMode === "background_only") {
-      if (task.shopeeAffiliateId) {
-        const fallbackUrl = buildManualShopeeAffiliateLink(cleanedUrl, task.shopeeAffiliateId, task.subIds, task.subId, config.shopee);
-        return {
-          ok: true,
-          status: "DONE",
-          sourceUrl: task.url,
-          shortLink: fallbackUrl,
-          longLink: fallbackUrl,
-          rawLongLink: fallbackUrl,
-          convertedUrl: fallbackUrl,
-          via: "manual_fallback"
-        };
-      }
-      return lastResult;
-    }
-  }
+  // tab: Chỉ dùng tab-injected (an toàn, user tự mở tab và giải captcha)
+  // - Yêu cầu: Tab affiliate.shopee.vn phải đang mở sẵn
+  // - User có thể lướt tab khác bình thường, extension vẫn inject được
+  // - Không background, không auto-open, không fallback
+  const result = await createAffiliateLinkViaAffiliateTab(shopeeTask);
+  if (result.ok) return result;
 
-  if (config.apiMode !== "background_only") {
-    lastResult = await createAffiliateLinkViaAffiliateTab(shopeeTask);
-    if (lastResult.ok) return lastResult;
-  }
-
-  // Fallback sang convert thủ công nếu extension không convert được qua API
+  // Fallback cuối cùng: manual link nếu có shopeeAffiliateId
   if (task.shopeeAffiliateId) {
     const fallbackUrl = buildManualShopeeAffiliateLink(cleanedUrl, task.shopeeAffiliateId, task.subIds, task.subId, config.shopee);
     return {
@@ -884,13 +825,13 @@ async function createAffiliateLink(task, configInput) {
     };
   }
 
-  return lastResult || {
+  return {
     ok: false,
     status: "FAILED",
     sourceUrl: task.url,
-    via: "unknown",
+    via: "tab",
     errorCode: "CONVERT_FAILED",
-    message: "Không convert được link Shopee."
+    message: "Không convert được link Shopee qua tab."
   };
 }
 
@@ -946,9 +887,10 @@ async function findAffiliateTabForConvert(sourceUrl) {
     return { ok: true, tabId: tabs[0].id };
   }
 
+  // Mở tab ngầm (active: false) - user vẫn lướt web bình thường
   await chrome.tabs.create({
     url: "https://affiliate.shopee.vn/dashboard",
-    active: true
+    active: false
   });
 
   return {
@@ -956,7 +898,7 @@ async function findAffiliateTabForConvert(sourceUrl) {
     result: loginRequiredResult(
       sourceUrl,
       "affiliate_tab_missing",
-      "Chưa có tab Shopee Affiliate. Extension đã tự mở tab affiliate, hãy đăng nhập hoặc chờ trang tải xong rồi bấm convert lại."
+      "Extension đã mở tab Shopee Affiliate ở background. Hãy đăng nhập (tab đó không làm gián đoạn việc lướt web của bạn) rồi bấm convert lại."
     )
   };
 }

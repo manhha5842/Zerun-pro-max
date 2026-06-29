@@ -4,7 +4,7 @@ export type DealTextSanitizerOptions = {
 };
 
 const SOURCE_PROMO_LINE_PATTERN =
-  /(xem\s*h[ưuớo]?ng\s*d[aẫ]n|xem\s*hd|mã\s*độc\s*quyền|ma\s*doc\s*quyen|mã\s*dưới|ma\s*duoi|nhớ\s*áp|nho\s*ap|tool|t[ᴑo]+l|mã\s*shopee|ma\s*shopee|xem\s*thêm|xem\s*them|trick|clubmuare|muareclub|tagliveshopee|shopeeooo_bot)/i;
+  /(xem\s*h[ưuớo]?ng\s*d[aẫ]n|xem\s*hd|tool|t[ᴑo]+l|trick|clubmuare|muareclub|tagliveshopee|shopeeooo_bot)/i;
 
 const SOURCE_DOMAIN_PATTERN = /(t\.me|telegram\.me|shopee\.ooo)/i;
 const SEPARATOR_LINE_PATTERN = /^[\s.\-_=➖—–]{3,}$/;
@@ -37,7 +37,6 @@ function shouldKeepLine(line: string) {
   if (trimmed === ".") return false;
   if (SEPARATOR_LINE_PATTERN.test(trimmed)) return false;
   if (SOURCE_DOMAIN_PATTERN.test(trimmed) && SOURCE_PROMO_LINE_PATTERN.test(trimmed)) return false;
-  if (/^(ma)\s+duoi\s+can\s+doi\s+link$/i.test(normalizeVietnamese(trimmed))) return false;
   if (/^xem\s+thêm:?$/i.test(normalizeVietnamese(trimmed))) return false;
   return true;
 }

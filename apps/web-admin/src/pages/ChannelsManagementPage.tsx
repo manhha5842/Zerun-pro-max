@@ -22,6 +22,7 @@ type ChannelOption = {
   externalId: string;
   name: string;
   channelType: string;
+  reference?: string;
   memberCount?: number;
 };
 
@@ -390,7 +391,11 @@ export function ChannelsManagementPage() {
                     />
                     <span>
                       <strong>{option.name}</strong>
-                      <small>{option.channelType === "channel" ? "Kênh" : "Nhóm"}{typeof option.memberCount === "number" ? ` · ${option.memberCount} thành viên` : ""}</small>
+                      <small>
+                        {option.channelType === "channel" ? "Kênh" : "Nhóm"}
+                        {option.reference ? ` · ${option.reference}` : ""}
+                        {typeof option.memberCount === "number" ? ` · ${option.memberCount} thành viên` : ""}
+                      </small>
                     </span>
                   </label>
                 );

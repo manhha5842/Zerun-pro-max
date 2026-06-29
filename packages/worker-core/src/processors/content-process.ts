@@ -167,26 +167,7 @@ export async function processContent(rawJob: unknown, context: ProcessorContext)
       }
     }
 
-    // Nếu AI quyết định skip → dừng sớm
-    const analysisRouting = readAnalysisRoutingInput(aiMeta);
-    if (analysisRouting.categories.length > 0) {
-      routing = resolveRouting(routingRules, {
-        analysisCategories: analysisRouting.categories,
-        categoryConfidence: analysisRouting.categoryConfidence,
-        isGeneralContent: isGeneralDealContent(aiMeta)
-      });
-    }
-
-    if (aiDecision?.status === "skipped") {
-      await context.prisma.content.update({
-        where: { id: content.id },
-        data: { status: "skipped", metadata: { ...(content.metadata as Record<string, unknown>), ai: aiMeta } as any }
-      });
-      await context.prisma.workerJobLog.update({ where: { id: log.id }, data: { status: "completed", completedAt: new Date() } });
-      return;
-    }
-
-    // ── Bước 3: Convert affiliate links ──────────────────────────────────
+    // ── Bước 3.5: Detect và convert affiliate links (LUÔN LUÔN làm, kể cả khi AI skip) ──
     const draftForConversion = sanitizeDealText(draftText ?? preparedText, {
       linkRewriteMap: sourceLinkRewriteMap
     });
@@ -265,7 +246,26 @@ export async function processContent(rawJob: unknown, context: ProcessorContext)
       }).catch(() => undefined);
     }
 
-    // ── Bước 4: Final text + status ──────────────────────────────────────
+    // ── Bước 4: Quyết định routing + status (sau khi đã detect link) ─────────────────────
+    const analysisRouting = readAnalysisRoutingInput(aiMeta);
+    if (analysisRouting.categories.length > 0) {
+      routing = resolveRouting(routingRules, {
+        analysisCategories: analysisRouting.categories,
+        categoryConfidence: analysisRouting.categoryConfidence,
+        isGeneralContent: isGeneralDealContent(aiMeta)
+      });
+    }
+
+    if (aiDecision?.status === "skipped") {
+      await context.prisma.content.update({
+        where: { id: content.id },
+        data: { status: "skipped", metadata: { ...(content.metadata as Record<string, unknown>), ai: aiMeta } as any }
+      });
+      await context.prisma.workerJobLog.update({ where: { id: log.id }, data: { status: "completed", completedAt: new Date() } });
+      return;
+    }
+
+    // ── Bước 5: Final text + status (chỉ khi không skip) ───────────────────────────────
     // Gỡ link rác (group/tutorial/cashback) xác định từ rule engine
     const dropUrls = ruleResult.links.filter((l) => l.drop).map((l) => l.url);
     const cleanedDraft = sanitizeDealText(stripDropLinks(draftForConversion, dropUrls), {

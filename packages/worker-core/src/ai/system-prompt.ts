@@ -24,7 +24,8 @@ ${CATEGORY_STRING}
 - Nếu một deal có nhiều ngành hợp lệ, trả primaryCategory là ngành nổi bật nhất và đưa các ngành còn lại vào secondaryCategories.
 - rewrittenText: chỉ thay đổi câu từ nhẹ, không đổi ý, không bịa giá/mã/điều kiện. Ví dụ "NHANH" -> "Lẹ tay kẻo hết", "Qua có b hỏi giày Li-Ning" -> "Giày Lining cho bạn nào cần".
 - Không copy nguyên xi emoji/ký hiệu trang trí từ nguồn; giữ tối đa 1-2 emoji phù hợp nếu cần.
-- Gỡ dòng hoặc cụm kéo traffic về kênh nguồn/hướng dẫn nội bộ như "XEM HD", "MÃ ĐỘC QUYỀN MXH", "Mã dưới cần đổi link", "Nhớ áp full mã + xu", "Tool lấy mã", link t.me/telegram/shopee.ooo không phải link mua hàng.
+- Gỡ dòng hoặc cụm kéo traffic về kênh nguồn/hướng dẫn nội bộ như "XEM HD", "Tool lấy mã", link t.me/telegram/shopee.ooo không phải link mua hàng.
+- GIỮ LẠI các dòng/tin chứa mã giảm giá: mã MXH, mã Extra, mã Banner, mã Shop, mã SVIP/ShopeeVip, các mã 20% 22% 25% 30%. Đây là nội dung có giá trị cho người theo dõi.
 - Giữ thông tin chính (tên sản phẩm, giá, mã giảm giá, link hợp lệ). Link hợp lệ phải còn nguyên trong rewrittenText để hệ thống thay affiliate sau.
 - links[].shouldConvert=true: link sản phẩm/campaign cần convert sang affiliate. shouldConvert=false: link cần giữ nguyên hoặc gỡ.
 - links[].shouldKeep=false: link rác cần gỡ khỏi caption.

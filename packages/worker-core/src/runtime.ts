@@ -19,6 +19,7 @@ import { processScheduleRelease } from "./processors/schedule.js";
 import { processPlatformHealth } from "./processors/platform-health.js";
 import { processFbPost } from "./processors/fb-post.js";
 import { processComment } from "./processors/comment.js";
+import { processMaintenance } from "./processors/maintenance.js";
 import { RealtimeListenerManager } from "./processors/realtime-listener.js";
 import {
   JobName,
@@ -27,6 +28,7 @@ import {
   type ContentProcessJob,
   type CrawlJobRunJob,
   type FbPostJob,
+  type MaintenanceJob,
   type PlatformHealthJob,
   type PublishExecuteJob,
   type ScheduleReleaseJob,
@@ -69,6 +71,7 @@ export type WorkerCore = {
   testAccount: (accountId: string, accountKind: PlatformHealthJob["accountKind"]) => Promise<WorkerQueuedJob>;
   scheduleFbPost: (fbPostTargetId: string, scheduledAt: Date) => Promise<WorkerQueuedJob>;
   scheduleComment: (commentQueueId: string, scheduledAt: Date) => Promise<WorkerQueuedJob>;
+  runMaintenance: (options?: { kind?: MaintenanceJob["kind"]; retentionDays?: number; dryRun?: boolean }) => Promise<WorkerQueuedJob>;
 };
 
 const defaultJobOptions: JobsOptions = {
@@ -774,6 +777,12 @@ async function createLocalWorkerCore(options: WorkerCoreOptions = {}): Promise<W
         JobName.CommentExecute,
         { version: 1, commentQueueId } satisfies CommentExecuteJob,
         { ...defaultJobOptions, jobId: `comment_${sanitizeJobIdToken(commentQueueId)}`, delay: Math.max(0, scheduledAt.getTime() - Date.now()) }
+      ),
+    runMaintenance: (options: { kind?: MaintenanceJob["kind"]; retentionDays?: number; dryRun?: boolean } = {}) =>
+      queues[QueueName.Maintenance].add(
+        JobName.MaintenanceCleanup,
+        { version: 1, kind: options.kind ?? "all", retentionDays: options.retentionDays, dryRun: options.dryRun ?? false } satisfies MaintenanceJob,
+        { ...defaultJobOptions, jobId: `maintenance_${Date.now()}` }
       )
   };
 }
@@ -831,6 +840,8 @@ async function createRedisWorkerCore(options: WorkerCoreOptions = {}): Promise<W
       new Worker(QueueName.Publish, (job) => processPublish(job.data, context), { connection, concurrency: 2 }),
       new Worker(QueueName.Schedule, (job) => processScheduleRelease(job.data, context), { connection, concurrency: 2 }),
       new Worker(QueueName.PlatformHealth, (job) => processPlatformHealth(job.data, context), { connection, concurrency: 3 }),
+      // Maintenance: concurrency 1 to avoid conflicts, runs periodically
+      new Worker(QueueName.Maintenance, (job) => processMaintenance(job.data, context), { connection, concurrency: 1 }),
       // Sequential: concurrency 1 to protect Facebook accounts
       new Worker(QueueName.FbPost, (job) => processFbPost(job.data, context), { connection, concurrency: 1 }),
       new Worker(QueueName.Comment, (job) => processComment(job.data, context), { connection, concurrency: 1 })
@@ -899,6 +910,12 @@ async function createRedisWorkerCore(options: WorkerCoreOptions = {}): Promise<W
         JobName.CommentExecute,
         { version: 1, commentQueueId } satisfies CommentExecuteJob,
         { ...defaultJobOptions, jobId: `comment_${sanitizeJobIdToken(commentQueueId)}`, delay: Math.max(0, scheduledAt.getTime() - Date.now()) }
+      ),
+    runMaintenance: (options: { kind?: MaintenanceJob["kind"]; retentionDays?: number; dryRun?: boolean } = {}) =>
+      queues[QueueName.Maintenance].add(
+        JobName.MaintenanceCleanup,
+        { version: 1, kind: options.kind ?? "all", retentionDays: options.retentionDays, dryRun: options.dryRun ?? false } satisfies MaintenanceJob,
+        { ...defaultJobOptions, jobId: `maintenance_${Date.now()}` }
       )
   };
 }
@@ -940,6 +957,7 @@ function wireLocalProcessors(queues: LocalQueues, context: any) {
   queues[QueueName.Publish].setProcessor((job) => processPublish(job.data as PublishExecuteJob, context));
   queues[QueueName.Schedule].setProcessor((job) => processScheduleRelease(job.data as ScheduleReleaseJob, context));
   queues[QueueName.PlatformHealth].setProcessor((job) => processPlatformHealth(job.data as PlatformHealthJob, context));
+  queues[QueueName.Maintenance].setProcessor((job) => processMaintenance(job.data as MaintenanceJob, context));
   queues[QueueName.FbPost].setProcessor((job) => processFbPost(job.data as FbPostJob, context));
   queues[QueueName.Comment].setProcessor((job) => processComment(job.data as CommentExecuteJob, context));
 }
